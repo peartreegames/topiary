@@ -7,25 +7,32 @@ const store = id => {
   const initialState = JSON.parse(localStorage.getItem(id)) || {
     id,
     scene: "",
-    FocusedNode: "",
-    FocusedLink: { status: false, from: "", to: "" },
+    search: { status: false, text: "" },
+    focusedNode: "",
+    focusedLink: { status: false, from: "", to: "" },
+    collapsedNodes: [],
     nodes: {},
-    links: [],
-    actors: [{ name: "Narrator", playable: false, color: "FFFFFF" }],
+    links: {},
     colors: ["FFFFFF", "94E495", "85B7A1", "486B8D", "554A6E", "501D47"],
-    keys: [],
     editor: true,
     scale: 1,
     warning: { status: false, warningMessage: "" }
   }
+
+  const globals = JSON.parse(localStorage.getItem('globals')) || {
+    actors: {"000000": { id: "000000", name: "Narrator", playable: false, color: "FFFFFF", relationship: "0" }},
+    variables: {}
+  }
+
+  const state = { ...initialState, ...globals}
   if (process.env.NODE_ENV === "development") {
     return createStore(
       reducers,
-      initialState,
+      state,
       composeWithDevTools(applyMiddleware(logger))
     )
   }
 
-  return createStore(reducers, initialState)
+  return createStore(reducers, state)
 }
 export default store

@@ -38,12 +38,12 @@ Dialogue Tree Editor inspired by [twinery](http://www.twinery.org) created with 
 * [ ] Add custom colours
 * [ ] Actor Avatars
 * [ ] Items/Variables
-* [x] Tooltips (needs to be expanded upon)
+* [ ] Tooltips
 * [ ] Collapsable tree segments
 * [ ] Zoom functionality
 * [ ] Settings and Help tabs
-* [ ] Search funcationality
+* [x] Search funcationality
 * [x] Persistent State
-* [ ] Load/Save files
+* [x] Load/Save files
 
 * Feel free to open an issue for anything else you'd like to see!

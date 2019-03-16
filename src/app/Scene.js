@@ -3,8 +3,7 @@ import PropTypes from "prop-types"
 import { Provider } from "react-redux"
 import Editor from "./Editor"
 import Tree from "./Tree"
-import Nav from "./Nav"
-import Tooltip from "./Tooltip"
+import Nav from "../nav/Nav"
 import store from "../store"
 import { saveState, throttle } from "../store/localStorage"
 
@@ -23,7 +22,6 @@ export default function Scene({ match }) {
         <Tree />
         <Editor />
         <Nav />
-        <Tooltip />
       </Fragment>
     </Provider>
   )

@@ -44,7 +44,7 @@ class Tree extends Component {
     setFocusedNode: PropTypes.func.isRequired,
     setFocusedLink: PropTypes.func.isRequired,
     setWarning: PropTypes.func.isRequired,
-    FocusedLink: PropTypes.object.isRequired
+   focusedLink: PropTypes.object.isRequired
   }
 
   state = {
@@ -76,7 +76,7 @@ class Tree extends Component {
   }
 
   render() {
-    const { nodes, FocusedLink, scale, setFocusedLink } = this.props
+    const { nodes,focusedLink, scale, setFocusedLink } = this.props
     const boundary = dimensions(Object.values(nodes), scale)
     return (
       <div onMouseMove={this.handleMouse}>
@@ -99,7 +99,7 @@ class Tree extends Component {
                 scale}px, transparent ${1 / scale}px)`
             }}
             onClick={() => {
-              if (FocusedLink.status) return setFocusedLink({ status: false })
+              if (focusedLink.status) return setFocusedLink({ status: false })
             }}
           >
             <NodeList />
@@ -111,9 +111,9 @@ class Tree extends Component {
   }
 }
 
-const mapState = ({ scale, nodes, FocusedLink }) => ({
+const mapState = ({ scale, nodes,focusedLink }) => ({
   scale,
-  FocusedLink,
+ focusedLink,
   nodes
 })
 

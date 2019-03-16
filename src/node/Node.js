@@ -1,8 +1,8 @@
 import React, { Component } from "react"
 import PropTypes from "prop-types"
-import { Card, CardText, Chip } from "material-ui"
-import NodeHeader from "./fragments/NodeHeader"
-import NodeFooter from "./fragments/NodeFooter"
+import { Card, CardContent, Chip, Collapse } from "@material-ui/core"
+import NodeHeader from "./partials/NodeHeader"
+import NodeFooter from "./partials/NodeFooter"
 
 const styles = {
   body: {
@@ -10,7 +10,9 @@ const styles = {
     whiteSpace: "pre-wrap",
     padding: "2px 10px 5px",
     margin: "5px 0px 0px",
-    fontSize: 11
+    fontSize: 11,
+    overflowY: "hidden",
+    maxHeight: "12em"
   },
   tagWrapper: {
     display: "flex",
@@ -42,14 +44,17 @@ class Node extends Component {
     body: PropTypes.string,
     color: PropTypes.string,
     actor: PropTypes.string,
+    replay: PropTypes.bool,
     prev: PropTypes.array,
     next: PropTypes.array,
     pos: PropTypes.array,
-    bounds: PropTypes.array,
+    condition: PropTypes.object,
     updateNode: PropTypes.func.isRequired,
     setFocusedLink: PropTypes.func.isRequired,
     deleteAllLinks: PropTypes.func.isRequired,
-    deleteNode: PropTypes.func.isRequired
+    deleteNode: PropTypes.func.isRequired,
+    onCollapseNode: PropTypes.func.isRequired,
+    isCollapsed: PropTypes.bool.isRequired
   }
   static defaultProps = {
     title: "",
@@ -61,7 +66,6 @@ class Node extends Component {
   }
   state = {
     expanded: true,
-    collapsed: false,
     widthAdjustment: 0
   }
 
@@ -69,51 +73,32 @@ class Node extends Component {
     this.setState({ expanded })
   }
 
-  adjustWidth = (event, data) => {
-    this.setState({ widthAdjustment: data.x })
-  }
-
-  updateWidth = () => {
-    const { bounds, updateNode, id } = this.props
-    updateNode({
-      id,
-      payload: { bounds: [bounds[0] + this.state.widthAdjustment] }
-    })
-    this.setState({ widthAdjustment: 0 })
-  }
-
   render() {
     const {
       id,
       type,
       title,
-      tags,
+      tags = [],
       body,
       color,
       actor,
-      bounds,
       current,
       setFocusedLink,
       deleteAllLinks,
-      deleteNode
-      // prev,
-      // next
+      deleteNode,
+      condition = {},
+      sets = {},
+      replay = false,
+      onCollapseNode,
+      isCollapsed
     } = this.props
-    const { widthAdjustment } = this.state
+
     const chipTags = tags.map(tag => (
-      <Chip key={tag} style={styles.tagChip} labelStyle={styles.tag}>
-        {tag}
-      </Chip>
+      <Chip key={tag} style={styles.tagChip} label={tag} />
     ))
+
     return (
-      <Card
-        initiallyExpanded
-        expanded={this.state.expanded}
-        onExpandChange={this.handleExpandChange}
-        style={{
-          width: `calc(${bounds[0]}px + ${widthAdjustment}px)`
-        }}
-      >
+      <Card>
         <NodeHeader
           {...{
             type,
@@ -122,29 +107,31 @@ class Node extends Component {
             color,
             actor,
             expanded: this.state.expanded,
-            expand: this.handleExpandChange
+            expand: this.handleExpandChange,
+            condition: !!condition.variable && !!condition.op && !!condition.value,
+            sets: !!sets.variable && !!sets.op && !!sets.value,
+            replay
           }}
         />
-        <CardText style={styles.body} expandable>
-          {tags && <div style={styles.tagWrapper}>{chipTags}</div>}
-          {body}
-        </CardText>
-        <NodeFooter
-          {...{
-            id,
-            current,
-            expanded: this.state.expanded,
-            isFocusedNode: this.isFocusedNode,
-            adjustWidth: this.adjustWidth,
-            updateWidth: this.updateWidth,
-            setFocusedLink,
-            deleteAllLinks,
-            deleteNode,
-            collapse: () => {
-              this.setState({ collapsed: !this.state.collapsed })
-            }
-          }}
-        />
+        <Collapse in={this.state.expanded} unmountOnExit>
+          {type !== 'root' && <CardContent style={styles.body}>
+            {tags && <div style={styles.tagWrapper}>{chipTags}</div>}
+            {body}
+          </CardContent>}
+          <NodeFooter
+            {...{
+              id,
+              current,
+              expanded: this.state.expanded,
+              isFocusedNode: this.isFocusedNode,
+              setFocusedLink,
+              deleteAllLinks,
+              deleteNode,
+              isCollapsed,
+              collapse: () => onCollapseNode(id)
+            }}
+          />
+        </Collapse>
       </Card>
     )
   }

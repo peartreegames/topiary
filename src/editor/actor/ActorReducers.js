@@ -1,26 +1,27 @@
-export const actors = (state = [], { type, payload, index, actor }) => {
+export const actors = (state = {}, { type, id, actor }) => {
   switch (type) {
     case "NEW_ACTOR":
-      return [...state, payload]
+      return {...state, [id]: actor}
     case "UPDATE_ACTOR":
-      return Object.assign([...state], {
-        [index]: Object.assign({}, state[index], {
-          ...actor
-        })
-      })
+      return {...state,
+        [id]: { 
+        ...state[id],
+        ...actor
+        }
+      }
     case "DELETE_ACTOR":
-      return state.filter((actor, i) => i !== index)
+      return (({[id]: _, ...newObj}, id) => newObj)(state, id)
     default:
       return state
   }
 }
 
-export const colors = (state = [], { type, color, index }) => {
+export const colors = (state = [], { type, color, id }) => {
   switch (type) {
     case "NEW_COLOR":
       return [...state, color]
     case "DELETE_KEY":
-      return state.filter((color, i) => i !== index)
+      return state.filter((_, i) => i !== id)
     default:
       return state
   }

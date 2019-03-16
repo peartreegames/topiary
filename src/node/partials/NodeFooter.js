@@ -1,7 +1,7 @@
 import React, { Fragment } from "react"
 import PropTypes from "prop-types"
-import { CardActions, IconButton, FontIcon } from "material-ui"
-import Corner from "./Corner"
+import { CardActions, Button, Icon } from "@material-ui/core"
+
 
 const styles = {
   corner: {
@@ -15,13 +15,16 @@ const styles = {
   footer: {
     height: "16px",
     textAlign: "right",
-    paddingRight: 10
+    padding: "1em",
+    marginTop: "2em",
   },
   button: {
     width: 14,
     height: 14,
     padding: 0,
-    margin: 0
+    margin: 0,
+    fontSize: 14,
+    transition: "none"
   },
   icon: {
     fontSize: 14
@@ -33,11 +36,11 @@ export default function NodeFooter({
   expanded,
   current,
   collapse,
-  adjustWidth,
-  updateWidth,
   setFocusedLink,
   deleteAllLinks,
-  deleteNode
+  deleteNode,
+  isCollapsed,
+  collapsedNodes
 }) {
   return (
     <Fragment>
@@ -49,23 +52,23 @@ export default function NodeFooter({
             : "#FFFFFF"
         }}
       >
-        {expanded && (
-          <IconButton
-            style={styles.button}
-            iconStyle={styles.icon}
-            onClick={() => {
-              deleteAllLinks({ id })
-              deleteNode({ id })
-            }}
-            data-tip={"Delete"}
-            data-tippos={"bottom"}
-          >
-            <FontIcon className="material-icons">delete</FontIcon>
-          </IconButton>
-        )}
-        <IconButton
+        <Button
+          style={{
+            ...styles.button,
+            opacity: expanded ? "100" : "0",
+            pointerEvents: expanded ? "auto" : "none"
+          }}
+          onClick={() => {
+            deleteAllLinks({ id })
+            deleteNode({ id })
+          }}
+          data-tip={"Delete"}
+          data-tippos={"bottom"}
+        >
+          <Icon style={styles.icon} className="material-icons">delete</Icon>
+        </Button>
+        <Button
           style={styles.button}
-          iconStyle={styles.icon}
           onClick={() =>
             setFocusedLink({
               status: true,
@@ -77,19 +80,18 @@ export default function NodeFooter({
           }
           data-tippos={"bottom"}
         >
-          <FontIcon className="material-icons">arrow_forward</FontIcon>
-        </IconButton>
-        <IconButton
+          <Icon style={styles.icon} className="material-icons">arrow_forward</Icon>
+        </Button>
+        <Button
           style={styles.button}
-          iconStyle={styles.icon}
+          color={isCollapsed ? "secondary" : "default"}
           onClick={collapse}
           data-tip={"Collapse"}
           data-tippos={"bottom"}
         >
-          <FontIcon className="material-icons">layers</FontIcon>
-        </IconButton>
+          <Icon style={styles.icon} className="material-icons">layers</Icon>
+        </Button>
       </CardActions>
-      <Corner adjustWidth={adjustWidth} updateWidth={updateWidth} />
     </Fragment>
   )
 }
@@ -99,9 +101,9 @@ NodeFooter.propTypes = {
   expanded: PropTypes.bool.isRequired,
   current: PropTypes.bool.isRequired,
   collapse: PropTypes.func.isRequired,
-  adjustWidth: PropTypes.func.isRequired,
-  updateWidth: PropTypes.func.isRequired,
   setFocusedLink: PropTypes.func.isRequired,
   deleteAllLinks: PropTypes.func.isRequired,
-  deleteNode: PropTypes.func.isRequired
+  deleteNode: PropTypes.func.isRequired,
+  isCollapsed: PropTypes.bool.isRequired,
+  collapsedNodes: PropTypes.array
 }

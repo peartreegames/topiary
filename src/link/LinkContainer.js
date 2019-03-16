@@ -4,6 +4,7 @@ import PropTypes from "prop-types"
 import Link from "./Link"
 import { setFocusedLink, deleteLink, setFocusedNode } from "../store/actions"
 import { layers } from "../lib/view"
+import { makeGetFlattenedLinks } from "../store/selectors"
 
 const styles = {
   linkCreator: {
@@ -18,8 +19,8 @@ const styles = {
 class LinkContainer extends Component {
   static propTypes = {
     links: PropTypes.array.isRequired,
-    FocusedLink: PropTypes.object.isRequired,
-    FocusedNode: PropTypes.string.isRequired,
+    focusedLink: PropTypes.object.isRequired,
+    focusedNode: PropTypes.string.isRequired,
     mouseEvent: PropTypes.object.isRequired,
     deleteLink: PropTypes.func.isRequired,
     setFocusedLink: PropTypes.func.isRequired,
@@ -34,17 +35,17 @@ class LinkContainer extends Component {
   }
 
   isFocusedNode = from => {
-    return this.props.FocusedNode === from
+    return this.props.focusedNode === from
   }
 
   render() {
     const {
       links,
-      FocusedLink,
+      focusedLink,
       mouseEvent,
       setFocusedLink,
       setFocusedNode,
-      deleteLink
+      deleteLink,
     } = this.props
     const { mounted } = this.state
     const linkList = links.map(link => (
@@ -52,7 +53,7 @@ class LinkContainer extends Component {
         key={`${link[0]}-${link[1]}`}
         from={link[0]}
         to={link[1]}
-        FocusedNode={this.isFocusedNode(link[0])}
+        focusedNode={this.isFocusedNode(link[0])}
         setFocusedLink={setFocusedLink}
         setFocusedNode={setFocusedNode}
         deleteLink={deleteLink}
@@ -77,7 +78,7 @@ class LinkContainer extends Component {
           </defs>
           {mounted && linkList}
         </svg>
-        {FocusedLink.status && (
+        {focusedLink.status && (
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="100%"
@@ -98,10 +99,10 @@ class LinkContainer extends Component {
               </marker>
             </defs>
             <Link
-              from={FocusedLink.from}
-              linking={FocusedLink.status}
+              from={focusedLink.from}
+              linking={focusedLink.status}
               mouse={mouseEvent}
-              FocusedNode={true}
+              focusedNode={true}
               setFocusedLink={setFocusedLink}
               setFocusedNode={setFocusedNode}
               deleteLink={deleteLink}
@@ -114,13 +115,16 @@ class LinkContainer extends Component {
   }
 }
 
-const mapState = ({ links, FocusedLink, FocusedNode }) => ({
-  links,
-  FocusedLink,
-  FocusedNode
-})
+const makeMapState = () => {
+  const getflattenedLinks = makeGetFlattenedLinks()
+  return ({ links, focusedNode, focusedLink }) => ({
+    links: getflattenedLinks({ links }),
+    focusedNode,
+    focusedLink,
+  })
+}
 
-export default connect(mapState, {
+export default connect(makeMapState, {
   setFocusedLink,
   setFocusedNode,
   deleteLink

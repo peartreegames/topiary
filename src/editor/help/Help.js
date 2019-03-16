@@ -1,5 +1,5 @@
 import React from "react"
-import { Card, CardHeader, CardText } from "material-ui"
+import { Card, CardHeader, CardContent } from "@material-ui/core"
 
 const styles = {
   container: {
@@ -20,8 +20,8 @@ export default function HelpTab() {
   return (
     <div style={styles.container}>
       <Card style={styles.card}>
-        <CardHeader title={"General"} showExpandableButton actAsExpander />
-        <CardText expandable>
+        <CardHeader title={"General"} expandable actAsExpander />
+        <CardContent expandable>
           <strong>What am I looking at?</strong>
           <p style={styles.text}>
             Topiary is a dialogue tree editor inspired by{" "}
@@ -41,11 +41,11 @@ export default function HelpTab() {
           <p style={styles.text}>
             A JSON file will be exported soon. As of now, nothing.
           </p>
-        </CardText>
+        </CardContent>
       </Card>
       <Card style={styles.card}>
-        <CardHeader title={"Tree"} showExpandableButton actAsExpander />
-        <CardText expandable>
+        <CardHeader title={"Tree"} expandable actAsExpander />
+        <CardContent expandable>
           <strong>New nodes</strong>
           <p style={styles.text}>
             There are two node types, dialogues and choices. The only difference
@@ -82,13 +82,13 @@ export default function HelpTab() {
             Click on the link you want to delete, then click off a node anywhere
             on the grid.
           </p>
-        </CardText>
+        </CardContent>
       </Card>
       <Card style={styles.card}>
-        <CardHeader title={"Editor"} showExpandableButton actAsExpander />
-        <CardText expandable>
+        <CardHeader title={"Editor"} expandable actAsExpander />
+        <CardContent expandable>
           This is where the editor view help will go.
-        </CardText>
+        </CardContent>
       </Card>
     </div>
   )

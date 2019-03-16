@@ -1,14 +1,18 @@
-import React, { Component } from "react"
+import React, { Component, Fragment } from "react"
 import { connect } from "react-redux"
 import PropTypes from "prop-types"
-import { SelectField, TextField, MenuItem, Chip } from "material-ui"
+import { TextField, Chip, Typography, Switch } from "@material-ui/core"
 import { makeGetNodeByCurrent } from "../../store/selectors"
-import { updateNode } from "../../store/actions"
+import { updateNode, updateCondition, updateSets } from "../../store/actions"
+import ActorSelect from '../partials/actor-select/ActorSelect'
+import Condition from "../partials/condition/Condition"
+import Sets from '../partials/sets/Sets'
 
 const styles = {
   textStyle: {
     fontFamily: "Roboto Mono",
-    fontSize: 12
+    fontSize: 12,
+    marginTop: "20px"
   },
   tabContent: {
     margin: "20px"
@@ -17,17 +21,17 @@ const styles = {
     // display: "inline-flex",
     // flexWrap: "wrap",
     width: "100%"
-  },
+  }, 
   tagChip: {
     display: "inline-flex",
     flexWrap: "wrap",
-    margin: "5px"
+    margin: "2px",
+    height: "1.8em"
   }
 }
 
 class EditTab extends Component {
   static propTypes = {
-    actors: PropTypes.arrayOf(PropTypes.object).isRequired,
     node: PropTypes.object,
     updateNode: PropTypes.func.isRequired
   }
@@ -37,15 +41,15 @@ class EditTab extends Component {
     tagsField: ""
   }
 
-  handleTagsUpdate = event => {
-    this.setState({ tagsField: this.state.tagsField + event.key })
+  handleTagsUpdate = e => {
+    this.setState({ tagsField: this.state.tagsField + e.key })
     const { updateNode, node } = this.props
     const { tags } = node
-    if (event.key === "Enter") {
+    if (e.key === "Enter") {
       updateNode({
         id: node.id,
         payload: {
-          tags: tags ? [...tags, event.target.value] : [event.target.value]
+          tags: tags ? [...tags, e.target.value] : [e.target.value]
         }
       })
       this.setState({ tagsField: "" })
@@ -63,101 +67,108 @@ class EditTab extends Component {
     })
   }
 
-  handleActorUpdate = (event, index) => {
+  handleActorUpdate = (e) => {
     const { updateNode, node } = this.props
     updateNode({
       id: node.id,
-      payload: { actor: index }
+      payload: { actor: e.target.value }
     })
   }
 
-  handleTextUpdate = (event, name) => {
+  handleTextUpdate = (e, name) => {
     const { updateNode, node } = this.props
     updateNode({
       id: node.id,
-      payload: { [name]: event.target.value }
+      payload: { [name]: e.target.value }
+    })
+  }
+
+  handleConditionUpdate = (e, name) => {
+    const { updateCondition, node } = this.props
+    updateCondition({
+      id: node.id,
+      payload: { [name]: e.target.value }
+    })
+  }
+
+  handleSetsUpdate = (e, name) => {
+    const { updateSets, node } = this.props
+    updateSets({
+      id: node.id,
+      payload: { [name]: e.target.value }
+    })
+  }
+
+  handleSwitchUpdate = (e, name) => {
+    const { updateNode, node } = this.props;
+    updateNode({
+      id :node.id,
+      payload: { [name]: e.target.checked }
     })
   }
 
   render() {
-    const { node = {}, actors } = this.props
+    const { node = {} } = this.props
     const {
       type = "",
       title = "",
-      actor = "",
+      actor = "000000",
       body = "",
       tags = [],
-      conditions = ""
+      condition = {},
+      replay = false,
+      sets = {}
     } = node
-    const menuItems = actors.map((actor, i) => (
-      <MenuItem key={actor.name + i} value={i} primaryText={actor.name} />
-    ))
 
     const chipTags =
-      node &&
       tags.map((tag, i) => (
         <Chip
           key={tag}
+          label={tag}
           style={styles.tagChip}
-          onRequestDelete={() => this.handleDeleteTag(i)}
+          onDelete={() => this.handleDeleteTag(i)}
+          deleteIcon={<Typography>x</Typography>}
         >
-          {tag}
         </Chip>
       ))
+      
     return (
       <div style={styles.tabContent}>
-        {type === "dialogue" && (
           <TextField
-            name="title"
             fullWidth
-            textareaStyle={styles.textStyle}
-            floatingLabelFixed
-            floatingLabelText={<span>Title</span>}
+            style={styles.textStyle}
+            label={"Title"}
             value={node && title}
             onChange={e => this.handleTextUpdate(e, "title")}
           />
-        )}
-        {type === "dialogues" && (
-          <SelectField
-            name="actor"
-            fullWidth
-            floatingLabelFixed
-            floatingLabelText={<span>Actor</span>}
-            value={node && actor}
-            onChange={this.handleActorUpdate}
-          >
-            {menuItems}
-          </SelectField>
-        )}
+          <Typography>Replay <Switch
+          checked={replay}
+          onChange={e => this.handleSwitchUpdate(e, "replay")}
+          value="Replay"
+          color="primary"
+        /></Typography>
+        {type === "dialogue" && (
+          <ActorSelect actorId={actor} onChange={this.handleActorUpdate} />)}
         <TextField
-          name="tags"
           fullWidth
-          textareaStyle={styles.textStyle}
-          floatingLabelFixed
-          floatingLabelText={<span>Tags</span>}
+          style={styles.textStyle}
+          label={"Tags"}
           value={this.state.tagsField}
           onKeyPress={this.handleTagsUpdate}
         />
         <div style={styles.tagsWrapper}>{chipTags}</div>
+        {type !== 'root' &&
+        <Fragment>
+        <Condition condition={condition} onChange={this.handleConditionUpdate} />
+        {type === 'choice' && <Sets sets={sets} onChange={this.handleSetsUpdate} />}
         <TextField
-          name="conditions"
+          multiline
           fullWidth
-          textareaStyle={styles.textStyle}
-          floatingLabelFixed
-          floatingLabelText={<span>Conditions</span>}
-          value={(node && conditions) || ""}
-          onChange={e => this.handleTextUpdate(e, "conditions")}
-        />
-        <TextField
-          name="body"
-          multiLine
-          fullWidth
-          textareaStyle={styles.textStyle}
-          floatingLabelFixed
-          floatingLabelText={<span>Body</span>}
-          value={node && body}
+          style={styles.textStyle}
+          label={"Body"}
+          value={body}
           onChange={e => this.handleTextUpdate(e, "body")}
-        />
+        /></Fragment>}
       </div>
     )
   }
@@ -165,10 +176,9 @@ class EditTab extends Component {
 
 const makeMapState = () => {
   const getNode = makeGetNodeByCurrent()
-  return ({ nodes, FocusedNode, actors }) => ({
-    ...getNode({ nodes, FocusedNode }),
-    actors
+  return ({ nodes, focusedNode }) => ({
+    ...getNode({ nodes, focusedNode })
   })
 }
 
-export default connect(makeMapState, { updateNode })(EditTab)
+export default connect(makeMapState, { updateNode, updateCondition, updateSets })(EditTab)

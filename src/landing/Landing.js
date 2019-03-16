@@ -1,8 +1,10 @@
-import React, { Component } from "react"
+import React, { Component, Fragment } from "react"
 import { Redirect } from "react-router-dom"
-import { List, ListItem, FontIcon, IconButton } from "material-ui"
-import initialScene from "../store/initialScene"
+import { List, ListItem, ListItemText, ListItemIcon, Icon, Fab } from "@material-ui/core"
+import initialScene, { globals } from "../store/initialScene"
+import { saveFile, loadFile, saveGlobals } from "../store/localStorage"
 import { rnd } from "../lib/math"
+import { SaveAlt } from '@material-ui/icons'
 
 const styles = {
   name: {
@@ -19,9 +21,13 @@ const styles = {
     padding: "16px",
     textDecoration: "none"
   },
-  trash: {
+  icons: {
     position: "absolute",
-    right: "20vw"
+    right: "5vw",
+  },
+  icon: {
+    margin: "10px",
+    float: "right"
   }
 }
 
@@ -35,6 +41,10 @@ export default class Landing extends Component {
   newScene = () => {
     const id = rnd()
     localStorage.setItem(id, JSON.stringify(initialScene(id)))
+    const currentGlobals = localStorage.getItem('globals')
+    if (!currentGlobals) {
+      localStorage.setItem('globals', JSON.stringify(globals))
+    }
     this.setState({ redirect: id })
   }
 
@@ -46,25 +56,88 @@ export default class Landing extends Component {
   renderScenes = () => {
     let existingScenes = []
     for (let i = 0; i < localStorage.length; i++) {
-      const scene = JSON.parse(localStorage.getItem(localStorage.key(i))).scene
+      const storageKey = localStorage.key(i)
+      const scene = JSON.parse(localStorage.getItem(storageKey))
+      const sceneName = scene.scene;
+      if (sceneName !== undefined) {
       existingScenes.push(
-        <ListItem
-          key={scene || `untitled${i}`}
-          primaryText={scene || "untitled scene"}
-          innerDivStyle={styles.option}
-          onClick={() => this.setState({ redirect: localStorage.key(i) })}
-          rightIconButton={
-            <IconButton
-              style={styles.trash}
-              iconStyle={styles.icon}
-              onClick={() => this.deleteScene(localStorage.key(i))}
-            >
-              <FontIcon className="material-icons">delete</FontIcon>
-            </IconButton>
-          }
-        />
-      )
+          <ListItem
+            key={sceneName || `untitled${i}`}
+            button
+            onClick={() => this.setState({ redirect: storageKey })}
+          >
+            <ListItemText style={styles.option}>{sceneName || "untitled scene"}</ListItemText>
+            <ListItemIcon style={styles.icons}>
+                <Fragment>
+                <Fab
+                  style={styles.icon}
+                  size="small"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    saveFile(sceneName, storageKey)}
+                  }
+                >
+                  <Icon className="material-icons">save</Icon>
+                </Fab>
+                <Fab
+                  style={styles.icon}
+                  size="small"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    saveFile(sceneName, storageKey, true)}
+                  }
+                >
+                  <SaveAlt />
+                </Fab>
+                <Fab
+                style={styles.icon}
+                size="small"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  this.deleteScene(storageKey)}
+                }
+              >
+                <Icon className="material-icons">delete</Icon>
+              </Fab>
+              </Fragment>
+            </ListItemIcon>
+
+          </ListItem>
+        )
+      }
     }
+    existingScenes.push(
+      <ListItem
+        key={'globals'}
+        >
+        <ListItemText style={styles.option}>Global Variables</ListItemText>
+        <ListItemIcon style={styles.icons}>
+            <Fragment>
+            <Fab
+              style={styles.icon}
+              size="small"
+              onClick={() => saveGlobals()}
+            >
+              <Icon className="material-icons">save</Icon>
+            </Fab>
+            <Fab
+              style={styles.icon}
+              size="small"
+              onClick={() => saveGlobals(true)}
+            >
+              <SaveAlt />
+            </Fab>
+            <Fab
+            style={styles.icon}
+            size="small"
+            onClick={() => this.deleteScene("globals")}
+          >
+            <Icon className="material-icons">delete</Icon>
+          </Fab>
+          </Fragment>
+        </ListItemIcon>
+        </ListItem>
+    )
     return existingScenes.sort((a, b) => a.key > b.key)
   }
   componentWillMount() {
@@ -94,10 +167,27 @@ export default class Landing extends Component {
         </div>
         <List>
           <ListItem
-            primaryText="new"
-            innerDivStyle={styles.option}
+            button
             onClick={this.newScene}
-          />
+          >
+            <ListItemText style={styles.option}>
+              new
+            </ListItemText>
+          </ListItem>
+          <ListItem button   
+            variant="contained"
+            component="label">
+          <ListItemText style={styles.option}>{"load"}</ListItemText>
+            <input
+                type="file"
+                onChange={e => {
+                  loadFile(e, () => {
+                    this.setState({ scenes: this.renderScenes() })
+                  })
+                }}
+                style={{ display: "none" }}
+              />
+          </ListItem>
           {this.state.scenes}
         </List>
       </div>

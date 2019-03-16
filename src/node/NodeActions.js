@@ -4,6 +4,18 @@ export const updateNode = ({ id, payload }) => ({
   payload
 })
 
+export const updateCondition = ({ id, payload }) => ({
+  type: "UPDATE_CONDITION",
+  id,
+  payload
+})
+
+export const updateSets = ({ id, payload }) => ({
+  type: "UPDATE_SETS",
+  id,
+  payload
+})
+
 export const newNode = ({ id, payload }) => ({
   type: "NEW_NODE",
   id,

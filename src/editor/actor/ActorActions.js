@@ -1,17 +1,18 @@
 export const newActor = ({ actor }) => ({
   type: "NEW_ACTOR",
-  actor
+  actor,
+  id: actor.id
 })
 
-export const updateActor = ({ index, actor }) => ({
+export const updateActor = ({ id, actor }) => ({
   type: "UPDATE_ACTOR",
-  index,
+  id,
   actor
 })
 
-export const deleteActor = ({ index }) => ({
+export const deleteActor = ({ id }) => ({
   type: "DELETE_ACTOR",
-  index
+  id
 })
 
 export const newColor = ({ color }) => ({

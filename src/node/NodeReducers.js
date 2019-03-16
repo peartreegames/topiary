@@ -1,4 +1,4 @@
-export const FocusedNode = (state = "", { type, id }) => {
+export const focusedNode = (state = "", { type, id }) => {
   if (type === "SET_CURRENT_NODE") {
     return id
   }
@@ -18,6 +18,28 @@ export const nodes = (state = {}, { type, id, payload }) => {
         [id]: {
           ...state[id],
           ...payload
+        }
+      }
+    case "UPDATE_CONDITION":
+      return {
+        ...state,
+        [id]: {
+          ...state[id],
+          condition: {
+            ...state[id].condition,
+            ...payload
+          },
+        }
+      }
+    case "UPDATE_SETS":
+      return {
+        ...state,
+        [id]: {
+          ...state[id],
+          sets: {
+            ...state[id].sets,
+            ...payload
+          },
         }
       }
     case "DELETE_NODE":

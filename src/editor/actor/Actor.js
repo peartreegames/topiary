@@ -1,16 +1,33 @@
 import React, { Component } from "react"
 import { connect } from "react-redux"
 import PropTypes from "prop-types"
-import { SelectField, TextField, MenuItem, FlatButton } from "material-ui"
-import { newActor, updateActor, deleteActor } from "../../store/actions"
+import {
+  Select,
+  TextField,
+  MenuItem,
+  Button,
+  InputLabel,
+  FormControl,
+  Typography,
+  Switch
+} from "@material-ui/core"
+import {
+  newActor,
+  updateActor,
+  deleteActor,
+} from "../../store/actions"
+import { rnd } from "../../lib/math";
+import ActorSelect from "../partials/actor-select/ActorSelect";
 
 const styles = {
   textStyle: {
     fontFamily: "Roboto Mono",
-    fontSize: 12
+    fontSize: 12,
+    marginTop: "20px"
   },
   tabContent: {
-    margin: "20px"
+    margin: "20px",
+    paddingTop: "20px"
   },
   root: {
     display: "flex",
@@ -21,137 +38,139 @@ const styles = {
 
 class ActorTab extends Component {
   static propTypes = {
-    actors: PropTypes.arrayOf(PropTypes.object),
+    actors: PropTypes.object,
     colors: PropTypes.arrayOf(PropTypes.string),
     newActor: PropTypes.func.isRequired,
     updateActor: PropTypes.func.isRequired,
-    deleteActor: PropTypes.func.isRequired
+    deleteActor: PropTypes.func.isRequired,
   }
   static defaultProps = {
-    actors: [],
+    actors: {},
     colors: []
   }
   state = {
-    actorIndex: 0,
+    actorId: "000000",
     playableValue: false,
-    selectedIndex: 0
+    selectedIndex: 0,
   }
 
   handleNewActor = () => {
-    const { newActor, actors } = this.props
-    newActor({ name: "new" })
-    this.setState({ actorIndex: actors.length })
+    const { newActor } = this.props
+    const actorId = rnd()
+    newActor({ actor: { name: "new", playable: false, id: actorId } })
+    this.setState({ actorId })
   }
-  handleActorChange = (event, index) => {
-    this.setState({ actorIndex: index })
+
+  handleActorChange = (event) => {
+    this.setState({ actorId: event.target.value })
   }
 
   handleActorNameUpdate = event => {
     this.props.updateActor({
-      index: this.state.actorIndex,
+      id: this.state.actorId,
       actor: { name: event.target.value }
     })
   }
 
-  handleActorColorUpdate = (event, index, color) => {
+  handleActorColorUpdate = (event) => {
     this.props.updateActor({
-      index: this.state.actorIndex,
-      actor: { color }
+      id: this.state.actorId,
+      actor: { color: event.target.value }
     })
   }
 
-  handleActorPlayableUpdate = (event, index, playable) => {
+  handleActorPlayableUpdate = (event) => {
     this.props.updateActor({
-      index: this.state.actorIndex,
-      actor: { playable }
+      id: this.state.actorId,
+      actor: { playable: event.target.checked }
     })
   }
+
   handleActorDescriptionUpdate = event => {
     this.props.updateActor({
-      index: this.state.actorIndex,
+      id: this.state.actorId,
       actor: { description: event.target.value }
+    })
+  }
+
+  handleTextUpdate = (event, name) => {
+  const { actorId } = this.state;
+  const { updateActor } = this.props
+    updateActor({
+      id: actorId,
+      actor: { [name]: event.target.value }
     })
   }
 
   render() {
     const { actors, deleteActor, colors } = this.props
-    const { actorIndex } = this.state
-    const menuItems = actors.map((actor, i) => (
-      <MenuItem key={actor.name + i} value={i} primaryText={actor.name} />
-    ))
+    const { actorId } = this.state
+    const currentActor = actors[actorId];
+    if (!currentActor) return null;
+    const color = (actors[actorId] && actors[actorId].color) || "FFFFFF"
+
     return (
       <div style={styles.tabContent}>
-        <FlatButton label="New" primary={true} onClick={this.handleNewActor} />
-        <FlatButton
-          label="Delete"
-          primary={true}
-          onClick={() => deleteActor(actorIndex)}
-        />
-        <SelectField
-          name="Actors"
-          value={actorIndex}
-          onChange={this.handleActorChange}
-          fullWidth
-          floatingLabelFixed
-          floatingLabelText={<span>Actor</span>}
-        >
-          {menuItems}
-        </SelectField>
-
+        <Button color="primary" onClick={this.handleNewActor}>New</Button>
+        <Button
+          color="primary"
+          onClick={() => deleteActor(actorId)}
+        >Delete</Button>
+        <ActorSelect actorId={actorId} onChange={this.handleActorChange} />
         <TextField
-          name="Name"
+          label="Name"
           fullWidth
-          textareaStyle={styles.textStyle}
-          floatingLabelFixed
-          floatingLabelText={<span>Name</span>}
-          value={actors[actorIndex] && actors[actorIndex].name}
-          onChange={e => this.handleActorNameUpdate(e)}
+          style={styles.textStyle}
+          value={currentActor.name}
+          onChange={e => this.handleTextUpdate(e, "name")}
         />
-
-        <SelectField
-          name="Color"
-          fullWidth
-          floatingLabelFixed
-          floatingLabelText={<span>Color</span>}
-          labelStyle={{
-            backgroundColor: `#${actors[actorIndex] &&
-              actors[actorIndex].color}`,
-            transform: "scale(0.8, 0.3) translate(-20px, 0)"
-          }}
-          // label={actors[actorIndex].color}
-          onChange={this.handleActorColorUpdate}
-        >
-          {colors.map(color => (
-            <MenuItem
-              key={color}
-              value={color}
-              title={color}
-              primaryText=""
-              style={{ backgroundColor: `#${color}` }}
-            />
-          ))}
-        </SelectField>
-
-        <SelectField
-          name="Playable"
-          fullWidth
-          floatingLabelFixed
-          floatingLabelText={<span>Playable</span>}
-          value={actors[actorIndex] && actors[actorIndex].playable}
+        <FormControl fullWidth style={styles.textStyle}>
+          <InputLabel shrink htmlFor="color-select">
+            Color
+          </InputLabel>
+          <Select
+            name="Color"
+            label={"Color"}
+            value={currentActor.color || "FFFFFF"}
+            style={{
+              backgroundColor: `#${color}`
+            }}
+            onChange={this.handleActorColorUpdate}
+            inputProps={{
+              name: 'Color',
+              id: 'color-select',
+            }}
+          >
+            {colors.map(color => (
+              <MenuItem
+                key={color}
+                value={color}
+                title={color}
+                style={{ backgroundColor: `#${color}` }}
+              >{"   "}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        <Typography>Playable <Switch
+          checked={currentActor.playable || false}
           onChange={this.handleActorPlayableUpdate}
-        >
-          <MenuItem value={false} primaryText="No" />
-          <MenuItem value={true} primaryText="Yes" />
-        </SelectField>
+          value="Playable"
+          color="primary"
+        /></Typography>
         <TextField
-          name="Description"
+          label="Relationship"
+          value={currentActor.relationship}
+          style={styles.textStyle}
+          onChange={e => this.handleTextUpdate(e, "relationship")}
+        />
+
+        <TextField
+          label="Description"
+          multiline
           fullWidth
-          multiLine
-          textareaStyle={styles.textStyle}
-          floatingLabelFixed
-          floatingLabelText={<span>Desciption</span>}
-          value={(actors[actorIndex] && actors[actorIndex].description) || ""}
-          onChange={e => this.handleActorDescriptionUpdate(e)}
+          style={styles.textStyle}
+          value={currentActor.description}
+          onChange={e => this.handleTextUpdate(e, "description")}
         />
       </div>
     )
@@ -163,6 +182,8 @@ const mapState = ({ actors, colors }) => ({
   colors
 })
 
-export default connect(mapState, { newActor, updateActor, deleteActor })(
-  ActorTab
-)
+export default connect(mapState, {
+  newActor,
+  updateActor,
+  deleteActor
+})(ActorTab)

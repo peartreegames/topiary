@@ -18,16 +18,18 @@ class NodeContainer extends Component {
     setFocusedLink: PropTypes.func.isRequired,
     deleteAllLinks: PropTypes.func.isRequired,
     deleteNode: PropTypes.func.isRequired,
-    FocusedLink: PropTypes.object.isRequired
+    focusedLink: PropTypes.object.isRequired,
+    onCollapseNode: PropTypes.func.isRequired,
+    isCollapsed: PropTypes.bool.isRequired
   }
   static defaultProps = {
     node: {}
   }
 
   componentWillReceiveProps(nextProps) {
-    if (nextProps.FocusedLink.status !== this.props.FocusedLink.status) {
+    if (nextProps.focusedLink.status !== this.props.focusedLink.status) {
       const { id, updateNode, node } = this.props
-      if (nextProps.node.id === nextProps.FocusedLink.from) {
+      if (nextProps.node.id === nextProps.focusedLink.from) {
         nextProps.node.next.forEach(n => {
           updateNode({ id: n, payload: { linkable: false } })
         })
@@ -44,7 +46,9 @@ class NodeContainer extends Component {
       updateNode,
       setFocusedLink,
       deleteNode,
-      deleteAllLinks
+      deleteAllLinks,
+      onCollapseNode,
+      isCollapsed
     } = this.props
     return (
       <Node
@@ -53,7 +57,9 @@ class NodeContainer extends Component {
           updateNode,
           setFocusedLink,
           deleteAllLinks,
-          deleteNode
+          deleteNode,
+          onCollapseNode,
+          isCollapsed
         }}
       />
     )
@@ -63,12 +69,16 @@ class NodeContainer extends Component {
 const makeMapState = () => {
   const getNode = makeGetNode()
   const getConnected = makeConnectedNodes()
-  return ({ nodes, actors, FocusedNode, FocusedLink, links }, { id }) => ({
+  return (
+    { nodes, actors, focusedNode,focusedLink, links, search },
+    { id }
+  ) => ({
     node: {
-      ...getNode({ nodes, actors, FocusedNode }, { id }),
+      ...getNode({ nodes, actors, focusedNode }, { id }),
       ...getConnected({ links }, { id })
     },
-    FocusedLink
+    focusedLink,
+    search
   })
 }
 

@@ -7,12 +7,14 @@ export default function Link({
   to,
   linking,
   mouse,
-  FocusedNode,
+  focusedNode,
   deleteLink,
   setFocusedLink,
   setFocusedNode
 }) {
-  const fromBounds = document.getElementById(from).getBoundingClientRect()
+  const doc = document.getElementById(from)
+  const fromBounds = doc && doc.getBoundingClientRect()
+  if (!fromBounds) return null
   let toBounds
   const start = {
     x: fromBounds.left + window.scrollX + fromBounds.width / 2,
@@ -22,7 +24,11 @@ export default function Link({
   if (linking) {
     end = { x: mouse.pageX, y: mouse.pageY }
   } else {
-    toBounds = document.getElementById(to).getBoundingClientRect()
+    const el = document.getElementById(to)
+    if (!el) {
+      return null
+    }
+    toBounds = el.getBoundingClientRect()
     end = {
       x: toBounds.left + window.scrollX + toBounds.width / 2,
       y: toBounds.top + window.scrollY + toBounds.height / 2
@@ -57,7 +63,7 @@ export default function Link({
     <path
       d={dStr}
       markerEnd="url(#arrowhead)"
-      stroke={FocusedNode ? "#558b2f" : "black"}
+      stroke={focusedNode ? "#558b2f" : "black"}
       strokeWidth="2px"
       fill="none"
       onClick={() => {
@@ -70,7 +76,7 @@ export default function Link({
 }
 
 Link.propTypes = {
-  FocusedNode: PropTypes.bool.isRequired,
+  focusedNode: PropTypes.bool.isRequired,
   from: PropTypes.string.isRequired,
   to: PropTypes.string,
   linking: PropTypes.bool,
