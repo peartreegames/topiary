@@ -44,26 +44,15 @@ const formatExport = (data) => {
     delete node.linkable
     delete node.collapsed
   }
-
-  const getConnectedNodes = (node) => {
-    const connectedNodes = links.reduce((acc, link, i) => {
-      if (link[0] === node.id) {
-        acc.push(link[1])
-      }
-      return acc
-    }, [])
-    return connectedNodes
-  }
-
   
   Object.values(nodes).forEach(node => {
     removeNodeFields(node)
-    node.links = getConnectedNodes(node)
-    if (node.condition && node.condition.value) {
-      node.condition.value = parseInt(node.condition.value, 10)
+    node.links = links[node.id] || null
+    if (node.conditions) {
+      node.conditions.forEach(({conditionals}) => conditionals.forEach((conditional) => conditional.value = parseInt(conditional.value, 10)))
     }
-    if (node.sets && node.sets.value) {
-      node.sets.value = parseInt(node.sets.value, 10)
+    if (node.effects) {
+      node.effects.forEach(effect => effect.value = parseInt(effect.value, 10))
     }
   })
 

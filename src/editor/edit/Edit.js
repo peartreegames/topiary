@@ -1,12 +1,13 @@
-import React, { Component, Fragment } from "react"
+import React, { Component } from "react"
 import { connect } from "react-redux"
 import PropTypes from "prop-types"
-import { TextField, Chip, Typography, Switch } from "@material-ui/core"
+import { TextField, Chip, Typography, Switch, IconButton } from "@material-ui/core"
+import { Star } from '@material-ui/icons'
 import { makeGetNodeByCurrent } from "../../store/selectors"
-import { updateNode, updateCondition, updateSets } from "../../store/actions"
+import { updateNode, updateDefaultActor } from "../../store/actions"
 import ActorSelect from '../partials/actor-select/ActorSelect'
 import Condition from "../partials/condition/Condition"
-import Sets from '../partials/sets/Sets'
+import Effects from "../partials/effects/Effects"
 
 const styles = {
   textStyle: {
@@ -18,10 +19,8 @@ const styles = {
     margin: "20px"
   },
   tagWrapper: {
-    // display: "inline-flex",
-    // flexWrap: "wrap",
     width: "100%"
-  }, 
+  },
   tagChip: {
     display: "inline-flex",
     flexWrap: "wrap",
@@ -33,7 +32,9 @@ const styles = {
 class EditTab extends Component {
   static propTypes = {
     node: PropTypes.object,
-    updateNode: PropTypes.func.isRequired
+    defaultActor: PropTypes.string,
+    updateNode: PropTypes.func.isRequired,
+    updateDefaultActor: PropTypes.func.isRequired
   }
 
   state = {
@@ -67,57 +68,25 @@ class EditTab extends Component {
     })
   }
 
-  handleActorUpdate = (e) => {
+  handleNodeUpdate = (field, value) => {
     const { updateNode, node } = this.props
     updateNode({
       id: node.id,
-      payload: { actor: e.target.value }
-    })
-  }
-
-  handleTextUpdate = (e, name) => {
-    const { updateNode, node } = this.props
-    updateNode({
-      id: node.id,
-      payload: { [name]: e.target.value }
-    })
-  }
-
-  handleConditionUpdate = (e, name) => {
-    const { updateCondition, node } = this.props
-    updateCondition({
-      id: node.id,
-      payload: { [name]: e.target.value }
-    })
-  }
-
-  handleSetsUpdate = (e, name) => {
-    const { updateSets, node } = this.props
-    updateSets({
-      id: node.id,
-      payload: { [name]: e.target.value }
-    })
-  }
-
-  handleSwitchUpdate = (e, name) => {
-    const { updateNode, node } = this.props;
-    updateNode({
-      id :node.id,
-      payload: { [name]: e.target.checked }
+      payload: { [field]: value }
     })
   }
 
   render() {
-    const { node = {} } = this.props
+    const { node = {}, updateDefaultActor, defaultActor } = this.props
     const {
       type = "",
       title = "",
       actor = "000000",
       body = "",
       tags = [],
-      condition = {},
+      conditions,
       replay = false,
-      sets = {}
+      effects
     } = node
 
     const chipTags =
@@ -131,24 +100,38 @@ class EditTab extends Component {
         >
         </Chip>
       ))
-      
+
+    const defaultActorStyle = {
+      color: defaultActor === actor ? '#43a047' : '#AAAAAA'
+    }
+
     return (
       <div style={styles.tabContent}>
-          <TextField
-            fullWidth
-            style={styles.textStyle}
-            label={"Title"}
-            value={node && title}
-            onChange={e => this.handleTextUpdate(e, "title")}
-          />
-          <Typography>Replay <Switch
-          checked={replay}
-          onChange={e => this.handleSwitchUpdate(e, "replay")}
-          value="Replay"
-          color="primary"
-        /></Typography>
+
+        <TextField
+          fullWidth
+          style={styles.textStyle}
+          label={"Title"}
+          value={node && title}
+          onChange={e => this.handleNodeUpdate("title", e.target.value)}
+        />
+
+        <div style={{ display: 'flex' }}>
+          <Typography>REPLAY<Switch
+            checked={replay}
+            onChange={e => this.handleNodeUpdate("replay", e.target.checked)}
+            value="Replay"
+            color="primary"
+          /></Typography>
+          <Condition conditions={conditions} onSave={this.handleNodeUpdate} />
+          {type === 'choice' && <Effects effects={effects} onSave={this.handleNodeUpdate} />}
+        </div>
+
         {type === "dialogue" && (
-          <ActorSelect actorId={actor} onChange={this.handleActorUpdate} />)}
+          <div style={{display: 'flex', alignItems: 'baseline'}}>
+          <ActorSelect actorId={actor} onChange={(e) => this.handleNodeUpdate("actor", e.target.value)} /><IconButton onClick={() => updateDefaultActor(actor)}><Star fontSize="small" style={defaultActorStyle}/></IconButton>
+          </div>)}
+
         <TextField
           fullWidth
           style={styles.textStyle}
@@ -158,17 +141,14 @@ class EditTab extends Component {
         />
         <div style={styles.tagsWrapper}>{chipTags}</div>
         {type !== 'root' &&
-        <Fragment>
-        <Condition condition={condition} onChange={this.handleConditionUpdate} />
-        {type === 'choice' && <Sets sets={sets} onChange={this.handleSetsUpdate} />}
-        <TextField
-          multiline
-          fullWidth
-          style={styles.textStyle}
-          label={"Body"}
-          value={body}
-          onChange={e => this.handleTextUpdate(e, "body")}
-        /></Fragment>}
+          <TextField
+            multiline
+            fullWidth
+            style={styles.textStyle}
+            label={"Body"}
+            value={body}
+            onChange={e => this.handleNodeUpdate("body", e.target.value)}
+          />}
       </div>
     )
   }
@@ -176,9 +156,10 @@ class EditTab extends Component {
 
 const makeMapState = () => {
   const getNode = makeGetNodeByCurrent()
-  return ({ nodes, focusedNode }) => ({
-    ...getNode({ nodes, focusedNode })
+  return ({ nodes, focusedNode, defaultActor }) => ({
+    ...getNode({ nodes, focusedNode }),
+    defaultActor
   })
 }
 
-export default connect(makeMapState, { updateNode, updateCondition, updateSets })(EditTab)
+export default connect(makeMapState, { updateNode, updateDefaultActor })(EditTab)

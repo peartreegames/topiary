@@ -68,11 +68,11 @@ class NavBottom extends Component {
   }
 
   handleNewNode = type => {
-    const { newNode, setFocusedNode, scale } = this.props
+    const { newNode, setFocusedNode, scale, defaultActor } = this.props
     const newId = rnd()
     const diffs =
       type === "dialogue"
-        ? { actor: "000000", body: "new dialogue" }
+        ? { actor: defaultActor, body: "new dialogue" }
         : { body: "new choice" }
     const newPos = [
       Math.round(
@@ -167,10 +167,11 @@ class NavBottom extends Component {
   }
 }
 
-const mapState = ({ scale, editor, search }) => ({
+const mapState = ({ scale, editor, search, defaultActor }) => ({
   scale,
   editor,
-  search
+  search,
+  defaultActor
 })
 
 export default connect(mapState, {

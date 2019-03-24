@@ -30,20 +30,21 @@ Dialogue Tree Editor inspired by [twinery](http://www.twinery.org) created with 
 * [x] Create new nodes
 * [x] Delete nodes
 * [x] Place nodes
+* [ ] Move child nodes
 * [x] Add links
 * [x] Delete/Move links
 * [x] Visual cues for linkable nodes
 * [x] Add actors
-* [x] Delete actors (need to address nodes to actor relationship)
-* [ ] Add custom colours
+* [x] Delete actors
+* [x] Set default actor
 * [ ] Actor Avatars
-* [ ] Items/Variables
+* [ ] Add custom colours
+* [x] Variables
+* [x] Conditions and Effects
 * [ ] Tooltips
-* [ ] Collapsable tree segments
+* [x] Collapsable tree segments
 * [ ] Zoom functionality
 * [ ] Settings and Help tabs
 * [x] Search funcationality
 * [x] Persistent State
 * [x] Load/Save files
-
-* Feel free to open an issue for anything else you'd like to see!

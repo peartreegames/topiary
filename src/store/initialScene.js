@@ -20,7 +20,6 @@ export default function(id) {
         linkable: true,
         collapsedPos: [],
         actor: "000000",
-        condition: {},
         replay: false
       }
     },

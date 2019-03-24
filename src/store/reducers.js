@@ -37,7 +37,11 @@ const collapsedNodes = (state = [], { type, nodeId }) => {
     default:
       return state
   }
+}
 
+const defaultActor = (state = "000000", { type, actorId}) => {
+  if (type === "DEFAULT_ACTOR") return actorId
+  return state
 }
 
 export default combineReducers({
@@ -46,6 +50,7 @@ export default combineReducers({
   search,
   nodes,
   links,
+  defaultActor,
   collapsedNodes,
   focusedNode,
   focusedLink,

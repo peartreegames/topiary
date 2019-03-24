@@ -10,6 +10,7 @@ export const actors = (state = {}, { type, id, actor }) => {
         }
       }
     case "DELETE_ACTOR":
+      // eslint-disable-next-line
       return (({[id]: _, ...newObj}, id) => newObj)(state, id)
     default:
       return state

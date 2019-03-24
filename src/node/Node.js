@@ -48,7 +48,7 @@ class Node extends Component {
     prev: PropTypes.array,
     next: PropTypes.array,
     pos: PropTypes.array,
-    condition: PropTypes.object,
+    condition: PropTypes.array,
     updateNode: PropTypes.func.isRequired,
     setFocusedLink: PropTypes.func.isRequired,
     deleteAllLinks: PropTypes.func.isRequired,
@@ -86,8 +86,8 @@ class Node extends Component {
       setFocusedLink,
       deleteAllLinks,
       deleteNode,
-      condition = {},
-      sets = {},
+      conditions,
+      effects,
       replay = false,
       onCollapseNode,
       isCollapsed
@@ -97,8 +97,12 @@ class Node extends Component {
       <Chip key={tag} style={styles.tagChip} label={tag} />
     ))
 
+    const rootStyle = {
+      backgroundColor: type === 'root' ? '#AAAAAA' : '#FFFFFF'
+    }
+
     return (
-      <Card>
+      <Card style={rootStyle}>
         <NodeHeader
           {...{
             type,
@@ -108,8 +112,8 @@ class Node extends Component {
             actor,
             expanded: this.state.expanded,
             expand: this.handleExpandChange,
-            condition: !!condition.variable && !!condition.op && !!condition.value,
-            sets: !!sets.variable && !!sets.op && !!sets.value,
+            conditions: !!conditions,
+            effects: !!effects,
             replay
           }}
         />

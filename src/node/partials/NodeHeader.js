@@ -29,13 +29,13 @@ export default function NodeHeader({
   color,
   expanded,
   expand,
-  condition,
-  sets
+  conditions,
+  effects
 }) {
   const fontColor = brightness(color) > 165 ? "#000" : "#EEE"
   return (
     <CardHeader
-      title={<Typography style={type !== 'root' ? styles.title : styles.rootTitle}>{title} {sets && <ErrorOutline style={{fontSize: 11}}/>}{condition && <HelpOutline style={{fontSize: 11}}/>} </Typography>}
+      title={<Typography style={type !== 'root' ? styles.title : styles.rootTitle}>{title} {effects && <ErrorOutline style={{fontSize: 11}}/>}{conditions && <HelpOutline style={{fontSize: 11}}/>} </Typography>}
       action={expanded ? <ExpandMore style={styles.expand} onClick={() => expand(!expanded)} /> : <ExpandLess style={styles.expand} onClick={() => expand(!expanded)} />}
       subheader={<Typography style={styles.subtitle}>{actor}</Typography>}
       style={{

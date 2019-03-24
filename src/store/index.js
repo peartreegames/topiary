@@ -8,6 +8,7 @@ const store = id => {
     id,
     scene: "",
     search: { status: false, text: "" },
+    defaultActor: "000000",
     focusedNode: "",
     focusedLink: { status: false, from: "", to: "" },
     collapsedNodes: [],

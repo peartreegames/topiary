@@ -20,28 +20,6 @@ export const nodes = (state = {}, { type, id, payload }) => {
           ...payload
         }
       }
-    case "UPDATE_CONDITION":
-      return {
-        ...state,
-        [id]: {
-          ...state[id],
-          condition: {
-            ...state[id].condition,
-            ...payload
-          },
-        }
-      }
-    case "UPDATE_SETS":
-      return {
-        ...state,
-        [id]: {
-          ...state[id],
-          sets: {
-            ...state[id].sets,
-            ...payload
-          },
-        }
-      }
     case "DELETE_NODE":
       return Object.keys(state).reduce((acc, key) => {
         if (key !== id) {

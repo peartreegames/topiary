@@ -16,3 +16,5 @@ export const addCollapsedNode = ( nodeId ) => {
 }
 
 export const removeCollapsedNode = (nodeId) => ({ type: "REMOVE_COL_NODE", nodeId })
+
+export const updateDefaultActor = (actorId) => ({ type: "DEFAULT_ACTOR", actorId })
