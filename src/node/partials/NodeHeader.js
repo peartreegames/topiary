@@ -33,14 +33,20 @@ export default function NodeHeader({
   effects
 }) {
   const fontColor = brightness(color) > 165 ? "#000" : "#EEE"
+  let titleStyle
+  if (type !== 'root') {
+    titleStyle = { color: fontColor, ...styles.title }
+  } else {
+    titleStyle = { color: fontColor, ...styles.rootTitle }
+  }
   return (
     <CardHeader
-      title={<Typography style={type !== 'root' ? styles.title : styles.rootTitle}>{title} {effects && <ErrorOutline style={{fontSize: 11}}/>}{conditions && <HelpOutline style={{fontSize: 11}}/>} </Typography>}
+      title={<Typography style={titleStyle}>{title} {effects && <ErrorOutline style={{ fontSize: 11 }} />}{conditions && <HelpOutline style={{ fontSize: 11 }} />} </Typography>}
       action={expanded ? <ExpandMore style={styles.expand} onClick={() => expand(!expanded)} /> : <ExpandLess style={styles.expand} onClick={() => expand(!expanded)} />}
-      subheader={<Typography style={styles.subtitle}>{actor}</Typography>}
+      subheader={<Typography style={{...styles.subtitle, color: fontColor}}>{actor}</Typography>}
       style={{
         fontWeight: "bold",
-        backgroundColor: `#${color}`,
+        backgroundColor: `${type !== 'root' ? color : '#CCC'}`,
         color: fontColor
       }}
       className={"draggable"}

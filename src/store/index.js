@@ -14,7 +14,6 @@ const store = id => {
     collapsedNodes: [],
     nodes: {},
     links: {},
-    colors: ["FFFFFF", "94E495", "85B7A1", "486B8D", "554A6E", "501D47"],
     editor: true,
     scale: 1,
     warning: { status: false, warningMessage: "" }

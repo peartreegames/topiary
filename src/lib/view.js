@@ -42,7 +42,19 @@ export function dimensions(nodes, scale) {
 }
 
 export const brightness = h => {
-  const [r, g, b] = hexToRGB(h)
+  let r;
+  let g;
+  let b;
+
+  if (h.startsWith('rgb')) {
+    let values = h.substring(4)
+    values = values.substring(0, values.length - 1);
+    ([r, g, b] = values.split(','));
+    g = g.trim()
+    b = b.trim()
+  } else {
+    ([r, g, b] = hexToRGB(h))
+  }
   return Math.sqrt(r * r * 0.299 + g * g * 0.587 + b * b * 0.114)
 }
 

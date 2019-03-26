@@ -96,7 +96,7 @@ class Effects extends React.Component {
 
   render() {
     const buttonStyle = {
-      color: this.props.effects ? '#43a047' : '#000000',
+      color: this.props.effects ? '#558b2f' : '#000000',
       fontWeight: this.props.effects ? 'bold' : 'normal'
     }
 

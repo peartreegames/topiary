@@ -2,14 +2,10 @@ import React, { Component } from "react"
 import { connect } from "react-redux"
 import PropTypes from "prop-types"
 import {
-  Select,
   TextField,
-  MenuItem,
   Button,
-  InputLabel,
-  FormControl,
   Typography,
-  Switch
+  Switch,
 } from "@material-ui/core"
 import {
   newActor,
@@ -18,6 +14,7 @@ import {
 } from "../../store/actions"
 import { rnd } from "../../lib/math";
 import ActorSelect from "../partials/actor-select/ActorSelect";
+import ColorPicker from "../partials/color-picker/ColorPicker";
 
 const styles = {
   textStyle: {
@@ -52,6 +49,11 @@ class ActorTab extends Component {
     actorId: "000000",
     playableValue: false,
     selectedIndex: 0,
+    open: false
+  }
+
+  toggleModal = () => {
+    this.setState({open: !this.state.open})
   }
 
   handleNewActor = () => {
@@ -65,40 +67,10 @@ class ActorTab extends Component {
     this.setState({ actorId: event.target.value })
   }
 
-  handleActorNameUpdate = event => {
+  handleActorUpdate = (field, value) => {
     this.props.updateActor({
       id: this.state.actorId,
-      actor: { name: event.target.value }
-    })
-  }
-
-  handleActorColorUpdate = (event) => {
-    this.props.updateActor({
-      id: this.state.actorId,
-      actor: { color: event.target.value }
-    })
-  }
-
-  handleActorPlayableUpdate = (event) => {
-    this.props.updateActor({
-      id: this.state.actorId,
-      actor: { playable: event.target.checked }
-    })
-  }
-
-  handleActorDescriptionUpdate = event => {
-    this.props.updateActor({
-      id: this.state.actorId,
-      actor: { description: event.target.value }
-    })
-  }
-
-  handleTextUpdate = (event, name) => {
-  const { actorId } = this.state;
-  const { updateActor } = this.props
-    updateActor({
-      id: actorId,
-      actor: { [name]: event.target.value }
+      actor: { [field]: value }
     })
   }
 
@@ -122,46 +94,22 @@ class ActorTab extends Component {
           fullWidth
           style={styles.textStyle}
           value={currentActor.name}
-          onChange={e => this.handleTextUpdate(e, "name")}
+          onChange={e => this.handleActorUpdate("name", e.target.value)}
         />
-        <FormControl fullWidth style={styles.textStyle}>
-          <InputLabel shrink htmlFor="color-select">
-            Color
-          </InputLabel>
-          <Select
-            name="Color"
-            label={"Color"}
-            value={currentActor.color || "FFFFFF"}
-            style={{
-              backgroundColor: `#${color}`
-            }}
-            onChange={this.handleActorColorUpdate}
-            inputProps={{
-              name: 'Color',
-              id: 'color-select',
-            }}
-          >
-            {colors.map(color => (
-              <MenuItem
-                key={color}
-                value={color}
-                title={color}
-                style={{ backgroundColor: `#${color}` }}
-              >{"   "}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-        <Typography>Playable <Switch
+        <div style={{display: 'flex', alignItems: 'center'}}>
+        <Typography>Playable </Typography><Switch
           checked={currentActor.playable || false}
-          onChange={this.handleActorPlayableUpdate}
+          onChange={e => this.handleActorUpdate('playable', e.target.checked)}
           value="Playable"
           color="primary"
-        /></Typography>
+        />
+        <ColorPicker color={color} colors={colors} onSave={this.handleActorUpdate} />
+        </div>
         <TextField
           label="Relationship"
           value={currentActor.relationship}
           style={styles.textStyle}
-          onChange={e => this.handleTextUpdate(e, "relationship")}
+          onChange={e => this.handleActorUpdate('relationship', e.target.value)}
         />
 
         <TextField
@@ -170,7 +118,7 @@ class ActorTab extends Component {
           fullWidth
           style={styles.textStyle}
           value={currentActor.description}
-          onChange={e => this.handleTextUpdate(e, "description")}
+          onChange={e => this.handleActorUpdate('description', e.target.value)}
         />
       </div>
     )

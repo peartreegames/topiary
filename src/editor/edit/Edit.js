@@ -102,7 +102,7 @@ class EditTab extends Component {
       ))
 
     const defaultActorStyle = {
-      color: defaultActor === actor ? '#43a047' : '#AAAAAA'
+      color: defaultActor === actor ? '#558b2f' : '#AAAAAA'
     }
 
     return (

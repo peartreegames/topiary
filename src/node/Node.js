@@ -60,7 +60,7 @@ class Node extends Component {
     title: "",
     tags: [],
     actor: "",
-    color: "FFFFFF",
+    color: "",
     body: "",
     current: false
   }
@@ -96,13 +96,8 @@ class Node extends Component {
     const chipTags = tags.map(tag => (
       <Chip key={tag} style={styles.tagChip} label={tag} />
     ))
-
-    const rootStyle = {
-      backgroundColor: type === 'root' ? '#AAAAAA' : '#FFFFFF'
-    }
-
     return (
-      <Card style={rootStyle}>
+      <Card>
         <NodeHeader
           {...{
             type,

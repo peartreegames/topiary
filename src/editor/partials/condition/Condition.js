@@ -167,7 +167,7 @@ class Condition extends React.Component {
 
   render() {
     const buttonStyle = {
-      color: this.props.conditions ? '#43a047' : '#000000',
+      color: this.props.conditions ? '#558b2f' : '#000000',
       fontWeight: this.props.conditions ? 'bold' : 'normal'
     }
     return (

@@ -32,6 +32,5 @@ export default function(id) {
 
 export const globals = {
     actors: {"000000": { id: "000000", name: "Narrator", playable: false, color: "FFFFFF", relationship: "0" }},
-    colors: ["FFFFFF", "94E495", "85B7A1", "486B8D", "554A6E", "501D47"],
     variables: {},
   }

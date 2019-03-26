@@ -37,14 +37,14 @@ Dialogue Tree Editor inspired by [twinery](http://www.twinery.org) created with 
 * [x] Add actors
 * [x] Delete actors
 * [x] Set default actor
-* [ ] Actor Avatars
+* [ ] Actor Avatars?
 * [ ] Add custom colours
 * [x] Variables
 * [x] Conditions and Effects
 * [ ] Tooltips
-* [x] Collapsable tree segments
+* [x] Collapsable tree segments (needs improvement)
 * [ ] Zoom functionality
 * [ ] Settings and Help tabs
-* [x] Search funcationality
+* [x] Search funcationality (needs better visual cues)
 * [x] Persistent State
 * [x] Load/Save files
