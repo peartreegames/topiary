@@ -28,34 +28,6 @@
     "pack": "build --dir",
     "dist": "build"
   },
-  "main": "./public/electron.js",
-  "build": {
-    "appId": "topiary",
-    "dmg": {
-      "contents": [
-        {
-          "x": 110,
-          "y": 150
-        },
-        {
-          "x": 240,
-          "y": 150,
-          "type": "link",
-          "path": "/Applications"
-        }
-      ]
-    },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ]
-    },
-    "win": {
-      "target": "squirrel",
-      "icon": "build/icon.ico"
-    }
-  },
   "devDependencies": {
     "redux-logger": "^3.0.6",
     "remote-redux-devtools": "^0.5.16"

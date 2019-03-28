@@ -13,6 +13,8 @@ Dialogue Tree Editor inspired by [twinery](http://www.twinery.org) created with 
 ### Dependencies
 
 * material-ui
+* file-saver
+* gradstop
 * prop-types
 * react
 * react-dom
@@ -34,13 +36,16 @@ Dialogue Tree Editor inspired by [twinery](http://www.twinery.org) created with 
 * [x] Add links
 * [x] Delete/Move links
 * [x] Visual cues for linkable nodes
+* [ ] Link/marker marker colors based on actor color
 * [x] Add actors
 * [x] Delete actors
 * [x] Set default actor
 * [ ] Actor Avatars?
-* [ ] Add custom colours
+* [x] Actor colours
+* [ ] Custom Actor Variables
 * [x] Variables
 * [x] Conditions and Effects
+* [ ] Autocomplete variable selection
 * [ ] Tooltips
 * [x] Collapsable tree segments (needs improvement)
 * [ ] Zoom functionality
@@ -48,3 +53,4 @@ Dialogue Tree Editor inspired by [twinery](http://www.twinery.org) created with 
 * [x] Search funcationality (needs better visual cues)
 * [x] Persistent State
 * [x] Load/Save files
+* [ ] Playthrough
