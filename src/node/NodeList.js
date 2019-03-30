@@ -8,11 +8,14 @@ import {
   setFocusedLink,
   newLink,
   updateNode,
+  updateNodes,
   addCollapsedNode,
   removeCollapsedNode,
 } from "../store/actions"
 import { gridSize } from "../lib/view"
-import { makeGetNonCollapsedNodes, makeGetNonCollapsedLinks } from "../store/selectors"
+import { makeGetNonCollapsedNodes, getAllChildNodes } from "../store/selectors"
+
+const getNonCollapsedNodes = makeGetNonCollapsedNodes()
 
 const styles = {
   dragContainer: {
@@ -43,10 +46,49 @@ class NodeList extends Component {
     search: PropTypes.object.isRequired
   }
 
+  static getDerivedStateFromProps({nodes}, {nodes: prevNodes}) {
+    if (nodes === prevNodes) {
+      return null
+    }
+
+    return {
+      nodes,
+      nodePositions: Object.values(nodes).reduce((positions, {id, pos}) => ({...positions, [id]: pos}), {})
+    }
+  }
+
   state = {
     xAdjust: 0,
     yAdjust: 0,
-    nonLinkables: []
+    nonLinkables: [],
+    nodePositions: {},
+    shiftKey: false
+  }
+
+  get nonCollapsedNodes() {
+    return getNonCollapsedNodes({nodes: this.props.nodes, collapsedNodes: this.props.collapsedNodes, links: this.props.links})
+  }
+
+  componentDidMount() {
+    window.document.addEventListener('keydown', this.handleKeyPress)
+    window.document.addEventListener('keyup', this.handleKeyUp)
+  }
+
+  componentWillUnmount() {
+    window.document.removeEventListener('keydown', this.handleKeyPress)
+    window.document.removeEventListener('keyup', this.handleKeyUp)
+  }
+
+  handleKeyPress = ({key, shiftKey}) => {
+    if (key === 'Shift' || shiftKey) {
+      this.setState({shiftKey: true})
+    }
+  }
+
+  handleKeyUp = ({key, shiftKey}) => {
+    if (key === 'Shift' || shiftKey) {
+      this.setState({shiftKey: false})
+    }
   }
 
   handleCollapseNode = (id) => {
@@ -57,18 +99,31 @@ class NodeList extends Component {
     addCollapsedNode(id)
   }
 
-  handleNodePositionAdjust(_, data) {
+  handleNodePositionAdjust = (_, data, nodeId) => {
     const { scale } = this.props
+    const { shiftKey, nodePositions: currentPositions } = this.state
+    let update = { }
+    if (shiftKey) {
+      const children = getAllChildNodes(nodeId, this.props.links)
+      const nodePositions = children.reduce((positions, node) => ({...positions, [node]: [currentPositions[node][0] + data.deltaX, currentPositions[node][1] + data.deltaY ]}), {})
+      update = nodePositions
+    }
+
+    update[nodeId] = [currentPositions[nodeId][0] + data.deltaX, currentPositions[nodeId][1] + data.deltaY]
+    console.log(JSON.stringify({[nodeId]: update[nodeId]}))
     this.setState({
       xAdjust: data.deltaX / scale,
-      yAdjust: data.deltaY / scale
+      yAdjust: data.deltaY / scale,
+      nodePositions: {...currentPositions, ...update}
     })
   }
 
-  handleNodePositionUpdate(_, data, id) {
-    this.props.updateNode({
-      id,
-      payload: { pos: [data.lastX, data.lastY] }
+  handleNodePositionUpdate = (_, data, id) => {
+    const { nodePositions, nodes } = this.state
+    const newNodes = { ...nodes }
+    Object.entries(nodePositions).forEach(([nodeId, pos]) => newNodes[nodeId].pos = pos);
+    this.props.updateNodes({
+      payload: newNodes
     })
     this.setState({ xAdjust: 0, yAdjust: 0 })
   }
@@ -97,11 +152,8 @@ class NodeList extends Component {
     return {}
   }
 
-
-
   render() {
     const {
-      nodes,
       focusedLink,
       setFocusedNode,
       setFocusedLink,
@@ -109,13 +161,18 @@ class NodeList extends Component {
       focusedNode,
       collapsedNodes
     } = this.props
-    return Object.values(nodes).map(n => {
+    
+    const {
+      nodePositions,
+    } = this.state
+
+    return Object.values(this.nonCollapsedNodes).map(n => {
       return (
         <Draggable
           key={n.id}
           position={{
-            x: Math.round(n.pos[0] / gridSize) * gridSize,
-            y: Math.round(n.pos[1] / gridSize) * gridSize
+            x: Math.round(nodePositions[n.id][0] / gridSize) * gridSize,
+            y: Math.round(nodePositions[n.id][1] / gridSize) * gridSize
           }}
           handle=".draggable"
           grid={[gridSize, gridSize]}
@@ -131,7 +188,7 @@ class NodeList extends Component {
               if (focusedNode !== n.id) setFocusedNode({ id: n.id })
             }
           }}
-          onDrag={(e, data) => this.handleNodePositionAdjust(e, data)}
+          onDrag={(e, data) => this.handleNodePositionAdjust(e, data, n.id)}
           onStop={(e, data) => {
             if (this.state.xAdjust !== 0 || this.state.yAdjust !== 0)
               this.handleNodePositionUpdate(e, data, n.id)
@@ -161,16 +218,14 @@ class NodeList extends Component {
 
 
 const makeMapState = () => {
-  const getNonCollapsedNodes = makeGetNonCollapsedNodes()
-  const getNonCollapsedLinks = makeGetNonCollapsedLinks()
   return ({ scale, nodes, focusedLink, focusedNode, search, collapsedNodes, links }) => ({
-    nodes: getNonCollapsedNodes({ nodes, collapsedNodes, links }),
+    nodes,
     scale,
     focusedLink,
     focusedNode,
     search,
     collapsedNodes,
-    links: getNonCollapsedLinks({ links, collapsedNodes })
+    links
   })
 }
 
@@ -180,6 +235,7 @@ export default connect(makeMapState, {
   setFocusedLink,
   newLink,
   updateNode,
+  updateNodes,
   addCollapsedNode,
   removeCollapsedNode
 })(NodeList)

@@ -65,7 +65,7 @@ const formatGlobalsExport = (data) => {
     delete actor.color
   })
 
-  const parsedVars = Object.entries(variables).reduce((acc, [key, value]) => ({ ...acc, [key]: parseInt(value, 10)}))
+  const parsedVars = Object.entries(variables).reduce((acc, [key, value]) => ({ ...acc, [key]: parseInt(value, 10)}), {})
 
   return JSON.stringify({ actors, variables: parsedVars })
 }

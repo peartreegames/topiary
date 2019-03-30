@@ -62,6 +62,26 @@ export const makeGetNonCollapsedNodes = () =>
     return result
   })
 
+export const getAllChildNodes = (nodeId, links) => {
+  const getChildLinks = (nodeId, arr) => {
+    const children = links[nodeId]
+    if (!children) {
+      return arr
+    }
+    let childLinks = []
+    for (const child of children) {
+      if (!arr.includes(child)) {
+        childLinks = [...childLinks, ...getChildLinks(child, arr)]
+      }
+    }
+    arr = Array.from(new Set([...arr, ...children, ...childLinks]))
+    return arr
+  }
+
+  const children = getChildLinks(nodeId, [])
+  return children
+}
+
 export const makeGetNonCollapsedLinks = () => 
   createSelector([getLinks, getCollapsedNodes], (links, collapsedNodes) => {
     const result = { ...links }

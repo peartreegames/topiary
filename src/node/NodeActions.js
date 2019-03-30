@@ -4,6 +4,11 @@ export const updateNode = ({ id, payload }) => ({
   payload
 })
 
+export const updateNodes = ({ payload: nodes }) => ({
+  type: "UPDATE_NODES",
+  nodes
+})
+
 export const newNode = ({ id, payload }) => ({
   type: "NEW_NODE",
   id,

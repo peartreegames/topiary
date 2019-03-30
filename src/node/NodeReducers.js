@@ -20,6 +20,11 @@ export const nodes = (state = {}, { type, id, payload }) => {
           ...payload
         }
       }
+    case "UPDATES_NODES":
+      return {
+        ...state,
+        ...payload
+      }
     case "DELETE_NODE":
       return Object.keys(state).reduce((acc, key) => {
         if (key !== id) {
