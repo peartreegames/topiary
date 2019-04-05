@@ -44,7 +44,7 @@ const formatExport = (data) => {
     delete node.linkable
     delete node.collapsed
   }
-  
+
   Object.values(nodes).forEach(node => {
     removeNodeFields(node)
     node.links = links[node.id] || null
@@ -93,7 +93,7 @@ export const saveFile = (scene, id, formatted = false) => {
     const name = `${scene.trim() || 'untitled'}${formatted ? '' : '-raw'}.topi.json`
     saveAs(blob, name)
   } catch (err) {
-    console.log(err) 
+    console.log(err)
     return null
   }
 }

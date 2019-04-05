@@ -1,11 +1,11 @@
 import { combineReducers } from "redux"
 
-import { nodes, focusedNode } from "../node/NodeReducers"
-import { actors, colors } from "../editor/actor/ActorReducers"
-import { editor } from "../editor/edit/EditReducers"
-import { links,focusedLink } from "../link/LinkReducers"
-import variables from "../editor/variable/VariableReducers"
-import { scene, search } from "../nav/NavReducers"
+import { nodes, focusedNode } from "./nodes/reducer"
+import { actors, colors } from "./actor/reducer"
+import editor from "./editor/reducer"
+import { links, focusedLink } from "./link/reducer"
+import variables from "./variable/reducer"
+import { scene, search } from "./nav/reducer"
 
 const warning = (state = null, action) => {
   switch (action.type) {

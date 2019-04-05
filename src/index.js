@@ -3,8 +3,8 @@ import ReactDOM from "react-dom"
 import { HashRouter as Router, Route } from "react-router-dom"
 import { MuiThemeProvider, createMuiTheme } from "@material-ui/core/styles"
 import registerServiceWorker from "./registerServiceWorker"
-import Landing from "./landing/Landing"
-import Scene from "./app/Scene"
+import Landing from "components/landing"
+import App from "components/app"
 import "./index.css"
 
 const muiTheme = createMuiTheme({
@@ -23,7 +23,7 @@ ReactDOM.render(
     <MuiThemeProvider theme={muiTheme}>
       <Fragment>
         <Route exact path="/" component={Landing} />
-        <Route path="/scene/:id" component={Scene} />
+        <Route path="/scene/:id" component={App} />
       </Fragment>
     </MuiThemeProvider>
   </Router>,

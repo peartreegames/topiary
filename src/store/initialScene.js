@@ -1,4 +1,4 @@
-import { rnd } from "../lib/math"
+import { rnd } from "../utils/math"
 
 const nodeId = rnd()
 export default function(id) {
