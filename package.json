@@ -26,9 +26,12 @@
     "eject": "react-scripts eject",
     "electron": "./node_modules/.bin/electron .",
     "pack": "build --dir",
-    "dist": "build"
+    "dist": "build",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d build"
   },
   "devDependencies": {
+    "gh-pages": "^2.0.1",
     "redux-logger": "^3.0.6",
     "remote-redux-devtools": "^0.5.16"
   },

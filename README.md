@@ -2,7 +2,7 @@
 
 Dialogue Tree Editor inspired by [twinery](http://www.twinery.org) created with React.
 
-![Topiary Screenshot](https://github.com/peartreegames/topiary/blob/master/docs/topiary.png)
+![Topiary Screenshot](./public/topiary.png)
 
 ### Installation
 
