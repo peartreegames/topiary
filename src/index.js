@@ -1,6 +1,6 @@
 import React, { Fragment } from "react"
 import ReactDOM from "react-dom"
-import { BrowserRouter as Router, Route } from "react-router-dom"
+import { HashRouter as Router, Route } from "react-router-dom"
 import { MuiThemeProvider, createMuiTheme } from "@material-ui/core/styles"
 import registerServiceWorker from "./registerServiceWorker"
 import Landing from "./landing/Landing"
