@@ -14,7 +14,7 @@
 importScripts("https://storage.googleapis.com/workbox-cdn/releases/3.6.3/workbox-sw.js");
 
 importScripts(
-  "https://peartreegames.github.io/topiary/precache-manifest.8192a59444206c0b74b6a152c340d0e1.js"
+  "/topiary/precache-manifest.889ba15a518082800528b8a57ca4351b.js"
 );
 
 workbox.clientsClaim();
@@ -28,7 +28,7 @@ self.__precacheManifest = [].concat(self.__precacheManifest || []);
 workbox.precaching.suppressWarnings();
 workbox.precaching.precacheAndRoute(self.__precacheManifest, {});
 
-workbox.routing.registerNavigationRoute("https://peartreegames.github.io/topiary/index.html", {
+workbox.routing.registerNavigationRoute("/topiary/index.html", {
   
   blacklist: [/^\/_/,/\/[^\/]+\.[^\/]+$/],
 });
