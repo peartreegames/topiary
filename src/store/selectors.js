@@ -36,74 +36,54 @@ export const makeConnectedNodes = () =>
 export const makeGetNodeKeys = () =>
   createSelector([getNodes], nodes => Object.keys(nodes))
 
-export const makeGetNonCollapsedNodes = () => 
-  createSelector([getNodes, getCollapsedNodes, getLinks], (nodes, collapsedNodes, links) => {
-    const result = {...nodes}
-    const getChildLinks = (nodeId, arr) => {
-      const children = links[nodeId]
-      if (!children) {
-        return arr
-      }
-      let childLinks = []
-      for (const child of children) {
-        childLinks = [...childLinks, ...getChildLinks(child, arr)]
-      }
-      arr = [...arr, ...children, ...childLinks]
-      return arr
-    }
-
-    for (const collapsedNode of collapsedNodes) {
-      const children = getChildLinks(collapsedNode, [])
-      for (const child of children) {
-        delete result[child]
-      }
-    }
-
-    return result
-  })
-
 export const getAllChildNodes = (nodeId, links) => {
-  const getChildLinks = (nodeId, arr) => {
-    const children = links[nodeId]
+  const getChildLinks = (node, arr) => {
+    const children = links[node]
     if (!children) {
       return arr
     }
     let childLinks = []
     for (const child of children) {
-      if (!arr.includes(child)) {
-        childLinks = [...childLinks, ...getChildLinks(child, arr)]
+      if (arr.includes(child) || childLinks.includes(child) || (childLinks.length > 0 && nodeId === node)) {
+        continue
       }
+      childLinks.push(child)
+    }
+    if (childLinks.length === 0) {
+      return arr
     }
     arr = Array.from(new Set([...arr, ...children, ...childLinks]))
-    return arr
+    return getChildLinks(childLinks, arr);
   }
 
   const children = getChildLinks(nodeId, [])
   return children
 }
 
+export const makeGetNonCollapsedNodes = () => 
+  createSelector([getNodes, getCollapsedNodes, getLinks], (nodes, collapsedNodes, links) => {
+    const result = {...nodes}
+    let nodesToDelete = []
+    for (const nodeId of collapsedNodes) {
+      nodesToDelete = [...nodesToDelete, ...getAllChildNodes(nodeId, links)]
+    }
+    nodesToDelete.forEach(nodeId => {
+      delete result[nodeId]
+    })
+
+    return result
+  })
+
 export const makeGetNonCollapsedLinks = () => 
   createSelector([getLinks, getCollapsedNodes], (links, collapsedNodes) => {
     const result = { ...links }
-    const getChildLinks = (nodeId, arr) => {
-      const children = links[nodeId]
-      if (!children) {
-        return arr
-      }
-      let childLinks = []
-      for (const child of children) {
-        childLinks = [...childLinks, ...getChildLinks(child, arr)]
-      }
-      arr = [...arr, ...children, ...childLinks]
-      return arr
+    let nodesToDelete = []
+    for (const nodeId of collapsedNodes) {
+      nodesToDelete = [...nodesToDelete, ...getAllChildNodes(nodeId, links)]
     }
+    nodesToDelete.forEach(nodeId => {
+      delete result[nodeId]
+    })
 
-    for (const collapsedNode of collapsedNodes) {
-      const children = getChildLinks(collapsedNode, [])
-      for (const child of children) {
-        delete result[child]
-      }
-      delete result[collapsedNode]
-    }
-    return links
+    return result
   })
