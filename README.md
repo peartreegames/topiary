@@ -32,7 +32,7 @@ Dialogue Tree Editor inspired by [twinery](http://www.twinery.org) created with 
 * [x] Create new nodes
 * [x] Delete nodes
 * [x] Place nodes
-* [ ] Move child nodes
+* [x] Move child nodes
 * [x] Add links
 * [x] Delete/Move links
 * [x] Visual cues for linkable nodes

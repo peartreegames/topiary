@@ -42,6 +42,18 @@ class EditTab extends Component {
     tagsField: ""
   }
 
+  bodyInput = React.createRef()
+  
+
+  componentDidUpdate(prevProps) {
+    const { node: prevNode = {} } = prevProps
+    const { node = {} } = this.props
+    if (node.id && prevNode.id !== node.id) {
+      console.log(this.bodyInput)
+      setTimeout(() => this.bodyInput.current.focus(), 100)
+    }
+  }
+
   handleTagsUpdate = e => {
     this.setState({ tagsField: this.state.tagsField + e.key })
     const { updateNode, node } = this.props
@@ -148,6 +160,7 @@ class EditTab extends Component {
             label={"Body"}
             value={body}
             onChange={e => this.handleNodeUpdate("body", e.target.value)}
+            inputRef={this.bodyInput}
           />}
       </div>
     )
