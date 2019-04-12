@@ -29,7 +29,7 @@ const styles = {
     width: "30vw",
     height: "100vh",
     overflow: "hidden",
-    transition: "transform 900ms cubic-bezier(0.445, 0.05, 0.55, 0.95) 0ms"
+    transition: "transform 400ms cubic-bezier(0.445, 0.05, 0.55, 0.95) 0ms"
   },
   container: {
     position: "fixed",

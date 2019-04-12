@@ -27,7 +27,7 @@ const styles = {
     position: "fixed",
     left: "calc(70vw - 70px)",
     top: "calc(100vh - 200px)",
-    transition: "transform 900ms cubic-bezier(0.445, 0.05, 0.55, 0.95) 0ms",
+    transition: "transform 400ms cubic-bezier(0.445, 0.05, 0.55, 0.95) 0ms",
     display: "flex",
     flexDirection: "column",
     marginLeft: "auto",
