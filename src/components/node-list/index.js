@@ -110,7 +110,6 @@ class NodeList extends Component {
     }
 
     update[nodeId] = [currentPositions[nodeId][0] + data.deltaX, currentPositions[nodeId][1] + data.deltaY]
-    console.log(JSON.stringify({[nodeId]: update[nodeId]}))
     this.setState({
       xAdjust: data.deltaX / scale,
       yAdjust: data.deltaY / scale,

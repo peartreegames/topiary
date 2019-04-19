@@ -36,6 +36,10 @@ export const makeConnectedNodes = () =>
 export const makeGetNodeKeys = () =>
   createSelector([getNodes], nodes => Object.keys(nodes))
 
+export const makeGetNodeColors = () =>
+  createSelector([getNodes, getActors], (nodes = {}, actors = {}) => 
+    Object.values(nodes).reduce((acc, {id, actor}) => ({ ...acc, [id]: (actors && actors[actor] && actors[actor].color) || 'black' }), {}))
+
 export const getAllChildNodes = (nodeId, links) => {
   const getChildLinks = (node, arr) => {
     const children = links[node]

@@ -56,7 +56,6 @@ class Effects extends React.Component {
 
   save = () => {
     const validatedEffects = this.validateEffects(this.state.effects)
-    console.log('EFFECTS', validatedEffects)
     this.setState({effects: validatedEffects})
     this.props.onSave("effects", validatedEffects)
     this.toggleModal()

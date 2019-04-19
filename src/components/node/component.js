@@ -127,6 +127,7 @@ class Node extends Component {
               deleteAllLinks,
               deleteNode,
               isCollapsed,
+              color,
               collapse: () => onCollapseNode(id)
             }}
           />

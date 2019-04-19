@@ -36,7 +36,7 @@ Dialogue Tree Editor inspired by [twinery](http://www.twinery.org) created with 
 * [x] Add links
 * [x] Delete/Move links
 * [x] Visual cues for linkable nodes
-* [ ] Link/marker marker colors based on actor color
+* [x] Link/marker marker colors based on actor color
 * [x] Add actors
 * [x] Delete actors
 * [x] Set default actor

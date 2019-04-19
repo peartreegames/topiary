@@ -40,7 +40,8 @@ export default function NodeFooter({
   deleteAllLinks,
   deleteNode,
   isCollapsed,
-  collapsedNodes
+  collapsedNodes,
+  color
 }) {
   return (
     <Fragment>
@@ -48,7 +49,7 @@ export default function NodeFooter({
         style={{
           ...styles.footer,
           background: current
-            ? `linear-gradient(0deg, #43a047 10%, #FFFFFF 10%)`
+            ? `linear-gradient(0deg, ${color} 10%, #FFFFFF 10%)`
             : "#FFFFFF"
         }}
       >
@@ -101,6 +102,7 @@ NodeFooter.propTypes = {
   expanded: PropTypes.bool.isRequired,
   current: PropTypes.bool.isRequired,
   collapse: PropTypes.func.isRequired,
+  color: PropTypes.string,
   setFocusedLink: PropTypes.func.isRequired,
   deleteAllLinks: PropTypes.func.isRequired,
   deleteNode: PropTypes.func.isRequired,

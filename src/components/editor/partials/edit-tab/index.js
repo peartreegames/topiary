@@ -49,7 +49,6 @@ class EditTab extends Component {
     const { node: prevNode = {} } = prevProps
     const { node = {} } = this.props
     if (node.id && prevNode.id !== node.id) {
-      console.log(this.bodyInput)
       setTimeout(() => this.bodyInput.current.focus(), 100)
     }
   }

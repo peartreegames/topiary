@@ -4,7 +4,7 @@ import PropTypes from "prop-types"
 import Link from "./component"
 import { setFocusedLink, deleteLink, setFocusedNode } from "store/actions"
 import { layers } from "utils/view"
-import { makeGetFlattenedLinks } from "store/selectors"
+import { makeGetFlattenedLinks, makeGetNodeColors } from "store/selectors"
 
 const styles = {
   linkCreator: {
@@ -38,6 +38,11 @@ class LinkContainer extends Component {
     return this.props.focusedNode === from
   }
 
+  createArrowHead = (color) => (
+    <marker id={`arrow-${btoa(color)}`} markerWidth="6" viewBox="0 0 10 10" markerHeight="6" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+  <path d="M 0 0 L 10 5 L 0 10 z" fill={color === 'rgb(255, 255, 255)' ? 'black' : color} />
+  </marker>)
+
   render() {
     const {
       links,
@@ -46,14 +51,17 @@ class LinkContainer extends Component {
       setFocusedLink,
       setFocusedNode,
       deleteLink,
+      nodeColors
     } = this.props
     const { mounted } = this.state
+    const markers = Array.from(new Set(Object.values(nodeColors))).reduce((acc, color) => ({ ...acc, [color]: this.createArrowHead(color)}), {})
     const linkList = links.map(link => (
       <Link
         key={`${link[0]}-${link[1]}`}
         from={link[0]}
         to={link[1]}
         focusedNode={this.isFocusedNode(link[0])}
+        color={(nodeColors[link[0]] || 'black')}
         setFocusedLink={setFocusedLink}
         setFocusedNode={setFocusedNode}
         deleteLink={deleteLink}
@@ -64,17 +72,7 @@ class LinkContainer extends Component {
       <Fragment>
         <svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
           <defs>
-            <marker
-              id="arrowhead"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto"
-            >
-              <path d="M 0 0 L 10 5 L 0 10 z" />
-            </marker>
+            {Object.values(markers)}
           </defs>
           {mounted && linkList}
         </svg>
@@ -85,22 +83,10 @@ class LinkContainer extends Component {
             height="100%"
             style={styles.linkCreator}
           >
-            <defs>
-              <marker
-                id="arrowhead"
-                viewBox="0 0 10 10"
-                refX="10"
-                refY="5"
-                markerWidth="6"
-                markerHeight="6"
-                orient="auto"
-              >
-                <path d="M 0 0 L 10 5 L 0 10 z" />
-              </marker>
-            </defs>
             <Link
               from={focusedLink.from}
               linking={focusedLink.status}
+              color={(nodeColors[focusedLink.from] || 'black')}
               mouse={mouseEvent}
               focusedNode={true}
               setFocusedLink={setFocusedLink}
@@ -117,10 +103,12 @@ class LinkContainer extends Component {
 
 const makeMapState = () => {
   const getflattenedLinks = makeGetFlattenedLinks()
-  return ({ links, focusedNode, focusedLink }) => ({
+  const getNodeColors = makeGetNodeColors()
+  return ({ links, focusedNode, focusedLink, nodes, actors }) => ({
     links: getflattenedLinks({ links }),
     focusedNode,
     focusedLink,
+    nodeColors: getNodeColors({nodes, actors})
   })
 }
 

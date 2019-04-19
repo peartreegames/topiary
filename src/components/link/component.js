@@ -7,6 +7,7 @@ export default function Link({
   to,
   linking,
   mouse,
+  color,
   focusedNode,
   deleteLink,
   setFocusedLink,
@@ -59,11 +60,14 @@ export default function Link({
   if (start && end) {
     dStr = `M${start.x} ${start.y} L ${end.x} ${end.y}`
   }
+
+  const strokeColor = color === 'rgb(255, 255, 255)' ? 'black' : color
   return (
+    <>
     <path
       d={dStr}
-      markerEnd="url(#arrowhead)"
-      stroke={focusedNode ? "#558b2f" : "black"}
+      markerEnd={`url(#arrow-${btoa(color)})`}
+      stroke={strokeColor}
       strokeWidth="2px"
       fill="none"
       onClick={() => {
@@ -72,6 +76,7 @@ export default function Link({
         setFocusedLink({ status: true, from })
       }}
     />
+    </>
   )
 }
 
@@ -80,6 +85,7 @@ Link.propTypes = {
   from: PropTypes.string.isRequired,
   to: PropTypes.string,
   linking: PropTypes.bool,
+  color: PropTypes.string,
   mouse: PropTypes.object,
   deleteLink: PropTypes.func.isRequired,
   setFocusedLink: PropTypes.func.isRequired,
