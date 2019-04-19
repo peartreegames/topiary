@@ -4,7 +4,8 @@ import PropTypes from "prop-types"
 import {
   Fab,
   IconButton,
-  TextField
+  TextField,
+  Tooltip
 } from "@material-ui/core"
 import { rnd } from "utils/math"
 import { gridSize } from "utils/view"
@@ -118,6 +119,7 @@ class NavControls extends Component {
     }
     return (
       <div style={{ ...styles.buttonContainer, ...hideEditor }}>
+      <Tooltip title='root node'>
         <Fab
           size="small"
           style={styles.button}
@@ -125,7 +127,8 @@ class NavControls extends Component {
         >
           <RadioButtonChecked />
         </Fab>
-
+        </Tooltip>
+        <Tooltip title='dialogue node'>
         <Fab
           size="small"
           style={styles.button}
@@ -133,7 +136,8 @@ class NavControls extends Component {
         >
           <Chat />
         </Fab>
-
+        </Tooltip>
+        <Tooltip title='choice node'>
         <Fab
           size="small"
           onClick={() => this.handleNewNode("choice")}
@@ -141,6 +145,7 @@ class NavControls extends Component {
         >
           <QuestionAnswer />
         </Fab>
+        </Tooltip>
         <div style={styles.searchContainer}>
           <TextField
             name="search"
@@ -180,8 +185,3 @@ export default connect(mapState, {
   setFocusedNode,
   updateSearch
 })(NavControls)
-
-
-
-// WEBPACK FOOTER //
-// ./src/nav/NavBottom.js

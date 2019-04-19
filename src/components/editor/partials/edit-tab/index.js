@@ -1,7 +1,7 @@
 import React, { Component } from "react"
 import { connect } from "react-redux"
 import PropTypes from "prop-types"
-import { TextField, Chip, Typography, Switch, IconButton } from "@material-ui/core"
+import { TextField, Chip, Typography, Switch, IconButton, Tooltip } from "@material-ui/core"
 import { Star } from '@material-ui/icons'
 import Condition from "components/condition"
 import { updateNode, updateDefaultActor } from "store/actions"
@@ -140,7 +140,7 @@ class EditTab extends Component {
 
         {type === "dialogue" && (
           <div style={{display: 'flex', alignItems: 'baseline'}}>
-          <ActorSelect actorId={actor} onChange={(e) => this.handleNodeUpdate("actor", e.target.value)} /><IconButton onClick={() => updateDefaultActor(actor)}><Star fontSize="small" style={defaultActorStyle}/></IconButton>
+          <ActorSelect actorId={actor} onChange={(e) => this.handleNodeUpdate("actor", e.target.value)} /><Tooltip title='set as default'><IconButton onClick={() => updateDefaultActor(actor)}><Star fontSize="small" style={defaultActorStyle}/></IconButton></Tooltip>
           </div>)}
 
         <TextField

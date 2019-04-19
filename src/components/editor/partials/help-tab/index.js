@@ -1,61 +1,69 @@
 import React from "react"
-import { Card, CardHeader, CardContent } from "@material-ui/core"
+import { ExpansionPanel, ExpansionPanelSummary, ExpansionPanelDetails, Typography } from "@material-ui/core"
+import { ExpandMore } from "@material-ui/icons";
 
 const styles = {
   container: {
     marginTop: 30
   },
-  card: {
-    width: "100%",
-    boxShadow:
-      "rgba(0, 0, 0, 0.02) 0px 1px 1px, rgba(0, 0, 0, 0.02) 0px 1px 1px",
-    marginBottom: "1px"
-  },
   text: {
-    margin: "20px"
+    margin: "10px"
   }
 }
 
 export default function HelpTab() {
   return (
     <div style={styles.container}>
-      <Card style={styles.card}>
-        <CardHeader title={"General"} expandable actAsExpander />
-        <CardContent expandable>
+      <ExpansionPanel>
+        <ExpansionPanelSummary expandIcon={<ExpandMore />}>
+          <Typography variant="h6">General</Typography>
+        </ExpansionPanelSummary>
+        <ExpansionPanelDetails>
+          <Typography>
           <strong>What am I looking at?</strong>
           <p style={styles.text}>
             Topiary is a dialogue tree editor inspired by{" "}
             <a href="http://twinery.org">Twinery</a> to create non-linear
             dialogue. There are only two main areas. The Tree area where you can
             move nodes and links around, and the Editor area where you can
-            update the content of nodes and other assets you may have.
+            update the Details of nodes and other assets you may have.
           </p>
           <strong>Who is this for and why did you make it?</strong>
           <p style={styles.text}>
             I created Topiary as a fun side project, if any game developers
             would like to use they are free to do so. The source code is kept on{" "}
-            <a href="http://github.com/bgk-/topiary"> github.</a> if anyone
+            <a href="http://github.com/peartreegames/topiary"> github.</a> if anyone
             would like to contribute or fork their own version.
           </p>
           <strong>What is exported?</strong>
           <p style={styles.text}>
-            A JSON file will be exported soon. As of now, nothing.
+            A JSON file is a exported as a scrubbed version of the saved state. It includes all of the data minus the positions, colours, etc.
           </p>
-        </CardContent>
-      </Card>
-      <Card style={styles.card}>
-        <CardHeader title={"Tree"} expandable actAsExpander />
-        <CardContent expandable>
+          </Typography>
+        </ExpansionPanelDetails>
+      </ExpansionPanel>
+      <ExpansionPanel>
+      <ExpansionPanelSummary expandIcon={<ExpandMore />}>
+          <Typography variant="h6">Tree</Typography>
+        </ExpansionPanelSummary>
+        <ExpansionPanelDetails>
+          <Typography>
           <strong>New nodes</strong>
           <p style={styles.text}>
-            There are two node types, dialogues and choices. The only difference
-            is choices do not have actors or titles. The two circular buttons
-            will create them.
+            There are three node types, roots, dialogues and choices. All conversations should start with a root. 
+            But you can choose to implement it however you see fit.
+            <ul>
+              <li>Roots only have titles.</li>
+              <li>Dialogues have conditions and actors.</li>
+              <li>Choices have conditions and effects.</li>
+            </ul>
           </p>
           <strong>Move nodes</strong>
           <p style={styles.text}>
             Click and drag on the header of any node to move it to a new
             location.
+
+            Hold SHIFT and drag on the header to move all child nodes.
           </p>
           <strong>Delete nodes</strong>
           <p style={styles.text}>
@@ -64,8 +72,7 @@ export default function HelpTab() {
           </p>
           <strong>Collapse nodes</strong>
           <p style={styles.text}>
-            Not implemented yet, but a collapsed node will move all children to
-            its position underneath.
+            Collapse all child nodes so you can get them out of the way.
           </p>
           <strong>New links</strong>
           <p style={styles.text}>
@@ -82,14 +89,33 @@ export default function HelpTab() {
             Click on the link you want to delete, then click off a node anywhere
             on the grid.
           </p>
-        </CardContent>
-      </Card>
-      <Card style={styles.card}>
-        <CardHeader title={"Editor"} expandable actAsExpander />
-        <CardContent expandable>
+          </Typography>
+        </ExpansionPanelDetails>
+      </ExpansionPanel>
+      <ExpansionPanel>
+      <ExpansionPanelSummary expandIcon={<ExpandMore />}>
+          <Typography variant="h6">Editor</Typography>
+        </ExpansionPanelSummary>
+        <ExpansionPanelDetails>
           This is where the editor view help will go.
-        </CardContent>
-      </Card>
+        </ExpansionPanelDetails>
+      </ExpansionPanel>
+      <ExpansionPanel>
+      <ExpansionPanelSummary expandIcon={<ExpandMore />}>
+          <Typography variant="h6">Actors</Typography>
+        </ExpansionPanelSummary>
+        <ExpansionPanelDetails>
+          This is where the actors view help will go.
+        </ExpansionPanelDetails>
+      </ExpansionPanel>
+      <ExpansionPanel>
+      <ExpansionPanelSummary expandIcon={<ExpandMore />}>
+          <Typography variant="h6">Variables</Typography>
+        </ExpansionPanelSummary>
+        <ExpansionPanelDetails>
+          This is where the variables help will go.
+        </ExpansionPanelDetails>
+      </ExpansionPanel>
     </div>
   )
 }

@@ -1,33 +1,41 @@
-import React, { Component, Fragment } from "react"
-import { Redirect } from "react-router-dom"
-import { List, ListItem, ListItemText, ListItemIcon, Icon, Fab } from "@material-ui/core"
-import initialScene, { globals } from "store/initialScene"
-import { saveFile, loadFile, saveGlobals } from "store/localStorage"
-import { rnd } from "utils/math"
+import React, { Component, Fragment } from 'react'
+import { Redirect } from 'react-router-dom'
+import {
+  List,
+  ListItem,
+  ListItemText,
+  ListItemIcon,
+  Icon,
+  Fab,
+  Tooltip
+} from '@material-ui/core'
+import initialScene, { globals } from 'store/initialScene'
+import { saveFile, loadFile, saveGlobals } from 'store/localStorage'
+import { rnd } from 'utils/math'
 import { SaveAlt } from '@material-ui/icons'
 
 const styles = {
   name: {
     fontSize: 62,
-    margin: "5vh auto 5vh auto",
-    textAlign: "center",
-    color: "#558b2f"
+    margin: '5vh auto 5vh auto',
+    textAlign: 'center',
+    color: '#558b2f'
   },
   space: {
-    textAlign: "center"
+    textAlign: 'center'
   },
   option: {
-    textAlign: "center",
-    padding: "16px",
-    textDecoration: "none"
+    textAlign: 'center',
+    padding: '16px',
+    textDecoration: 'none'
   },
   icons: {
-    position: "absolute",
-    right: "5vw",
+    position: 'absolute',
+    right: '5vw'
   },
   icon: {
-    margin: "10px",
-    float: "right"
+    margin: '10px',
+    float: 'right'
   }
 }
 
@@ -36,7 +44,7 @@ export default class Landing extends Component {
     scenes: [],
     usedSpace: 0,
     remainigSpace: 0,
-    redirect: ""
+    redirect: ''
   }
   newScene = () => {
     const id = rnd()
@@ -59,71 +67,72 @@ export default class Landing extends Component {
       const storageKey = localStorage.key(i)
 
       let scene = {}
-      try{
+      try {
         scene = JSON.parse(localStorage.getItem(storageKey))
       } catch (error) {
         // do nothing
       }
-      const sceneName = scene.scene;
+      const sceneName = scene.scene
       if (sceneName !== undefined) {
-      existingScenes.push(
+        existingScenes.push(
           <ListItem
             key={sceneName || `untitled${i}`}
             button
             onClick={() => this.setState({ redirect: storageKey })}
           >
-            <ListItemText style={styles.option}>{sceneName || "untitled scene"}</ListItemText>
+            <ListItemText style={styles.option}>
+              {sceneName || 'untitled scene'}
+            </ListItemText>
             <ListItemIcon style={styles.icons}>
-                <Fragment>
-                <Fab
-                  style={styles.icon}
-                  size="small"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    saveFile(sceneName, storageKey)}
-                  }
-                >
-                  <Icon className="material-icons">save</Icon>
-                </Fab>
-                <Fab
-                  style={styles.icon}
-                  size="small"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    saveFile(sceneName, storageKey, true)}
-                  }
-                >
-                  <SaveAlt />
-                </Fab>
-                <Fab
-                style={styles.icon}
-                size="small"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  this.deleteScene(storageKey)}
-                }
-              >
-                <Icon className="material-icons">delete</Icon>
-              </Fab>
+              <Fragment>
+                <Tooltip title="save">
+                  <Fab
+                    style={styles.icon}
+                    size="small"
+                    onClick={e => {
+                      e.stopPropagation()
+                      saveFile(sceneName, storageKey)
+                    }}
+                  >
+                    <Icon className="material-icons">save</Icon>
+                  </Fab>
+                </Tooltip>
+                <Tooltip title="export">
+                  <Fab
+                    style={styles.icon}
+                    size="small"
+                    onClick={e => {
+                      e.stopPropagation()
+                      saveFile(sceneName, storageKey, true)
+                    }}
+                  >
+                    <SaveAlt />
+                  </Fab>
+                </Tooltip>
+                <Tooltip title="delete">
+                  <Fab
+                    style={styles.icon}
+                    size="small"
+                    onClick={e => {
+                      e.stopPropagation()
+                      this.deleteScene(storageKey)
+                    }}
+                  >
+                    <Icon className="material-icons">delete</Icon>
+                  </Fab>
+                </Tooltip>
               </Fragment>
             </ListItemIcon>
-
           </ListItem>
         )
       }
     }
     existingScenes.push(
-      <ListItem
-        key={'globals'}
-        >
+      <ListItem key={'globals'}>
         <ListItemText style={styles.option}>Global Variables</ListItemText>
         <ListItemIcon style={styles.icons}>
-            <Fragment>
-            <Fab
-              style={styles.icon}
-              size="small"
-              onClick={() => saveGlobals()}
-            >
+          <Fragment>
+            <Fab style={styles.icon} size="small" onClick={() => saveGlobals()}>
               <Icon className="material-icons">save</Icon>
             </Fab>
             <Fab
@@ -134,15 +143,15 @@ export default class Landing extends Component {
               <SaveAlt />
             </Fab>
             <Fab
-            style={styles.icon}
-            size="small"
-            onClick={() => this.deleteScene("globals")}
-          >
-            <Icon className="material-icons">delete</Icon>
-          </Fab>
+              style={styles.icon}
+              size="small"
+              onClick={() => this.deleteScene('globals')}
+            >
+              <Icon className="material-icons">delete</Icon>
+            </Fab>
           </Fragment>
         </ListItemIcon>
-        </ListItem>
+      </ListItem>
     )
     return existingScenes.sort((a, b) => a.key > b.key)
   }
@@ -151,8 +160,8 @@ export default class Landing extends Component {
     window.navigator.webkitTemporaryStorage.queryUsageAndQuota(
       (used, remaining) => {
         this.setState({
-          usedSpace: (used / 1024 ** 3).toFixed(2) + "mb",
-          remainingSpace: (remaining / 1024 ** 3).toFixed(2) + "mb"
+          usedSpace: (used / 1024 ** 3).toFixed(2) + 'mb',
+          remainingSpace: (remaining / 1024 ** 3).toFixed(2) + 'mb'
         })
       }
     )
@@ -172,27 +181,20 @@ export default class Landing extends Component {
           }`}
         </div>
         <List>
-          <ListItem
-            button
-            onClick={this.newScene}
-          >
-            <ListItemText style={styles.option}>
-              new
-            </ListItemText>
+          <ListItem button onClick={this.newScene}>
+            <ListItemText style={styles.option}>new</ListItemText>
           </ListItem>
-          <ListItem button
-            variant="contained"
-            component="label">
-          <ListItemText style={styles.option}>{"load"}</ListItemText>
+          <ListItem button variant="contained" component="label">
+            <ListItemText style={styles.option}>{'load'}</ListItemText>
             <input
-                type="file"
-                onChange={e => {
-                  loadFile(e, () => {
-                    this.setState({ scenes: this.renderScenes() })
-                  })
-                }}
-                style={{ display: "none" }}
-              />
+              type="file"
+              onChange={e => {
+                loadFile(e, () => {
+                  this.setState({ scenes: this.renderScenes() })
+                })
+              }}
+              style={{ display: 'none' }}
+            />
           </ListItem>
           {this.state.scenes}
         </List>

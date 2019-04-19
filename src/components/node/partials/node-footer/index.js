@@ -1,11 +1,10 @@
-import React, { Fragment } from "react"
-import PropTypes from "prop-types"
-import { CardActions, Button, Icon } from "@material-ui/core"
-
+import React, { Fragment } from 'react'
+import PropTypes from 'prop-types'
+import { CardActions, Button, Icon, Tooltip } from '@material-ui/core'
 
 const styles = {
   corner: {
-    position: "absolute",
+    position: 'absolute',
     bottom: 0,
     right: 0,
     margin: 0,
@@ -13,10 +12,10 @@ const styles = {
     transition: `transform 450ms cubic-bezier(0.23, 1, 0.32, 1) 0ms`
   },
   footer: {
-    height: "16px",
-    textAlign: "right",
-    padding: "1em",
-    marginTop: "2em",
+    height: '16px',
+    textAlign: 'right',
+    padding: '1em',
+    marginTop: '2em'
   },
   button: {
     width: 14,
@@ -24,7 +23,7 @@ const styles = {
     padding: 0,
     margin: 0,
     fontSize: 14,
-    transition: "none"
+    transition: 'none'
   },
   icon: {
     fontSize: 14
@@ -50,48 +49,54 @@ export default function NodeFooter({
           ...styles.footer,
           background: current
             ? `linear-gradient(0deg, ${color} 10%, #FFFFFF 10%)`
-            : "#FFFFFF"
+            : '#FFFFFF'
         }}
       >
-        <Button
-          style={{
-            ...styles.button,
-            opacity: expanded ? "100" : "0",
-            pointerEvents: expanded ? "auto" : "none"
-          }}
-          onClick={() => {
-            deleteAllLinks({ id })
-            deleteNode({ id })
-          }}
-          data-tip={"Delete"}
-          data-tippos={"bottom"}
-        >
-          <Icon style={styles.icon} className="material-icons">delete</Icon>
-        </Button>
-        <Button
-          style={styles.button}
-          onClick={() =>
-            setFocusedLink({
-              status: true,
-              from: id
-            })
-          }
-          data-tip={
-            "Link.\nClick a link to move to another node.\nTo cancel a link click anywhere on the grid."
-          }
-          data-tippos={"bottom"}
-        >
-          <Icon style={styles.icon} className="material-icons">arrow_forward</Icon>
-        </Button>
-        <Button
-          style={styles.button}
-          color={isCollapsed ? "secondary" : "default"}
-          onClick={collapse}
-          data-tip={"Collapse"}
-          data-tippos={"bottom"}
-        >
-          <Icon style={styles.icon} className="material-icons">layers</Icon>
-        </Button>
+        <Tooltip title="delete">
+          <Button
+            style={{
+              ...styles.button,
+              opacity: expanded ? '100' : '0',
+              pointerEvents: expanded ? 'auto' : 'none'
+            }}
+            onClick={() => {
+              deleteAllLinks({ id })
+              deleteNode({ id })
+            }}
+            data-tip={'Delete'}
+            data-tippos={'bottom'}
+          >
+            <Icon style={styles.icon} className="material-icons">
+              delete
+            </Icon>
+          </Button>
+        </Tooltip>
+        <Tooltip title="link">
+          <Button
+            style={styles.button}
+            onClick={() =>
+              setFocusedLink({
+                status: true,
+                from: id
+              })
+            }
+          >
+            <Icon style={styles.icon} className="material-icons">
+              arrow_forward
+            </Icon>
+          </Button>
+        </Tooltip>
+        <Tooltip title="collapse">
+          <Button
+            style={styles.button}
+            color={isCollapsed ? 'secondary' : 'default'}
+            onClick={collapse}
+          >
+            <Icon style={styles.icon} className="material-icons">
+              layers
+            </Icon>
+          </Button>
+        </Tooltip>
       </CardActions>
     </Fragment>
   )
