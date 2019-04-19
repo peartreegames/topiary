@@ -14,7 +14,7 @@
 importScripts("https://storage.googleapis.com/workbox-cdn/releases/3.6.3/workbox-sw.js");
 
 importScripts(
-  "/topiary/precache-manifest.139b2ee49c2395fa587b7f56d8523aff.js"
+  "/topiary/precache-manifest.8954a593ef14b84a6d0e2afabc8f4878.js"
 );
 
 workbox.clientsClaim();
