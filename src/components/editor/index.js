@@ -4,7 +4,8 @@ import {
   BottomNavigation,
   Paper,
   Icon,
-  Button
+  Button,
+  Tooltip
 } from "@material-ui/core"
 import PropTypes from "prop-types"
 import { connect } from "react-redux"
@@ -90,32 +91,37 @@ class Editor extends Component {
       <Paper style={{ ...styles.paper, ...hideEditor }}>
         <div style={styles.container}>{tabs[this.state.editorTab]}</div>
         <div style={styles.tabs}>
-          <BottomNavigation>
-            <BottomNavigationAction
-              icon={editIcon}
-              onClick={() => this.select(0)}
-              data-tip={"Edit"}
-            />
+          <BottomNavigation style={{borderTop: '1px solid lightgrey'}}>
+            <Tooltip title="edit">
+              <BottomNavigationAction
+                icon={editIcon}
+                onClick={() => this.select(0)}
+              />
+            </Tooltip>
+            <Tooltip title="actors">
             <BottomNavigationAction
               icon={actorIcon}
               onClick={() => this.select(1)}
-              data-tip={"Actors"}
             />
+            </Tooltip>
+            <Tooltip title="variables">
             <BottomNavigationAction
               icon={variableIcon}
               onClick={() => this.select(2)}
-              data-tip={"Variables"}
             />
+            </Tooltip>
+            <Tooltip title="help">
             <BottomNavigationAction
               icon={helpIcon}
               onClick={() => this.select(3)}
-              data-tip={"Help"}
             />
+            </Tooltip>
+            <Tooltip title="settings">
             <BottomNavigationAction
               icon={settingsIcon}
               onClick={() => this.select(4)}
-              data-tip={"Settings"}
             />
+            </Tooltip>
           </BottomNavigation>
         </div>
         <Button onClick={() => toggleEditor({ editor: !editor })}>

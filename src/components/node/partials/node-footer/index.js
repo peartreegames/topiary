@@ -63,8 +63,6 @@ export default function NodeFooter({
               deleteAllLinks({ id })
               deleteNode({ id })
             }}
-            data-tip={'Delete'}
-            data-tippos={'bottom'}
           >
             <Icon style={styles.icon} className="material-icons">
               delete

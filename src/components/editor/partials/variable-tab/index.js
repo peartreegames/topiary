@@ -1,20 +1,18 @@
 import React, { Component } from "react"
 import { connect } from "react-redux"
 import PropTypes from "prop-types"
+import MUIDatatable from 'mui-datatables'
 import {
-  Table,
-  TableBody,
-  TableHead,
-  TableRow,
-  TableCell,
   Button,
   Popover,
   TextField,
-  Typography
+  Typography,
+  IconButton,
+  Tooltip
 } from "@material-ui/core"
-import { Delete } from '@material-ui/icons'
+import { Add } from '@material-ui/icons'
 
-import { newVariable, deleteVariable } from "store/actions"
+import { newVariable, deleteVariables } from "store/actions"
 
 const styles = {
   textStyle: {
@@ -64,7 +62,7 @@ class VariableTab extends Component {
     })
   }
 
-  handleNewVariable = event => {
+  handleNewVariable = () => {
     this.props.newVariable({
       [this.state.newVariable]: this.state.newValue
     })
@@ -86,13 +84,34 @@ class VariableTab extends Component {
     })
   }
 
+  customAddButton = () => (
+    <Tooltip title={"new"}>
+      <IconButton onClick={this.handleClick}>
+        <Add/>
+      </IconButton>
+    </Tooltip>)
+
   render() {
     const { newVariable, newValue, open, anchorEl } = this.state
     const { variables } = this.props
+
+    const columns = [{
+      name: "name",
+      label: 'name',
+      options: {
+        filter: true,
+        sort: true
+      }
+    },{
+      name: 'value',
+      label: 'default value',
+      options: {
+        filter: false,
+        sort: false
+      }
+    }]
     return (
       <div style={styles.tabContent}>
-        <Button color="primary" onClick={this.handleClick}>new</Button>
-
         <Popover
           open={open}
           anchorEl={anchorEl}
@@ -126,31 +145,27 @@ class VariableTab extends Component {
             >Cancel</Button>
           </div>
         </Popover>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Variable</TableCell>
-              <TableCell>Value</TableCell>
-              <TableCell>Options</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {Object.entries(variables).map(([key, value], i) => (
-              <TableRow key={`${key}-${i}`}>
-                <TableCell>{key}</TableCell>
-                <TableCell>{value}</TableCell>
-                <TableCell>
-                  <Button
-                    style={styles.button}
-                    onClick={() => this.props.deleteVariable({key})}
-                  >
-                    <Delete style={styles.icon}/>
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+
+        <MUIDatatable 
+          title={"Variables"}
+          data={Object.entries(variables)}
+          columns={columns}
+          options={{
+            print: false,
+            download: false,
+            viewColumns: false,
+            filter: false,
+            pagination: false,
+            responsive: 'scoll',
+            elevation: 0,
+            onRowsDelete: ({data}) => {
+              const variableArray = Object.keys(variables)
+              const variablesDeleted = data.map(({ dataIndex }) => variableArray[dataIndex])
+              this.props.deleteVariables({keys: variablesDeleted})
+            },
+            customToolbar: this.customAddButton
+          }}
+        />
       </div>
     )
   }
@@ -162,4 +177,4 @@ const mapStateToProps = ({variables}) => {
   }
 }
 
-export default connect(mapStateToProps, { newVariable, deleteVariable })(VariableTab)
+export default connect(mapStateToProps, { newVariable, deleteVariables })(VariableTab)

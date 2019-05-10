@@ -119,7 +119,7 @@ class NavControls extends Component {
     }
     return (
       <div style={{ ...styles.buttonContainer, ...hideEditor }}>
-      <Tooltip title='root node'>
+      <Tooltip title='root node' placement="left">
         <Fab
           size="small"
           style={styles.button}
@@ -128,7 +128,7 @@ class NavControls extends Component {
           <RadioButtonChecked />
         </Fab>
         </Tooltip>
-        <Tooltip title='dialogue node'>
+        <Tooltip title='dialogue node' placement="left">
         <Fab
           size="small"
           style={styles.button}
@@ -137,7 +137,7 @@ class NavControls extends Component {
           <Chat />
         </Fab>
         </Tooltip>
-        <Tooltip title='choice node'>
+        <Tooltip title='choice node' placement="left">
         <Fab
           size="small"
           onClick={() => this.handleNewNode("choice")}
@@ -158,14 +158,13 @@ class NavControls extends Component {
             onChange={this.handleSearchText}
             value={search.text}
           />
+          <Tooltip title='search' placement='left'>
           <IconButton
             onClick={this.handleSearchButton}
-            // Fix styling
-            data-tip={"Search"}
-            data-tippos={"left"}
-          >
+            >
             <Search />
           </IconButton>
+          </Tooltip>
         </div>
       </div>
     )

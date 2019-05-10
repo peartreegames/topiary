@@ -1,11 +1,11 @@
 export const newVariable = (variable) => ({
   type: "NEW_VARIABLE",
-  variable
+  payload: variable
 })
 
-export const deleteVariable = ({
-  key
+export const deleteVariables = ({
+  keys
 }) => ({
-  type: "DELETE_VARIABLE",
-  key
+  type: "DELETE_VARIABLES",
+  payload: keys
 })
