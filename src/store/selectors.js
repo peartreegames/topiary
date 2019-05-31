@@ -41,26 +41,26 @@ export const makeGetNodeColors = () =>
     Object.values(nodes).reduce((acc, {id, actor}) => ({ ...acc, [id]: (actors && actors[actor] && actors[actor].color) || 'black' }), {}))
 
 export const getAllChildNodes = (nodeId, links) => {
-  const getChildLinks = (node, arr) => {
+  const getChildLinks = (node, set) => {
     const children = links[node]
     if (!children) {
-      return arr
+      return set
     }
-    let childLinks = []
+
     for (const child of children) {
-      if (arr.includes(child) || childLinks.includes(child) || (childLinks.length > 0 && nodeId === node)) {
-        continue
+      if (child === node) {
+        continue;
       }
-      childLinks.push(child)
+      if (!set.has(child)) {
+        set.add(child)
+        getChildLinks(child, set);
+      }
     }
-    if (childLinks.length === 0) {
-      return arr
-    }
-    arr = Array.from(new Set([...arr, ...children, ...childLinks]))
-    return getChildLinks(childLinks, arr);
+
+    return set;
   }
 
-  const children = getChildLinks(nodeId, [])
+  const children = Array.from(getChildLinks(nodeId, new Set()))
   return children
 }
 
