@@ -20,8 +20,10 @@ const store = id => {
   }
 
   const globals = JSON.parse(localStorage.getItem('globals')) || {
-    actors: {"000000": { id: "000000", name: "Narrator", playable: false, color: "FFFFFF", relationship: "0" }},
-    variables: {}
+    actors: { "000000": { id: "000000", name: "Narrator", playable: false, color: "FFFFFF", relationship: "0" } },
+    actorVariables: {},
+    variables: {},
+    factions: {},
   }
 
   const state = { ...initialState, ...globals}

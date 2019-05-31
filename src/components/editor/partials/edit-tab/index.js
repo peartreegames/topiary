@@ -43,7 +43,7 @@ class EditTab extends Component {
   }
 
   bodyInput = React.createRef()
-  
+
 
   componentDidUpdate(prevProps) {
     const { node: prevNode = {} } = prevProps
@@ -142,7 +142,10 @@ class EditTab extends Component {
 
         {type === "dialogue" && (
           <div style={{display: 'flex', alignItems: 'baseline'}}>
-          <ActorSelect actorId={actor} onChange={(e) => this.handleNodeUpdate("actor", e.target.value)} /><Tooltip title='set as default'><IconButton onClick={() => updateDefaultActor(actor)}><Star fontSize="small" style={defaultActorStyle}/></IconButton></Tooltip>
+            <ActorSelect actorId={actor} onChange={(e) => this.handleNodeUpdate("actor", e.target.value)} />
+            <Tooltip title='set as default'>
+              <IconButton onClick={() => updateDefaultActor(actor)}><Star fontSize="small" style={defaultActorStyle} /></IconButton>
+            </Tooltip>
           </div>)}
 
         <TextField

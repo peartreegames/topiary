@@ -144,7 +144,7 @@ class NodeList extends Component {
         .includes(t)
     ) {
       return {
-        boxShadow: `0 0 20px 5px rgba(0,40,0,0.5)`,
+        boxShadow: `0 0 15px 10px rgba(0,100,0,0.5)`,
         borderRadius: "4px"
       }
     }

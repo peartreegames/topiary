@@ -3,7 +3,8 @@ import { connect } from "react-redux"
 import PropTypes from "prop-types"
 import {
   TextField,
-  Button,
+  IconButton,
+  Tooltip,
   Typography,
   Switch,
 } from "@material-ui/core"
@@ -15,6 +16,7 @@ import {
 import { rnd } from "utils/math";
 import ActorSelect from "../actor-select";
 import ColorPicker from "components/color-picker";
+import { Add, Delete } from "@material-ui/icons";
 
 const styles = {
   textStyle: {
@@ -83,12 +85,15 @@ class ActorTab extends Component {
 
     return (
       <div style={styles.tabContent}>
-        <Button color="primary" onClick={this.handleNewActor}>New</Button>
-        <Button
-          color="primary"
-          onClick={() => deleteActor(actorId)}
-        >Delete</Button>
-        <ActorSelect actorId={actorId} onChange={this.handleActorChange} />
+        <div style={{ display: 'flex', alignItems: 'baseline' }}>
+          <ActorSelect actorId={actorId} onChange={this.handleActorChange} />
+          <Tooltip title='new'>
+            <IconButton onClick={this.handleNewActor}><Add fontSize="small" /></IconButton>
+          </Tooltip>
+          <Tooltip title='delete'>
+            <IconButton onClick={() => deleteActor({ id: actorId })}><Delete fontSize="small" /></IconButton>
+          </Tooltip>
+        </div>
         <TextField
           label="Name"
           fullWidth

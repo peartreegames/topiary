@@ -14,13 +14,15 @@ import EditTab from "./partials/edit-tab"
 import HelpTab from "./partials/help-tab"
 import VariableTab from "./partials/variable-tab"
 import { toggleEditor } from "store/actions"
+import { Menu, Edit, Group, Face, Help, Settings, VpnKey } from '@material-ui/icons'
 
-const menuIcon = <Icon className="material-icons">menu</Icon>
-const editIcon = <Icon className="material-icons">mode_edit</Icon>
-const actorIcon = <Icon className="material-icons">group</Icon>
-const variableIcon = <Icon className="material-icons">vpn_key</Icon>
-const helpIcon = <Icon className="material-icons">help</Icon>
-const settingsIcon = <Icon className="material-icons">settings</Icon>
+
+// const menuIcon = <Icon className="material-icons">menu</Icon>
+// const editIcon = <Icon className="material-icons">mode_edit</Icon>
+// const actorIcon = <Icon className="material-icons">group</Icon>
+// const variableIcon = <Icon className="material-icons">vpn_key</Icon>
+// const helpIcon = <Icon className="material-icons">help</Icon>
+// const settingsIcon = <Icon className="material-icons">settings</Icon>
 
 const styles = {
   paper: {
@@ -79,9 +81,12 @@ class Editor extends Component {
     const tabs = [
       <EditTab key={0} />,
       <ActorTab key={1} />,
-      <VariableTab key={2} />,
-      <HelpTab key={3} />,
-      <div key={4} style={styles.tabContent}>
+      <div key={2} style={styles.tabContent}>
+        <h1>Factions</h1>
+      </div>,
+      <VariableTab key={3} />,
+      <HelpTab key={4} />,
+      <div key={5} style={styles.tabContent}>
         <h1>Settings...</h1>
         <p>eventually</p>
       </div>
@@ -94,32 +99,38 @@ class Editor extends Component {
           <BottomNavigation style={{borderTop: '1px solid lightgrey'}}>
             <Tooltip title="edit">
               <BottomNavigationAction
-                icon={editIcon}
+                icon={<Edit />}
                 onClick={() => this.select(0)}
               />
             </Tooltip>
             <Tooltip title="actors">
             <BottomNavigationAction
-              icon={actorIcon}
+              icon={<Face />}
               onClick={() => this.select(1)}
+            />
+            </Tooltip>
+            <Tooltip title="factions">
+            <BottomNavigationAction
+              icon={<Group />}
+              onClick={() => this.select(2)}
             />
             </Tooltip>
             <Tooltip title="variables">
             <BottomNavigationAction
-              icon={variableIcon}
-              onClick={() => this.select(2)}
+              icon={<VpnKey />}
+              onClick={() => this.select(3)}
             />
             </Tooltip>
             <Tooltip title="help">
             <BottomNavigationAction
-              icon={helpIcon}
-              onClick={() => this.select(3)}
+              icon={<Help />}
+              onClick={() => this.select(4)}
             />
             </Tooltip>
             <Tooltip title="settings">
             <BottomNavigationAction
-              icon={settingsIcon}
-              onClick={() => this.select(4)}
+              icon={<Settings />}
+              onClick={() => this.select(5)}
             />
             </Tooltip>
           </BottomNavigation>
@@ -128,7 +139,7 @@ class Editor extends Component {
         <Icon
           style={styles.menuButton}
         >
-          {menuIcon}
+          {<Menu />}
         </Icon>
         </Button>
       </Paper>
