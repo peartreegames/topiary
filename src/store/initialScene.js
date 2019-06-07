@@ -1,11 +1,8 @@
 import { rnd } from '../utils/math'
 
-const nodeId = rnd()
-export const defaultScene = (id = rnd()) => {
+export const defaultScene = (id = rnd(), nodeId = rnd()) => {
   return {
     id,
-    scene: '',
-    search: { status: false, text: '' },
     focusedNode: nodeId,
     focusedLink: { status: false, from: '', to: '' },
     collapsedNodes: [],
@@ -23,9 +20,6 @@ export const defaultScene = (id = rnd()) => {
       }
     },
     links: {},
-    editor: true,
-    scale: 1,
-    warning: { status: false, warningMessage: '' },
     actors: {}
   }
 }
@@ -48,4 +42,11 @@ export const globals = {
     }
   },
   variables: {}
+}
+
+export const defaultRoot = {
+  editor: true,
+  scale: 1,
+  warning: { status: false, warningMessage: '' },
+  search: { status: false, text: '' },
 }

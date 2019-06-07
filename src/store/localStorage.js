@@ -30,14 +30,14 @@ export const saveState = state => {
     const globals = JSON.stringify({ variables, actors, colors })
     const serial = JSON.stringify(scene)
     localStorage.setItem('globals', globals)
-    localStorage.setItem(state.id, serial)
+    localStorage.setItem(state.sceneId, serial)
   } catch (err) {
     return null
   }
 }
 
 const formatExport = (data) => {
-  const { id, scene, nodes, links } = data
+  const { sceneId, sceneName, scene: {nodes, links} } = data
 
   const removeNodeFields = (node) => {
     delete node.pos
@@ -56,7 +56,7 @@ const formatExport = (data) => {
     }
   })
 
-  return JSON.stringify({ id, scene, nodes })
+  return JSON.stringify({ sceneId, sceneName, nodes })
 }
 
 const formatGlobalsExport = (data) => {

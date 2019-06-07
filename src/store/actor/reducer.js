@@ -1,17 +1,27 @@
 import { actionTypes } from './action'
 
-export const actors = (state = {}, {
+export const globalActors = (state = {}, {
   type,
   id,
   actor
 }) => {
   switch (type) {
-    case actionTypes.actor.NEW:
+    case actionTypes.actor.NEW: {
+      if (!actor.isGlobal) {
+        return state
+      }
+
       return {
         ...state,
         [id]: actor
       }
-    case actionTypes.actor.UPDATE:
+    }
+
+    case actionTypes.actor.UPDATE: {
+      if (!actor.isGlobal) {
+        return state
+      }
+
       return {
         ...state,
         [id]: {
@@ -19,12 +29,60 @@ export const actors = (state = {}, {
           ...actor
         }
       }
-    case actionTypes.actor.DELETE:
-      // eslint-disable-next-line
-      return (({
-        [id]: _,
-        ...newObj
-      }, id) => newObj)(state, id)
+    }
+
+    case actionTypes.actor.DELETE: {
+      if (!actor.isGlobal) {
+        return state
+      }
+
+      const newState = {...state}
+      delete newState[id]
+      return newState
+    }
+
+    default:
+      return state
+  }
+}
+
+export const sceneActors = (state = {}, {type, id, actor}) => {
+  switch (type) {
+    case actionTypes.actor.NEW: {
+      if (actor.isGlobal) {
+        return state
+      }
+
+      return {
+        ...state,
+        [id]: actor
+      }
+    }
+
+    case actionTypes.actor.UPDATE: {
+      if (actor.isGlobal) {
+        return state
+      }
+
+      return {
+        ...state,
+        [id]: {
+          ...state[id],
+          ...actor
+        }
+      }
+    }
+
+    case actionTypes.actor.DELETE: {
+      if (actor.isGlobal) {
+        return state
+      }
+
+      const newState = {...state}
+      delete newState[id]
+      return newState
+    }
+
     default:
       return state
   }

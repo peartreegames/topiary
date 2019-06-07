@@ -12,6 +12,7 @@ import {
 import NodeList from "components/node-list"
 import LinkContainer from "components/link"
 import { dimensions } from "utils/view"
+import {getFocusedLink, getNodes} from "store/selectors"
 
 // const zoomStep = 0.03
 const gridSize = 30
@@ -111,10 +112,10 @@ class Tree extends Component {
   }
 }
 
-const mapState = ({ scale, nodes,focusedLink }) => ({
-  scale,
- focusedLink,
-  nodes
+const mapState = (state) => ({
+  scale: state.scale,
+  focusedLink: getFocusedLink(state),
+  nodes: getNodes(state)
 })
 
 export default connect(mapState, {

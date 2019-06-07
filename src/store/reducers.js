@@ -1,7 +1,7 @@
 import { combineReducers } from "redux"
 
 import { nodes, focusedNode, collapsedNodes } from "./nodes/reducer"
-import { actors, defaultActor } from "./actor/reducer"
+import { globalActors, sceneActors, defaultActor } from "./actor/reducer"
 import { editor } from "./editor/reducer"
 import { links, focusedLink } from "./link/reducer"
 import { variables } from "./variable/reducer"
@@ -29,18 +29,23 @@ const scale = (state = 1, { type, scale }) => {
 const id = (state = "") => state
 
 export default combineReducers({
-  id,
-  scene,
+  sceneId: id,
+  sceneName: scene,
   search,
-  nodes,
-  links,
   defaultActor,
-  collapsedNodes,
-  focusedNode,
-  focusedLink,
-  actors,
-  variables,
   scale,
   editor,
-  warning
+  warning,
+  scene: combineReducers({
+    actors: sceneActors,
+    collapsedNodes,
+    focusedLink,
+    focusedNode,
+    links,
+    nodes,
+  }),
+  globals: combineReducers({
+    actors: globalActors,
+    variables
+  })
 })

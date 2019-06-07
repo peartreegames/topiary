@@ -4,7 +4,7 @@ import PropTypes from "prop-types"
 import Link from "./component"
 import { setFocusedLink, deleteLink, setFocusedNode } from "store/actions"
 import { layers } from "utils/view"
-import { makeGetFlattenedLinks, makeGetNodeColors } from "store/selectors"
+import { getFocusedNode, getFocusedLink, getFlattenedLinks, getNodeColors } from "store/selectors"
 
 const styles = {
   linkCreator: {
@@ -102,13 +102,11 @@ class LinkContainer extends Component {
 }
 
 const makeMapState = () => {
-  const getflattenedLinks = makeGetFlattenedLinks()
-  const getNodeColors = makeGetNodeColors()
-  return ({ links, focusedNode, focusedLink, nodes, actors }) => ({
-    links: getflattenedLinks({ links }),
-    focusedNode,
-    focusedLink,
-    nodeColors: getNodeColors({nodes, actors})
+  return (state) => ({
+    links: getFlattenedLinks(state),
+    focusedNode: getFocusedNode(state),
+    focusedLink: getFocusedLink(state),
+    nodeColors: getNodeColors(state)
   })
 }
 

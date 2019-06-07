@@ -1,18 +1,24 @@
 import { createSelector } from "reselect"
 
-const getNodeById = ({ nodes }, { id }) => nodes[id]
-const getFocusedNode = ({ focusedNode }) => focusedNode
-const getNodes = ({ nodes }) => nodes
-const getActors = ({ actors }) => actors
-const getLinks = ({links}) => links
-const getLinksByNodeId = ({ links }, { id }) => links[id] || []
-const getCollapsedNodes = ({ collapsedNodes }) => collapsedNodes
+export const getScene = ({scene}) => scene
+export const getNodeById = ({ scene: {nodes} }, { id }) => nodes[id]
+export const getFocusedNode = ({ scene: {focusedNode} }) => focusedNode
+export const getFocusedLink = ({ scene: {focusedLink} }) => focusedLink
+export const getNodes = ({ scene: {nodes} }) => nodes
+export const getGlobalActors = ({ global: {actors} }) => actors
+export const getSceneActors = ({ scene: {actors} }) => actors
+export const getLinks = ({ scene: {links}}) => links
+export const getLinksByNodeId = ({ scene: {links} }, { id }) => links[id] || []
+export const getCollapsedNodes = ({ scene: {collapsedNodes} }) => collapsedNodes
 
-export const makeGetFlattenedLinks = () => 
-  createSelector([getLinks], (links) => {
-    const nestedLinks = Object.entries(links).map(([from, tos]) => (tos.map(to => [from, to])))
-    return nestedLinks.flatMap(_ => _)
-  })
+export const getActors = createSelector([getGlobalActors, getSceneActors], (globalActors, sceneActors) => {
+  return {...globalActors, ...sceneActors}
+})
+
+export const getFlattenedLinks = createSelector([getLinks], (links) => {
+  const nestedLinks = Object.entries(links).map(([from, tos]) => (tos.map(to => [from, to])))
+  return nestedLinks.flatMap(_ => _)
+})
 
 export const makeGetNode = () =>
   createSelector(
@@ -36,9 +42,8 @@ export const makeConnectedNodes = () =>
 export const makeGetNodeKeys = () =>
   createSelector([getNodes], nodes => Object.keys(nodes))
 
-export const makeGetNodeColors = () =>
-  createSelector([getNodes, getActors], (nodes = {}, actors = {}) => 
-    Object.values(nodes).reduce((acc, {id, actor}) => ({ ...acc, [id]: (actors && actors[actor] && actors[actor].color) || 'black' }), {}))
+export const getNodeColors = createSelector([getNodes, getActors], (nodes = {}, actors = {}) =>
+  Object.values(nodes).reduce((acc, {id, actor}) => ({ ...acc, [id]: (actors && actors[actor] && actors[actor].color) || 'black' }), {}))
 
 export const getAllChildNodes = (nodeId, links) => {
   const getChildLinks = (node, set) => {
@@ -64,7 +69,7 @@ export const getAllChildNodes = (nodeId, links) => {
   return children
 }
 
-export const makeGetNonCollapsedNodes = () => 
+export const makeGetNonCollapsedNodes = () =>
   createSelector([getNodes, getCollapsedNodes, getLinks], (nodes, collapsedNodes, links) => {
     const result = {...nodes}
     let nodesToDelete = []
@@ -78,7 +83,7 @@ export const makeGetNonCollapsedNodes = () =>
     return result
   })
 
-export const makeGetNonCollapsedLinks = () => 
+export const makeGetNonCollapsedLinks = () =>
   createSelector([getLinks, getCollapsedNodes], (links, collapsedNodes) => {
     const result = { ...links }
     let nodesToDelete = []
