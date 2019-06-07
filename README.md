@@ -41,12 +41,15 @@ Dialogue Tree Editor inspired by [twinery](http://www.twinery.org) created with 
 * [x] Delete actors
 * [x] Set default actor
 * [ ] Actor Avatars?
+* [ ] Global/Scene Actors
 * [x] Actor colours
 * [ ] Custom Actor Variables
+* [ ] Factions
 * [x] Variables
+* [ ] Variable unique key values
 * [x] Conditions and Effects
-* [ ] Autocomplete variable selection
-* [ ] Tooltips
+* [x] Autocomplete variable selection
+* [x] Tooltips
 * [x] Collapsable tree segments (needs improvement)
 * [ ] Zoom functionality
 * [ ] Settings and Help tabs

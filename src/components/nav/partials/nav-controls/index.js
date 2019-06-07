@@ -7,6 +7,11 @@ import {
   TextField,
   Tooltip
 } from "@material-ui/core"
+import {
+  SpeedDial,
+  SpeedDialAction,
+  SpeedDialIcon
+} from '@material-ui/lab';
 import { rnd } from "utils/math"
 import { gridSize } from "utils/view"
 import {
@@ -64,9 +69,15 @@ class NavControls extends Component {
 
   state = {
     redirect: "",
+    speedDialOpen: false,
     searchVisible: false,
     searchText: ""
   }
+
+  actions = [
+    { icon: <RadioButtonChecked />, name: 'root', onClick: () => this.handleNewNode('root') },
+    { icon: <QuestionAnswer />, name: 'choice', onClick: () => this.handleNewNode('choice')  },
+  ];
 
   handleNewNode = type => {
     const { newNode, setFocusedNode, scale, defaultActor } = this.props
@@ -112,40 +123,44 @@ class NavControls extends Component {
     this.props.updateSearch({ search: { text: e.target.value } })
   }
 
+  handleClose = () => {
+    this.setState({ speedDialOpen: false })
+  }
+
+  handleOpen = () => {
+    this.setState({ speedDialOpen: true })
+  }
+
   render() {
     const { search } = this.props
+    const { speedDialOpen } = this.state
     const hideEditor = {
       transform: !this.props.editor ? "translateX(28vw)" : "translateX(0)"
     }
     return (
       <div style={{ ...styles.buttonContainer, ...hideEditor }}>
-      <Tooltip title='root node' placement="left">
-        <Fab
-          size="small"
-          style={styles.button}
-          onClick={() => this.handleNewNode("root")}
-        >
-          <RadioButtonChecked />
-        </Fab>
-        </Tooltip>
-        <Tooltip title='dialogue node' placement="left">
-        <Fab
-          size="small"
-          style={styles.button}
+        <SpeedDial
+          ariaLabel="new"
+          icon={<SpeedDialIcon color="secondary" openIcon={<Chat />} />}
+          onBlur={this.handleClose}
           onClick={() => this.handleNewNode("dialogue")}
-        >
-          <Chat />
-        </Fab>
-        </Tooltip>
-        <Tooltip title='choice node' placement="left">
-        <Fab
-          size="small"
-          onClick={() => this.handleNewNode("choice")}
+          onClose={this.handleClose}
+          onFocus={this.handleOpen}
+          onMouseEnter={this.handleOpen}
+          onMouseLeave={this.handleClose}
+          open={speedDialOpen}
           style={styles.button}
         >
-          <QuestionAnswer />
-        </Fab>
-        </Tooltip>
+          {this.actions.map(action => (
+            <SpeedDialAction
+              key={action.name}
+              icon={action.icon}
+              tooltipTitle={action.name}
+              onClick={action.onClick}
+            />
+          ))}
+        </SpeedDial>
+
         <div style={styles.searchContainer}>
           <TextField
             name="search"

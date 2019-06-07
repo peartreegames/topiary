@@ -10,11 +10,3 @@ export const setWarning = ({ warningMessage, warning }) => ({
   warning,
   warningMessage
 })
-
-export const addCollapsedNode = ( nodeId ) => {
-  return { type: "ADD_COL_NODE", nodeId }
-}
-
-export const removeCollapsedNode = (nodeId) => ({ type: "REMOVE_COL_NODE", nodeId })
-
-export const updateDefaultActor = (actorId) => ({ type: "DEFAULT_ACTOR", actorId })

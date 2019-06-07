@@ -1,10 +1,10 @@
 import { combineReducers } from "redux"
 
-import { nodes, focusedNode } from "./nodes/reducer"
-import { actors, colors } from "./actor/reducer"
-import editor from "./editor/reducer"
+import { nodes, focusedNode, collapsedNodes } from "./nodes/reducer"
+import { actors, defaultActor } from "./actor/reducer"
+import { editor } from "./editor/reducer"
 import { links, focusedLink } from "./link/reducer"
-import variables from "./variable/reducer"
+import { variables } from "./variable/reducer"
 import { scene, search } from "./nav/reducer"
 
 const warning = (state = null, action) => {
@@ -28,22 +28,6 @@ const scale = (state = 1, { type, scale }) => {
 
 const id = (state = "") => state
 
-const collapsedNodes = (state = [], { type, nodeId }) => {
-  switch (type) {
-    case "ADD_COL_NODE":
-      return [...state, nodeId]
-    case "REMOVE_COL_NODE":
-      return state.filter(id => id !== nodeId)
-    default:
-      return state
-  }
-}
-
-const defaultActor = (state = "000000", { type, actorId}) => {
-  if (type === "DEFAULT_ACTOR") return actorId
-  return state
-}
-
 export default combineReducers({
   id,
   scene,
@@ -56,7 +40,6 @@ export default combineReducers({
   focusedLink,
   actors,
   variables,
-  colors,
   scale,
   editor,
   warning

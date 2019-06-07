@@ -1,15 +1,17 @@
+import { actionTypes } from './action'
+
 export const actors = (state = {}, {
   type,
   id,
   actor
 }) => {
   switch (type) {
-    case "NEW_ACTOR":
+    case actionTypes.actor.NEW:
       return {
         ...state,
         [id]: actor
       }
-    case "UPDATE_ACTOR":
+    case actionTypes.actor.UPDATE:
       return {
         ...state,
         [id]: {
@@ -17,7 +19,7 @@ export const actors = (state = {}, {
           ...actor
         }
       }
-    case "DELETE_ACTOR":
+    case actionTypes.actor.DELETE:
       // eslint-disable-next-line
       return (({
         [id]: _,
@@ -28,17 +30,7 @@ export const actors = (state = {}, {
   }
 }
 
-export const colors = (state = [], {
-  type,
-  color,
-  id
-}) => {
-  switch (type) {
-    case "NEW_COLOR":
-      return [...state, color]
-    case "DELETE_KEY":
-      return state.filter((_, i) => i !== id)
-    default:
-      return state
-  }
+export const defaultActor = (state = "000000", { type, actorId}) => {
+  if (type === actionTypes.actor.SET_DEFAULT) return actorId
+  return state
 }

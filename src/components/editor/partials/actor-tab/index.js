@@ -4,19 +4,17 @@ import PropTypes from "prop-types"
 import {
   TextField,
   IconButton,
-  Tooltip,
-  Typography,
-  Switch,
+  Tooltip
 } from "@material-ui/core"
 import {
   newActor,
   updateActor,
   deleteActor,
 } from "store/actions"
-import { rnd } from "utils/math";
 import ActorSelect from "../actor-select";
 import ColorPicker from "components/color-picker";
-import { Add, Delete } from "@material-ui/icons";
+import { Add, Delete, Public } from "@material-ui/icons";
+import { newDefaultActor } from "configs";
 
 const styles = {
   textStyle: {
@@ -49,20 +47,19 @@ class ActorTab extends Component {
   }
   state = {
     actorId: "000000",
-    playableValue: false,
     selectedIndex: 0,
     open: false
   }
 
   toggleModal = () => {
-    this.setState({open: !this.state.open})
+    this.setState({ open: !this.state.open })
   }
 
   handleNewActor = () => {
     const { newActor } = this.props
-    const actorId = rnd()
-    newActor({ actor: { name: "new", playable: false, id: actorId } })
-    this.setState({ actorId })
+    const actor = newDefaultActor();
+    newActor({ actor })
+    this.setState({ actorId: actor.id })
   }
 
   handleActorChange = (event) => {
@@ -76,7 +73,11 @@ class ActorTab extends Component {
     })
   }
 
-  render() {
+  handleGlobalActorToggle = () => {
+
+  }
+
+  render () {
     const { actors, deleteActor, colors } = this.props
     const { actorId } = this.state
     const currentActor = actors[actorId];
@@ -90,6 +91,13 @@ class ActorTab extends Component {
           <Tooltip title='new'>
             <IconButton onClick={this.handleNewActor}><Add fontSize="small" /></IconButton>
           </Tooltip>
+          <Tooltip title='global'>
+            <IconButton onClick={() => {
+              this.handleActorUpdate('isGlobal', !currentActor.isGlobal)
+              this.handleGlobalActorToggle()
+            }
+            }><Public fontSize="small" style={{ color: currentActor.isGlobal ? '#558b2f' : '#666666' }} /></IconButton>
+          </Tooltip>
           <Tooltip title='delete'>
             <IconButton onClick={() => deleteActor({ id: actorId })}><Delete fontSize="small" /></IconButton>
           </Tooltip>
@@ -99,16 +107,10 @@ class ActorTab extends Component {
           fullWidth
           style={styles.textStyle}
           value={currentActor.name}
-          onChange={e => this.handleActorUpdate("name", e.target.value)}
+          onChange={e => this.handleActorUpdate('name', e.target.value)}
         />
-        <div style={{display: 'flex', alignItems: 'center'}}>
-        <Typography>Playable </Typography><Switch
-          checked={currentActor.playable || false}
-          onChange={e => this.handleActorUpdate('playable', e.target.checked)}
-          value="Playable"
-          color="primary"
-        />
-        <ColorPicker color={color} colors={colors} onSave={this.handleActorUpdate} />
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <ColorPicker color={color} colors={colors} onSave={this.handleActorUpdate} />
         </div>
         <TextField
           label="Relationship"

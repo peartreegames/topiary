@@ -1,11 +1,18 @@
+export const actionTypes = {
+  variable: {
+    NEW: 'NEW',
+    DELETE: 'DELETE'
+  }
+}
+
 export const newVariable = (variable) => ({
-  type: "NEW_VARIABLE",
+  type: actionTypes.variable.NEW,
   payload: variable
 })
 
 export const deleteVariables = ({
   keys
 }) => ({
-  type: "DELETE_VARIABLES",
+  type: actionTypes.variable.DELETE,
   payload: keys
 })

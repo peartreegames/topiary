@@ -5,14 +5,11 @@ import {
   ListItem,
   ListItemText,
   ListItemIcon,
-  Icon,
-  Fab,
-  Tooltip
+  Button,
 } from '@material-ui/core'
-import initialScene, { globals } from 'store/initialScene'
+import { defaultScene, globals } from 'store/initialScene'
 import { saveFile, loadFile, saveGlobals } from 'store/localStorage'
 import { rnd } from 'utils/math'
-import { SaveAlt } from '@material-ui/icons'
 
 const styles = {
   name: {
@@ -48,7 +45,7 @@ export default class Landing extends Component {
   }
   newScene = () => {
     const id = rnd()
-    localStorage.setItem(id, JSON.stringify(initialScene(id)))
+    localStorage.setItem(id, JSON.stringify(defaultScene(id)))
     const currentGlobals = localStorage.getItem('globals')
     if (!currentGlobals) {
       localStorage.setItem('globals', JSON.stringify(globals))
@@ -85,8 +82,7 @@ export default class Landing extends Component {
             </ListItemText>
             <ListItemIcon style={styles.icons}>
               <Fragment>
-                <Tooltip title="save">
-                  <Fab
+                  <Button
                     style={styles.icon}
                     size="small"
                     onClick={e => {
@@ -94,11 +90,9 @@ export default class Landing extends Component {
                       saveFile(sceneName, storageKey)
                     }}
                   >
-                    <Icon className="material-icons">save</Icon>
-                  </Fab>
-                </Tooltip>
-                <Tooltip title="export">
-                  <Fab
+                    save
+                  </Button>
+                  <Button
                     style={styles.icon}
                     size="small"
                     onClick={e => {
@@ -106,11 +100,9 @@ export default class Landing extends Component {
                       saveFile(sceneName, storageKey, true)
                     }}
                   >
-                    <SaveAlt />
-                  </Fab>
-                </Tooltip>
-                <Tooltip title="delete">
-                  <Fab
+                    export
+                  </Button>
+                  <Button
                     style={styles.icon}
                     size="small"
                     onClick={e => {
@@ -118,9 +110,8 @@ export default class Landing extends Component {
                       this.deleteScene(storageKey)
                     }}
                   >
-                    <Icon className="material-icons">delete</Icon>
-                  </Fab>
-                </Tooltip>
+                    delete
+                  </Button>
               </Fragment>
             </ListItemIcon>
           </ListItem>
@@ -132,23 +123,23 @@ export default class Landing extends Component {
         <ListItemText style={styles.option}>Global Variables</ListItemText>
         <ListItemIcon style={styles.icons}>
           <Fragment>
-            <Fab style={styles.icon} size="small" onClick={() => saveGlobals()}>
-              <Icon className="material-icons">save</Icon>
-            </Fab>
-            <Fab
+            <Button style={styles.icon} size="small" onClick={() => saveGlobals()}>
+              save
+            </Button>
+            <Button
               style={styles.icon}
               size="small"
               onClick={() => saveGlobals(true)}
             >
-              <SaveAlt />
-            </Fab>
-            <Fab
+              export
+            </Button>
+            <Button
               style={styles.icon}
               size="small"
               onClick={() => this.deleteScene('globals')}
             >
-              <Icon className="material-icons">delete</Icon>
-            </Fab>
+              delete
+            </Button>
           </Fragment>
         </ListItemIcon>
       </ListItem>

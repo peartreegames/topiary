@@ -1,8 +1,17 @@
+export const actionTypes = {
+  link: {
+    NEW: 'NEW',
+    DELETE: 'DELETE',
+    DELETE_ALL: 'DELETE_ALL',
+    SET_CURRENT: 'SET_CURRENT'
+  }
+}
+
 export const newLink = ({
   from,
   to
 }) => ({
-  type: "NEW_LINK",
+  type: actionTypes.link.NEW,
   from,
   to
 })
@@ -11,7 +20,7 @@ export const deleteLink = ({
   from,
   to
 }) => ({
-  type: "DELETE_LINK",
+  type: actionTypes.link.DELETE,
   from,
   to
 })
@@ -19,7 +28,7 @@ export const deleteLink = ({
 export const deleteAllLinks = ({
   id
 }) => ({
-  type: "DELETE_ALL_LINKS",
+  type: actionTypes.link.DELETE_ALL,
   id
 })
 
@@ -28,7 +37,7 @@ export const setFocusedLink = ({
   from,
   to
 }) => ({
-  type: "SET_CURRENT_LINK",
+  type: actionTypes.link.SET_CURRENT,
   status,
   from,
   to

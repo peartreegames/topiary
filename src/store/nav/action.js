@@ -1,13 +1,20 @@
+export const actionTypes = {
+  nav: {
+    UPDATE: 'UPDATE',
+    SEARCH: 'SEARCH'
+  }
+}
+
 export const updateScene = ({
   scene
 }) => ({
-  type: "UPDATE_SCENE",
+  type: actionTypes.nav.UPDATE,
   scene
 })
 
 export const updateSearch = ({
   search
 }) => ({
-  type: "UPDATE_SEARCH",
+  type: actionTypes.nav.SEARCH,
   search
 })

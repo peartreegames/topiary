@@ -1,10 +1,12 @@
+import { actionTypes } from './action'
+
 export const focusedLink = (state = {}, {
   type,
   status,
   from,
   to
 }) => {
-  if (type === 'SET_CURRENT_LINK') {
+  if (type === actionTypes.link.SET_CURRENT) {
     return {
       ...state,
       status,
@@ -22,7 +24,7 @@ export const links = (state = {}, {
   id
 }) => {
   switch (type) {
-    case 'NEW_LINK':
+    case actionTypes.link.NEW:
       if (Array.isArray(state[from])) {
         return {
           ...state,
@@ -33,7 +35,7 @@ export const links = (state = {}, {
         ...state,
         [from]: [to]
       }
-    case 'DELETE_LINK':
+    case actionTypes.link.DELETE:
       if (state[from].length > 1) {
         return {
           ...state,
@@ -45,7 +47,7 @@ export const links = (state = {}, {
         [from]: _,
         ...newObj
       }, from) => newObj)(state, from)
-    case 'DELETE_ALL_LINKS':
+    case actionTypes.link.DELETE_ALL:
       return Object.entries(state).reduce((acc, [from, tos]) => {
         if (from === id) {
           return acc

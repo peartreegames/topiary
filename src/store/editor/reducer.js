@@ -1,6 +1,8 @@
-export default (state = true, { type, editor }) => {
+import { actionTypes } from './action'
+
+export const editor = (state = true, { type, editor }) => {
     switch (type) {
-      case "TOGGLE_EDITOR":
+      case actionTypes.editor.TOGGLE:
         return editor
       default:
         return state

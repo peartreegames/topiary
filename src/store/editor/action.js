@@ -1,4 +1,10 @@
+export const actionTypes = {
+  editor: {
+    TOGGLE: 'TOGGLE'
+  }
+}
+
 export const toggleEditor = ({ editor }) => ({
-    type: "TOGGLE_EDITOR",
+    type: actionTypes.editor.TOGGLE,
     editor
   })

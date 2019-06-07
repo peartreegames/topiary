@@ -1,5 +1,7 @@
+import { actionTypes } from './action'
+
 export const focusedNode = (state = "", { type, id }) => {
-    if (type === "SET_CURRENT_NODE") {
+    if (type === actionTypes.node.SET_CURRENT) {
       return id
     }
     return state
@@ -7,12 +9,12 @@ export const focusedNode = (state = "", { type, id }) => {
 
 export const nodes = (state = {}, { type, id, payload }) => {
     switch (type) {
-        case "NEW_NODE":
+        case actionTypes.node.NEW:
         return {
             ...state,
             [id]: payload
         }
-        case "UPDATE_NODE":
+        case actionTypes.node.UPDATE:
         return {
             ...state,
             [id]: {
@@ -20,12 +22,12 @@ export const nodes = (state = {}, { type, id, payload }) => {
             ...payload
             }
         }
-        case "UPDATES_NODES":
+        case actionTypes.node.UPDATE_MANY:
         return {
             ...state,
             ...payload
         }
-        case "DELETE_NODE":
+        case actionTypes.node.DELETE:
         return Object.keys(state).reduce((acc, key) => {
             if (key !== id) {
             return { ...acc, [key]: state[key] }
@@ -36,3 +38,14 @@ export const nodes = (state = {}, { type, id, payload }) => {
         return state
     }
 }
+
+export const collapsedNodes = (state = [], { type, nodeId }) => {
+    switch (type) {
+      case actionTypes.node.ADD_COLLAPSED:
+        return [...state, nodeId]
+      case actionTypes.node.REMOVE_COLLAPSED:
+        return state.filter(id => id !== nodeId)
+      default:
+        return state
+    }
+  }

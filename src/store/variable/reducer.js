@@ -1,14 +1,16 @@
-const variables = (state = {}, {
+import { actionTypes } from './action'
+
+export const variables = (state = {}, {
   type,
   payload
 }) => {
   switch (type) {
-    case 'NEW_VARIABLE':
+    case actionTypes.variable.NEW:
       return {
         ...state,
         ...payload
       }
-    case 'DELETE_VARIABLES': 
+    case actionTypes.variable.DELETE:
       return Object.entries(state).reduce((acc, [key, value]) => {
         if (!payload.includes(key)) acc[key] = value
         return acc
@@ -17,5 +19,3 @@ const variables = (state = {}, {
       return state
   }
 }
-
-export default variables
