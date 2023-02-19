@@ -1,0 +1,71 @@
+import './otherfile.topi'
+
+```
+const sum: func(x: int, y: int) int = {
+    return x + y
+}
+const loop: func(value: string, count: int) string = {
+    var result: string = ""
+    for (0..count) {
+        result = result + value
+    }
+    return result
+}
+const externalPrintFunc: func(msg: string) void = extern
+
+const constantValue: string = "constantValue"
+var stringValue: string = "var"
+var externalInt: int = extern
+var floatValue: float = 0.1
+var intValue: int = 2
+var listValue: []string = ["value"]
+var mapValue: []string,int = {"one": 1}
+var setValue: []string,void = {"set"}
+const enumType: enum = {
+    one,
+    two,
+    three,
+}
+var enumValue: enumType = one
+```
+
+=== INTRO ===
+    :Ell: That took forever!`doPrint()` # tag # another:tag
+    :Virgil: Maybe if you helped it would have been faster, and it was only `sum(1, 3)` days.
+    -<  He's right, Ell. # choice:tag
+        => VIRGIL_RIGHT
+    -<  Let him be `ifElse(externalInt > 1, ", Virg.", ".")`
+        => VIRGIL_WRONG
+    `if (floatValue > 1 or intValue == 2) {`
+    -<  Drop it. Both of you.
+        :Alvin: Let's get going.
+        -<  We've got a lot to do.
+        -<  I don't want to hear this bickering.
+        >-
+        => OUTRO.END
+    `} else {`
+    -<  Shouldn't be here.
+        :Alvin: Well this isn't good.
+    `}`
+    >-
+    :Waylon: Get back here
+
+    --- VIRGIL_RIGHT ---
+        :: Ell gives Alvin a look of betrayal.
+        :Ell: I worked my butt off`loop("!", 5)`
+        :Alvin: Let's get going.
+        => OUTRO.END
+    ---
+
+    --- VIRGIL_WRONG ---
+        :Virgil: You gotta be `rnd(["harder", "tougher"])` on that kid.
+        => OUTRO.END
+    ---
+===
+
+=== OUTRO ===
+    --- END ---
+        :Waylon: 'Bout time.
+        :Waylon: I'm starving!
+    ---
+===
