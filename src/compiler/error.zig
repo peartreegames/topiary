@@ -1,5 +1,6 @@
 const std = @import("std");
-const Token = @import("token.zig").Token;
+const tok = @import("token.zig");
+const Token = tok.Token;
 
 pub const Error = struct {
     fmt: []const u8,
@@ -52,8 +53,8 @@ pub const Errors = struct {
             const start = @min(err.token.start, source.len - 1);
             const end = @min(err.token.end, source.len - 1);
 
-            try writer.print("line: {d}, column: {d}\n", .{err.token.line, err.token.column});
-            try writer.print("{s}\n", .{source[start .. end]});
+            try writer.print("type: {s}, line: {d}, column: {d}\n", .{ tok.fmtString(err.token.token_type), err.token.line, err.token.column });
+            try writer.print("{s}\n", .{source[start..end]});
             try writer.writeByteNTimes('~', end - start);
             try writer.writeAll("\x1b[0;35m^\n\x1b[0m");
         }

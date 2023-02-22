@@ -1,4 +1,4 @@
-// Combination of two other parsers:
+// Based on a combination of two other parsers:
 // https://github.com/Luukdegram/luf/blob/master/src/parser.zig
 // https://github.com/MasterQ32/LoLa/blob/master/src/library/compiler/parser.zig
 
@@ -121,32 +121,47 @@ pub const Parser = struct {
     fn print(self: *Parser, msg: []const u8) void {
         std.log.warn("{s} -- {}", .{ msg, self.current_token.token_type });
     }
+    fn printPeek(self: *Parser, msg: []const u8) void {
+        std.log.warn("{s} -- {}", .{ msg, self.peek_token.token_type });
+    }
 
-    fn next(self: *Parser) void {
-        // std.log.warn("{}\n", .{ self.current_token.token_type });
-        self.current_token = self.peek_token;
-
-        if (self.mode != .root and self.current_token.token_type == .backtick) {
-            self.current_token = self.lexer.next();
-            self.mode = if (self.mode == .code) .content else .code;
-        }
-        self.peek_token = self.lexer.next();
-
-        if (self.mode == .code) {
-            while (self.peekIs(.eol)) {
-                self.peek_token = self.lexer.next();
-            }
+    fn skipEol(self: *Parser) void {
+        while (self.peekIs(.eol)) {
+            self.peek_token = self.lexer.next();
         }
     }
 
-    fn parseStatement(self: *Parser) Error!Statement {
-        if (self.currentIs(.eol)) self.next();
+    fn switchMode(self: *Parser) void {
+        self.peek_token = self.lexer.next();
+        self.mode = if (self.mode == .code) .content else .code;
+    }
 
+    fn next(self: *Parser) void {
+        self.current_token = self.peek_token;
+
+        self.peek_token = self.lexer.next();
+        // switch mode on inline code blocks
+        if (self.peekIs(.backtick)) self.switchMode();
+        // eol are only needed for content
+        if (self.mode == .code) self.skipEol();
+    }
+
+    fn parseStatement(self: *Parser) Error!Statement {
+        while (self.currentIs(.eol)) self.next();
         return switch (self.mode) {
             .root => return switch (self.current_token.token_type) {
-                .blackboard, .limb => self.parseBlockStatement(),
-                .import => self.parseImport(),
-                else => self.fail("Expected blackboard, limb, or import at top level", self.current_token, .{}),
+                .blackboard, .bough => self.parseBlockStatement(),
+                .import => blk: {
+                    self.next(); // skip import keyword
+                    const token = self.current_token;
+                    break :blk .{
+                        .token = token,
+                        .type = .{
+                            .import = try self.allocator.dupe(u8, self.source[token.start..token.end]),
+                        },
+                    };
+                },
+                else => self.fail("Expected blackboard, bough, or import at top level.", self.current_token, .{}),
             },
             .code => return switch (self.current_token.token_type) {
                 .comment => self.parseComment(),
@@ -154,18 +169,31 @@ pub const Parser = struct {
                 .@"return" => self.parseReturn(),
                 // .@"switch" => self.parseSwitchStatement(),
                 .while_loop => self.parseWhile(),
+                .@"if" => try self.parseIfStatement(),
                 .for_loop => self.parseFor(),
                 .@"break" => self.parseBreak(),
                 .@"continue" => self.parseContinue(),
+                .backtick => {
+                    self.next();
+                    self.mode = .content;
+                    return self.parseStatement();
+                },
                 else => self.parseExpressionStatement(),
             },
             .content => return switch (self.current_token.token_type) {
+                .bough => return self.fail("Bough must be top level", self.current_token, .{}),
                 .comment => self.parseComment(),
-                .branch => self.parseBlockStatement(),
+                .twig => self.parseBlockStatement(),
                 .jump => self.parseJump(),
                 .split => self.parseSplit(),
                 .colon => self.parseDialogueLine(),
-                else => unreachable,
+                // .gather => return self.fail("Unexpected gather", self.current_token, .{}),
+                .backtick => {
+                    self.next();
+                    self.mode = .code;
+                    return self.parseExpressionStatement();
+                },
+                else => self.parseExpressionStatement(),
             },
         };
     }
@@ -176,7 +204,7 @@ pub const Parser = struct {
         const is_mutable = self.currentIs(.variable);
 
         try self.expectPeek(.identifier);
-        const name = try self.parseIdentifier();
+        const name = try self.allocator.dupe(u8, self.source[self.current_token.start..self.current_token.end]);
         try self.expectPeek(.colon);
         self.next();
 
@@ -195,7 +223,7 @@ pub const Parser = struct {
 
         const value_type = self.current_token.token_type;
         if (value_type == .@"extern") {
-            const value = try self.parseExtern();
+            const value = .{ .token = self.current_token, .type = .@"extern" };
             return .{
                 .token = self.current_token,
                 .type = .{
@@ -275,7 +303,7 @@ pub const Parser = struct {
         return .{
             .token = self.current_token,
             .type = .{
-                .expression = try self.parseExpression(.lowest),
+                .expression = try if (self.mode == .code) self.parseExpression(.lowest) else self.parseContentExpression(),
             },
         };
     }
@@ -283,15 +311,84 @@ pub const Parser = struct {
     fn parseExpression(self: *Parser, prec: Precedence) Error!Expression {
         var left: Expression = switch (self.current_token.token_type) {
             .identifier => try self.parseIdentifier(),
-            .integer => try self.parseIntegerLiteral(),
-            .float => try self.parseFloatLiteral(),
+            .integer => blk: {
+                const string_number = self.source[self.current_token.start..self.current_token.end];
+                const value = try std.fmt.parseInt(i32, string_number, 10);
+                break :blk .{
+                    .token = self.current_token,
+                    .type = .{
+                        .integer_literal = value,
+                    },
+                };
+            },
+            .float => blk: {
+                const string_number = self.source[self.current_token.start..self.current_token.end];
+                const value = try std.fmt.parseFloat(f32, string_number);
+                break :blk .{
+                    .token = self.current_token,
+                    .type = .{
+                        .float_literal = value,
+                    },
+                };
+            },
             .string => try self.parseStringLiteral(),
-            .bang, .minus => try self.parseUnaryExpression(),
-            .true, .false => try self.parseBooleanLiteral(),
+            .bang, .minus => blk: {
+                const start_token = self.current_token;
+                self.next();
+                break :blk .{
+                    .token = start_token,
+                    .type = .{
+                        .unary = .{
+                            .operator = ast.UnaryOp.fromToken(start_token),
+                            .value = try self.allocate(try self.parseExpression(.prefix)),
+                        },
+                    },
+                };
+            },
+            .true, .false => .{
+                .token = self.current_token,
+                .type = .{
+                    .boolean_literal = self.currentIs(.true),
+                },
+            },
             .@"if" => try self.parseIfExpression(),
-            .left_parenthesis => try self.parseGroupedExpression(),
-            // .left_bracket => try self.parseDataStructure(false),
-            .nil => try self.parseNil(),
+            // group
+            .left_parenthesis => blk: {
+                self.next();
+                const exp = try self.parseExpression(.lowest);
+                try self.expectPeek(.right_parenthesis);
+                break :blk exp;
+            },
+            // map or set
+            .left_brace => try self.parseMapSetLiteral(),
+            // list
+            .left_bracket => blk: {
+                const start_token = self.current_token;
+                self.next(); // skip bracket
+                var list = std.ArrayList(Expression).init(self.allocator);
+                errdefer list.deinit();
+                if (self.currentIs(.right_bracket)) break :blk .{
+                    .token = start_token,
+                    .type = .{
+                        .list_literal = try list.toOwnedSlice(),
+                    },
+                };
+
+                try list.append(try self.parseExpression(.lowest));
+                while (self.peekIs(.comma)) {
+                    self.next(); // skip comma
+                    self.next();
+                    try list.append(try self.parseExpression(.lowest));
+                }
+                try self.expectPeek(.right_bracket);
+                break :blk .{
+                    .token = start_token,
+                    .type = .{
+                        .list_literal = try list.toOwnedSlice(),
+                    },
+                };
+            },
+            .nil => .{ .token = self.current_token, .type = .nil },
             else => return self.fail("Unexpected token in expression: {}", self.current_token, .{self.current_token.token_type}),
         };
 
@@ -328,64 +425,26 @@ pub const Parser = struct {
                 .@"or",
                 => blk: {
                     self.next();
-                    break :blk try self.parseBinaryExpression(left);
+                    const start_token = self.current_token;
+                    const op = ast.BinaryOp.fromToken(self.current_token);
+                    const inner_prec = findPrecedence(self.current_token.token_type);
+                    self.next();
+                    break :blk .{
+                        .token = start_token,
+                        .type = .{
+                            .binary = .{
+                                .operator = op,
+                                .left = try self.allocate(left),
+                                .right = try self.allocate(try self.parseExpression(inner_prec)),
+                            },
+                        },
+                    };
                 },
                 else => return left,
             };
         }
 
         return left;
-    }
-    fn parseUnaryExpression(self: *Parser) Error!Expression {
-        const start_token = self.current_token;
-        self.next();
-        return .{
-            .token = start_token,
-            .type = .{
-                .unary = .{
-                    .operator = ast.UnaryOp.fromToken(start_token),
-                    .value = try self.allocate(try self.parseExpression(.prefix)),
-                },
-            },
-        };
-    }
-
-    fn parseBinaryExpression(self: *Parser, left: Expression) Error!Expression {
-        const start_token = self.current_token;
-        const op = ast.BinaryOp.fromToken(self.current_token);
-        const prec = findPrecedence(self.current_token.token_type);
-        self.next();
-        return .{
-            .token = start_token,
-            .type = .{
-                .binary = .{
-                    .operator = op,
-                    .left = try self.allocate(left),
-                    .right = try self.allocate(try self.parseExpression(prec)),
-                },
-            },
-        };
-    }
-    fn parseIntegerLiteral(self: *Parser) Error!Expression {
-        const string_number = self.source[self.current_token.start..self.current_token.end];
-        const value = try std.fmt.parseInt(i64, string_number, 10);
-        return .{
-            .token = self.current_token,
-            .type = .{
-                .integer_literal = value,
-            },
-        };
-    }
-
-    fn parseFloatLiteral(self: *Parser) Error!Expression {
-        const string_number = self.source[self.current_token.start..self.current_token.end];
-        const value = try std.fmt.parseFloat(f32, string_number);
-        return .{
-            .token = self.current_token,
-            .type = .{
-                .float_literal = value,
-            },
-        };
     }
 
     fn parseStringLiteral(self: *Parser) Error!Expression {
@@ -398,23 +457,97 @@ pub const Parser = struct {
         };
     }
 
-    fn parseBooleanLiteral(self: *Parser) Error!Expression {
+    fn parseMapPairSetKey(self: *Parser) Error!Expression {
+        const start_token = self.current_token;
+        const key = try self.parseExpression(.lowest);
+        // set value
+        if (!self.peekIs(.colon)) return key;
+        self.next();
+        self.next();
+
+        const value = try self.parseExpression(.lowest);
         return .{
-            .token = self.current_token,
+            .token = start_token,
             .type = .{
-                .boolean_literal = self.currentIs(.true),
+                .map_pair = .{
+                    .key = try self.allocate(key),
+                    .value = try self.allocate(value),
+                },
             },
         };
     }
 
-    fn parseGroupedExpression(self: *Parser) Error!Expression {
-        self.next();
-        const exp = try self.parseExpression(.lowest);
-        try self.expectPeek(.right_parenthesis);
-        return exp;
+    fn parseMapSetLiteral(self: *Parser) Error!Expression {
+        const start_token = self.current_token;
+        var list = std.ArrayList(Expression).init(self.allocator);
+        errdefer list.deinit();
+        self.next(); // skip brace
+
+        // empty set
+        if (self.currentIs(.right_brace)) {
+            self.next();
+            return .{ .token = start_token, .type = .{ .set_literal = try list.toOwnedSlice() } };
+        }
+        // empty map
+        if (self.currentIs(.colon)) {
+            try self.expectPeek(.right_brace);
+            return .{ .token = start_token, .type = .{ .map_literal = try list.toOwnedSlice() } };
+        }
+
+        const first = try self.parseMapPairSetKey();
+        const is_map = first.type == .map_pair;
+        try list.append(first);
+        while (self.peekIs(.comma)) {
+            self.next(); // skip comma
+            self.next();
+            const item = try self.parseMapPairSetKey();
+            if ((is_map and item.type != .map_literal) or (!is_map and item.type == .map_literal)) return self.fail("Items are not of same type", item.token, .{});
+            try list.append(item);
+        }
+        try self.expectPeek(.right_brace);
+        if (is_map) return .{ .token = start_token, .type = .{ .map_literal = try list.toOwnedSlice() } };
+        return .{ .token = start_token, .type = .{ .set_literal = try list.toOwnedSlice() } };
     }
 
     fn parseIfExpression(self: *Parser) Error!Expression {
+        try self.expectPeek(.left_parenthesis);
+        self.next(); // skip if
+        const condition = try self.allocate(try self.parseExpression(.lowest));
+        try self.expectPeek(.right_parenthesis);
+        self.next();
+
+        const true_value = try self.allocate(try self.parseExpression(.lowest));
+        try self.expectPeek(.@"else");
+        self.next();
+        if (self.peekIs(.@"if")) {
+            self.next();
+            const false_value = try self.allocate(try self.parseExpression(.lowest));
+            return .{
+                .token = self.current_token,
+                .type = .{
+                    .if_expression = .{
+                        .condition = condition,
+                        .true_value = true_value,
+                        .false_value = false_value,
+                    },
+                },
+            };
+        }
+
+        const false_value = try self.allocate(try self.parseExpression(.lowest));
+        return .{
+            .token = self.current_token,
+            .type = .{
+                .if_expression = .{
+                    .condition = condition,
+                    .true_value = true_value,
+                    .false_value = false_value,
+                },
+            },
+        };
+    }
+
+    fn parseIfStatement(self: *Parser) Error!Statement {
         try self.expectPeek(.left_parenthesis);
         self.next(); // skip if
         const condition = try self.allocate(try self.parseExpression(.lowest));
@@ -431,7 +564,7 @@ pub const Parser = struct {
                 return .{
                     .token = self.current_token,
                     .type = .{
-                        .@"if" = .{
+                        .if_statement = .{
                             .condition = condition,
                             .true_body = true_body,
                             .false_body = false_body,
@@ -445,7 +578,7 @@ pub const Parser = struct {
             return .{
                 .token = self.current_token,
                 .type = .{
-                    .@"if" = .{
+                    .if_statement = .{
                         .condition = condition,
                         .true_body = true_body,
                         .false_body = false_body,
@@ -457,22 +590,11 @@ pub const Parser = struct {
         return .{
             .token = self.current_token,
             .type = .{
-                .@"if" = .{
+                .if_statement = .{
                     .condition = condition,
                     .true_body = true_body,
                     .false_body = null,
                 },
-            },
-        };
-    }
-
-    fn parseImport(self: *Parser) Error!Statement {
-        self.next(); // skip import keyword
-        const token = self.current_token;
-        return .{
-            .token = token,
-            .type = .{
-                .import = try self.allocator.dupe(u8, self.source[token.start..token.end]),
             },
         };
     }
@@ -497,7 +619,30 @@ pub const Parser = struct {
                     },
                 };
             },
-            // .left_bracket => try self.parseDataStructure(true),
+            .left_bracket => blk: {
+                try self.expectPeek(.right_bracket);
+                self.next();
+                break :blk Statement.TypeDefValue{
+                    .list_type = try self.parseTypeDefValue(),
+                };
+            },
+            .left_brace => blk: {
+                try self.expectPeek(.right_brace);
+                self.next();
+                const key_type = try self.parseTypeDefValue();
+                if (self.peekIs(.comma)) {
+                    self.next();
+                    self.next();
+                    const value_type = try self.parseTypeDefValue();
+                    break :blk Statement.TypeDefValue{
+                        .map_type = .{
+                            .key_type = key_type,
+                            .value_type = value_type,
+                        },
+                    };
+                }
+                break :blk Statement.TypeDefValue{ .set_type = key_type };
+            },
             .identifier => Statement.TypeDefValue{
                 .identifier_type = try self.allocator.dupe(u8, self.source[self.current_token.start..self.current_token.end]),
             },
@@ -505,30 +650,46 @@ pub const Parser = struct {
         });
     }
 
-    // fn parseSplit(self: *Parser) Error!Statement {
-    //     const start_token = self.current_token;
-    //     var list = ArrayList(Node).init(self.allocator);
-    //     errdefer list.deinit();
-    //
-    //     const depth: usize = self.current_token.column;
-    //     while (self.currentIsOneOf(&[_]TokenType{ .split, .gather, .eof, .branch })) {
-    //         if (!self.currentIsOneOf(&[_]TokenType{ .split, .gather })) break;
-    //         if (self.current_token.column < depth) break;
-    //         var choice = try self.parseChoice(depth);
-    //         try list.append(choice);
-    //     }
-    //
-    //     split.nodes = try self.parseUntilEndOfLine();
-    //     return Node{ .split = split };
-    // }
+    fn parseSplit(self: *Parser) Error!Statement {
+        self.depth += 1;
+        defer self.depth -= 1;
+        const start_token = self.current_token;
+
+        // -1 to account for backtick blocks
+        const column: usize = self.current_token.column + 1;
+        self.next(); // skip split
+        var content = try self.parseUntilEndOfLine();
+        self.next(); // skip eol
+        var list = ArrayList(Statement).init(self.allocator);
+        errdefer list.deinit();
+
+        while (!self.peekIs(.eof) and self.peek_token.column > column) {
+            var line = try self.parseStatement();
+            try list.append(line);
+            if (self.peek_token.column <= column) break;
+            self.next();
+        }
+
+        return .{
+            .token = start_token,
+            .type = .{
+                .split = .{
+                    .content = content,
+                    .body = try list.toOwnedSlice(),
+                },
+            },
+        };
+    }
 
     fn parseJump(self: *Parser) Error!Statement {
         const start_token = self.current_token;
-        self.next();
-        const destination = try self.parseIdentifier();
-        if (!self.peekIs(.eol) or !self.peekIs(.eof)) {
+        try self.expectPeek(.identifier);
+        const destination = try self.parseExpression(.lowest);
+
+        if (!self.peekIs(.eol) and !self.peekIs(.eof)) {
             return self.fail("Jumps must be on their own line", self.peek_token, .{});
         }
+        self.next(); // skip eol
         return .{
             .token = start_token,
             .type = .{
@@ -540,9 +701,8 @@ pub const Parser = struct {
     fn parseUntilEndOfLine(self: *Parser) Error![]const Statement {
         var list = ArrayList(Statement).init(self.allocator);
         errdefer list.deinit();
-
-        while (!self.currentIsOneOf([_]TokenType{ .eol, .eof })) {
-            const item = try parseStatement();
+        while (!self.currentIsOneOf(&[_]TokenType{ .eol, .eof })) {
+            const item = try self.parseStatement();
             try list.append(item);
             self.next();
         }
@@ -550,32 +710,21 @@ pub const Parser = struct {
     }
 
     fn parseDialogueLine(self: *Parser) Error!Statement {
-        const state = try self.allocator.create(Statement);
-        state.* = .{
-            .token = self.current_token,
-            .type = .{
-                .line = .{
-                    .speaker = null,
-                    .content = undefined,
-                },
-            },
-        };
+        const start_token = self.current_token;
+        var speaker: ?Expression = null;
         if (!self.peekIs(.colon)) {
             try self.expectPeek(.identifier);
-            state.type.line.speaker = try self.parseIdentifier();
+            speaker = try self.parseIdentifier();
         }
-
         try self.expectPeek(.colon);
         self.next();
-        state.type.line.content = try self.parseUntilEndOfLine();
-        return state;
-    }
-
-    fn parseContent(self: *Parser) Error!Statement {
         return .{
-            .token = self.current_token,
+            .token = start_token,
             .type = .{
-                .content = try parseContentExpression(),
+                .line = .{
+                    .speaker = speaker,
+                    .content = try self.parseUntilEndOfLine(),
+                },
             },
         };
     }
@@ -583,12 +732,14 @@ pub const Parser = struct {
     fn parseContentExpression(self: *Parser) Error!Expression {
         const start_token = self.current_token;
         var end: usize = start_token.end;
-        while (!self.peekIsOneOf(&[_]TokenType{ .eol, .eof, .backtick })) {
+        while (!self.peekIsOneOf(&[_]TokenType{ .eol, .eof, .backtick }) and self.mode == .content) {
             self.next();
-            end = self.current_token.end;
+            end = self.peek_token.start;
         }
+        var content = try self.allocator.dupe(u8, self.source[start_token.start..end]);
 
-        const content = try self.allocator.dupe(u8, self.source[start_token.start..end]);
+        // hacky
+        if (content.len > 0 and content[content.len - 1] == '`') content = content[0 .. content.len - 1];
         return .{
             .token = start_token,
             .type = .{
@@ -611,29 +762,6 @@ pub const Parser = struct {
         };
     }
 
-    // fn parseSplitChoice(self: *Parser, depth: usize) Error!Statement {
-    //     const start_token = self.current_token;
-    //     self.next(); // skip split
-    //     var content = try self.parseUntilEndOfLine();
-    //     var list = ArrayList(Statement).init(self.allocator);
-    //     errdefer list.deinit();
-    //
-    //     while (!self.peekIsOneOf(&[_]TokenType{ .branch, .limb, .jump, .eof })) {
-    //         switch (self.peek_token.token_type) {
-    //             .split, .gather => {
-    //                 if (self.peek_token.column < depth) break;
-    //             },
-    //             else => {},
-    //         }
-    //         var line = try self.parseStatement();
-    //         try list.append(line);
-    //         self.next();
-    //         self.next();
-    //     }
-    //     choice.nodes = list;
-    //     return choice;
-    // }
-
     fn parseBlockStatement(self: *Parser) Error!Statement {
         self.depth += 1;
         defer self.depth -= 1;
@@ -641,10 +769,10 @@ pub const Parser = struct {
         const closing_token = switch (start_token.token_type) {
             .left_brace => .right_brace,
             .split => .gather,
-            else => self.current_token.token_type,
+            else => start_token.token_type,
         };
 
-        if (self.currentIs(.limb)) {
+        if (self.currentIs(.bough)) {
             self.mode = .content;
         } else if (self.currentIs(.blackboard)) {
             self.mode = .code;
@@ -652,9 +780,9 @@ pub const Parser = struct {
 
         self.next(); //skip opening token
         const name = switch (closing_token) {
-            .limb, .branch => blk: {
+            .bough, .twig => blk: {
                 try self.expectCurrent(.identifier);
-                const name = try self.parseIdentifier();
+                const name = try self.allocator.dupe(u8, self.source[self.current_token.start..self.current_token.end]);
                 // omit any additional closing token on this line
                 if (self.peekIs(closing_token)) self.next();
                 try self.expectPeek(.eol);
@@ -666,13 +794,20 @@ pub const Parser = struct {
         var list = ArrayList(Statement).init(self.allocator);
         errdefer list.deinit();
         while (!self.currentIs(closing_token) and !self.currentIs(.eof)) {
+            // properly close off content blocks
+            if (self.currentIs(.eol) and self.peekIs(closing_token)) {
+                self.next();
+                break;
+            }
             const exp = try self.parseStatement();
             try list.append(exp);
             self.next();
         }
-        if (closing_token == .limb or closing_token == .blackboard) {
+
+        if (closing_token == .bough or closing_token == .blackboard) {
             self.mode = .root;
         }
+
         return .{
             .token = start_token,
             .type = .{
@@ -764,47 +899,10 @@ pub const Parser = struct {
         };
     }
 
-    fn parseMap(self: *Parser) Error!Expression {
-        var pairs = std.ArrayList(Expression).init(self.allocator);
-        const start_token = self.current_token;
-        while (!self.peekIs(.right_brace)) {
-            self.next();
-            const pair = try self.parsePair();
-            try pairs.append(pair);
-            if (!self.peekIs(.right_brace))
-                try self.expectPeek(.comma);
-        }
-
-        try self.expectPeek(.right_brace);
-        return .{
-            .token = start_token,
-            .type = .{
-                .map_value = .{ .pairs = try pairs.toOwnedSlice() },
-            },
-        };
-    }
-
-    fn parsePair(self: *Parser) Error!Expression {
-        const start_token = self.current_token;
-        const key = try self.parseExpression(.lowest);
-        if (!self.peekIs(.colon)) {
-            return .{ .token = start_token, .type = .{ .set_value = .{ .key = key } } };
-        }
-        self.next();
-        return .{
-            .token = start_token,
-            .type = .{
-                .map_pair = .{
-                    .key = key,
-                    .value = try self.parseExpression(.lowest),
-                },
-            },
-        };
-    }
-
     fn parseEnumLiteral(self: *Parser) Error!Expression {
         const start_token = self.current_token;
         var enums = std.ArrayList(Expression).init(self.allocator);
+        errdefer enums.deinit();
         self.next(); // skip brace
         try enums.append(try self.parseIdentifier());
         while (self.peekIs(.comma)) {
@@ -816,14 +914,6 @@ pub const Parser = struct {
 
         try self.expectPeek(.right_brace);
         return .{ .token = start_token, .type = .{ .enum_literal = try enums.toOwnedSlice() } };
-    }
-
-    fn parseNil(self: *Parser) Error!Expression {
-        return .{ .token = self.current_token, .type = .nil };
-    }
-
-    fn parseExtern(self: *Parser) Error!Expression {
-        return .{ .token = self.current_token, .type = .@"extern" };
     }
 
     fn parseIndexExpression(self: *Parser, value: Expression) Error!Expression {
@@ -1061,7 +1151,7 @@ test "Parse Declaration" {
         defer tree.deinit();
         const node = tree.root[0].type.block.body[0];
         const decl = node.type.declaration;
-        try testing.expectEqualStrings(case.id, decl.name.type.identifier);
+        try testing.expectEqualStrings(case.id, decl.name);
 
         switch (case.type) {
             .integer => try testing.expect(case.value == decl.value.type.integer_literal),
@@ -1074,6 +1164,67 @@ test "Parse Declaration" {
     }
 }
 
+test "Parse Iteratable Types" {
+    var allocator = testing.allocator;
+    const test_cases = .{
+        .{ .input = "```\n const stringList: []string = [\"item\"] ```", .id = "stringList", .item_value = "item", .mutable = false, .type = .list, .item_type = .string },
+        .{ .input = "```\n var intList: []int = [50] ```", .id = "intList", .item_value = 50, .mutable = true, .type = .list, .item_type = .integer },
+        .{ .input = "```\n var floatSet: {}float = {2.0} ```", .id = "floatSet", .item_value = 2.0, .mutable = true, .type = .set, .item_type = .float },
+        .{ .input = "```\n var stringBoolMap: {}string,bool = {\"key\":true} ```", .id = "stringBoolMap", .item_value = true, .mutable = true, .type = .map, .item_type = .bool },
+    };
+
+    inline for (test_cases) |case| {
+        var errors = Errors.init(allocator);
+        defer errors.deinit();
+        const tree = parse(allocator, case.input, &errors) catch |err| {
+            try errors.write(case.input, std.io.getStdErr().writer());
+            return err;
+        };
+        defer tree.deinit();
+        const node = tree.root[0].type.block.body[0];
+        const decl = node.type.declaration;
+        try testing.expectEqualStrings(case.id, decl.name);
+
+        switch (case.type) {
+            .list => switch (case.item_type) {
+                .integer => try testing.expect(case.item_value == decl.value.type.list_literal[0].type.integer_literal),
+                .string => try testing.expectEqualStrings(case.item_value, decl.value.type.list_literal[0].type.string_literal),
+                else => unreachable,
+            },
+            .set => try testing.expect(case.item_value == decl.value.type.set_literal[0].type.float_literal),
+            .map => try testing.expect(case.item_value == decl.value.type.map_literal[0].type.map_pair.value.type.boolean_literal),
+            else => unreachable,
+        }
+        try testing.expect(case.mutable == decl.is_mutable);
+    }
+}
+
+test "Parse Empty Iterable Types" {
+    const allocator = testing.allocator;
+    const input =
+        \\ ```
+        \\ const emptyMap: {}int,int = {:}
+        \\ const emptySet: {}int = {}
+        \\ ```
+    ;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, input, &errors) catch |err| {
+        try errors.write(input, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+    var decl = tree.root[0].type.block.body[0].type.declaration;
+    try testing.expectEqualStrings("emptyMap", decl.name);
+    try testing.expect(decl.type_def.map_type.key_type.* == .integer_type);
+    try testing.expect(decl.type_def.map_type.value_type.* == .integer_type);
+    try testing.expect(decl.value.type.map_literal.len == 0);
+
+    decl = tree.root[0].type.block.body[1].type.declaration;
+    try testing.expectEqualStrings("emptySet", decl.name);
+    try testing.expect(decl.type_def.set_type.* == .integer_type);
+    try testing.expect(decl.value.type.set_literal.len == 0);
+}
 test "Parse Extern" {
     var allocator = testing.allocator;
     const test_cases = .{
@@ -1094,7 +1245,7 @@ test "Parse Extern" {
         defer tree.deinit();
         const node = tree.root[0].type.block.body[0];
         const decl = node.type.declaration;
-        try testing.expectEqualStrings(case.id, decl.name.type.identifier);
+        try testing.expectEqualStrings(case.id, decl.name);
         try testing.expect(decl.value.type == Expression.Type.@"extern");
         try testing.expect(case.mutable == decl.is_mutable);
     }
@@ -1125,21 +1276,21 @@ test "Parse Enum" {
     defer tree.deinit();
     var node = tree.root[0].type.block.body[0];
     var decl = node.type.declaration;
-    try testing.expectEqualStrings("e", decl.name.type.identifier);
+    try testing.expectEqualStrings("e", decl.name);
     var enum_literal = decl.value.type.enum_literal;
     try testing.expectEqualStrings(enum_literal[0].type.identifier, "one");
     try testing.expectEqualStrings(enum_literal[1].type.identifier, "two");
 
     node = tree.root[0].type.block.body[1];
     decl = node.type.declaration;
-    try testing.expectEqualStrings("en", decl.name.type.identifier);
+    try testing.expectEqualStrings("en", decl.name);
     enum_literal = decl.value.type.enum_literal;
     try testing.expectEqualStrings(enum_literal[0].type.identifier, "one");
     try testing.expectEqualStrings(enum_literal[1].type.identifier, "two");
 
     node = tree.root[0].type.block.body[2];
     decl = node.type.declaration;
-    try testing.expectEqualStrings("val", decl.name.type.identifier);
+    try testing.expectEqualStrings("val", decl.name);
     try testing.expectEqualStrings("en", decl.type_def.identifier_type);
     var ident = decl.value.type.identifier;
     try testing.expectEqualStrings(ident, "one");
@@ -1197,6 +1348,7 @@ test "Parse If" {
     const input =
         \\```
         \\ if (x < y) { return x }
+        \\ const a: string = if (true) "true" else "false"
         \\ ```
     ;
     var errors = Errors.init(allocator);
@@ -1207,10 +1359,15 @@ test "Parse If" {
     };
     defer tree.deinit();
 
-    const if_exp = tree.root[0].type.block.body[0].type.expression.type.@"if";
-    const ret_exp = if_exp.true_body.type.block.body[0].type;
+    const if_state = tree.root[0].type.block.body[0].type.if_statement;
+    const ret_exp = if_state.true_body.type.block.body[0].type;
     try testing.expect(ret_exp == .return_expression);
     try testing.expectEqualStrings(ret_exp.return_expression.type.identifier, "x");
+    try tree.print(std.io.getStdErr().writer());
+
+    const decl = tree.root[0].type.block.body[1].type.declaration;
+    try testing.expectEqualStrings("true", decl.value.type.if_expression.true_value.type.string_literal);
+    try testing.expectEqualStrings("false", decl.value.type.if_expression.false_value.type.string_literal);
 }
 
 test "Parse Call expression" {
@@ -1323,8 +1480,8 @@ test "Parse While loop" {
 test "Parse Limb > Branch > Line" {
     const allocator = testing.allocator;
     const input =
-        \\ === LIMB ===
-        \\     --- BRANCH ---
+        \\ === BOUGH ===
+        \\     --- TWIG ---
         \\     :Speaker: Text goes here
         \\     ---
         \\ ===
@@ -1336,79 +1493,282 @@ test "Parse Limb > Branch > Line" {
         return err;
     };
     defer tree.deinit();
-    const limb = tree.root[0];
-    try testing.expect(limb.token.token_type == .limb);
-    try testing.expectEqualStrings(limb.type.block.name.?.type.identifier, "LIMB");
+    const bough = tree.root[0];
+    try testing.expect(bough.token.token_type == .bough);
+    try testing.expectEqualStrings(bough.type.block.name.?, "BOUGH");
 
-    const branch = limb.type.block.body[0];
-    try testing.expect(branch.token.token_type == .branch);
-    try testing.expectEqualStrings(branch.type.block.name.?.type.identifier, "BRANCH");
+    const twig = bough.type.block.body[0];
+    try testing.expect(twig.token.token_type == .twig);
+    try testing.expectEqualStrings(twig.type.block.name.?, "TWIG");
 
-    const line = branch.type.block.body[0].type.line;
+    const line = twig.type.block.body[0].type.line;
     try testing.expectEqualStrings(line.speaker.?.type.identifier, "Speaker");
-    try testing.expectEqualStrings(line.content[0].type.expression.content, "Text goes here");
+    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "Text goes here");
 }
 
-// test "Parse No Speaker" {
-//     const allocator = testing.allocator;
-//     const input =
-//         \\  === LIMB ===
-//         \\      :: Text goes here
-//         \\  ===
-//     ;
-//     var errors = Errors.init(allocator);
-//     defer errors.deinit();
-//     const tree = parse(allocator, input, &errors) catch |err| {
-//         try errors.write(input, std.io.getStdErr().writer());
-//         return err;
-//     };
-//     defer tree.deinit();
-//     const limb = tree.nodes[0].block_statement;
-//
-//     const line = limb.nodes[0].line;
-//     try testing.expect(line.speaker == null);
-//     try testing.expectEqualStrings(line.nodes.?[0].text.value, "Text goes here");
-// }
-// test "Parse Jump" {
-//     const allocator = testing.allocator;
-//     const input =
-//         \\  === LIMB ===
-//         \\      -> JUMP_ID
-//         \\  ===
-//     ;
-//     var errors = Errors.init(allocator);
-//     defer errors.deinit();
-//     const tree = parse(allocator, input, &errors) catch |err| {
-//         try errors.write(input, std.io.getStdErr().writer());
-//         return err;
-//     };
-//     defer tree.deinit();
-//     const limb = tree.nodes[0].block_statement;
-//     const jump = limb.nodes[0].jump;
-//     try testing.expect(jump.token.token_type == .jump);
-//     try testing.expectEqualStrings(jump.destination.identifier.value, "JUMP_ID");
-// }
-//
-// test "Parse Choices" {
-//     const allocator = testing.allocator;
-//     const input =
-//         \\  === LIMB ===
-//         \\      -<  choice 1
-//         \\          :Other: Response
-//         \\      -<  choice 2
-//         \\          :Other: Second Response
-//         \\      >-
-//         \\  ===
-//     ;
-//     var errors = Errors.init(allocator);
-//     defer errors.deinit();
-//     const tree = parse(allocator, input, &errors) catch |err| {
-//         try errors.write(input, std.io.getStdErr().writer());
-//         return err;
-//     };
-//     defer tree.deinit();
-//     const limb = tree.nodes[0].block_statement;
-//     const jump = limb.nodes[0].jump;
-//     try testing.expect(jump.token.token_type == .jump);
-//     try testing.expectEqualStrings(jump.destination.identifier.value, "JUMP_ID");
-// }
+test "Parse No Speaker" {
+    const allocator = testing.allocator;
+    const input =
+        \\  === BOUGH ===
+        \\      :: Text goes here
+        \\  ===
+    ;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, input, &errors) catch |err| {
+        try errors.write(input, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+    const line = tree.root[0].type.block.body[0].type.line;
+    try testing.expect(line.speaker == null);
+    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "Text goes here");
+}
+
+test "Parse Multiple Limbs" {
+    const allocator = testing.allocator;
+    const input =
+        \\  === BOUGH ===
+        \\      :: Text goes here
+        \\  ===
+        \\  === SECOND ===
+        \\      :: And here
+        \\  ===
+    ;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, input, &errors) catch |err| {
+        try errors.write(input, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+
+    var bough = tree.root[0].type.block;
+    var line = bough.body[0].type.line;
+    try testing.expectEqualStrings("BOUGH", bough.name.?);
+    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "Text goes here");
+
+    bough = tree.root[1].type.block;
+    line = bough.body[0].type.line;
+    try testing.expectEqualStrings("SECOND", bough.name.?);
+    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "And here");
+}
+
+test "Parse Jump" {
+    const allocator = testing.allocator;
+    const input =
+        \\  === BOUGH ===
+        \\      => JUMP_ID
+        \\  ===
+    ;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, input, &errors) catch |err| {
+        try errors.write(input, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+    const jump = tree.root[0].type.block.body[0].type.jump;
+    try testing.expectEqualStrings(jump.type.identifier, "JUMP_ID");
+}
+
+test "Parse Splits" {
+    const allocator = testing.allocator;
+    const input =
+        \\  === BOUGH ===
+        \\      -<  choice 1
+        \\          :Other: Response
+        \\      -<  choice 2
+        \\          :Other: Second Response
+        \\  ===
+    ;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, input, &errors) catch |err| {
+        try errors.write(input, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+    // try tree.print(std.io.getStdErr().writer());
+
+    const body = tree.root[0].type.block.body;
+    var split = body[0].type.split;
+    try testing.expectEqualStrings(split.content[0].type.expression.type.content, "choice 1");
+
+    var line = split.body[0].type.line;
+    try testing.expectEqualStrings(line.speaker.?.type.identifier, "Other");
+    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "Response");
+
+    split = body[1].type.split;
+    try testing.expectEqualStrings(split.content[0].type.expression.type.content, "choice 2");
+    line = split.body[0].type.line;
+    try testing.expectEqualStrings(line.speaker.?.type.identifier, "Other");
+    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "Second Response");
+}
+
+test "Parse Nested Splits" {
+    const allocator = testing.allocator;
+    const input =
+        \\  === BOUGH ===
+        \\      -<  choice 1
+        \\          :Other: Response
+        \\          -<  inner choice 1
+        \\              :Other: Inner Response
+        \\          -<  inner choice 2
+        \\              :Other: Second Inner Response
+        \\          :Other: Gather back here
+        \\      -<  choice 2
+        \\          :Other: Second Response
+        \\  ===
+    ;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, input, &errors) catch |err| {
+        try errors.write(input, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+    // try tree.print(std.io.getStdErr().writer());
+
+    const body = tree.root[0].type.block.body;
+    var split = body[0].type.split;
+    try testing.expectEqualStrings(split.content[0].type.expression.type.content, "choice 1");
+    var line = split.body[0].type.line;
+    try testing.expectEqualStrings(line.speaker.?.type.identifier, "Other");
+    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "Response");
+
+    var inner_split = split.body[1].type.split;
+    try testing.expectEqualStrings(inner_split.content[0].type.expression.type.content, "inner choice 1");
+    var inner_line = inner_split.body[0].type.line;
+    try testing.expectEqualStrings(inner_line.speaker.?.type.identifier, "Other");
+    try testing.expectEqualStrings(inner_line.content[0].type.expression.type.content, "Inner Response");
+
+    inner_split = split.body[2].type.split;
+    try testing.expectEqualStrings(inner_split.content[0].type.expression.type.content, "inner choice 2");
+    inner_line = inner_split.body[0].type.line;
+    try testing.expectEqualStrings(inner_line.speaker.?.type.identifier, "Other");
+    try testing.expectEqualStrings(inner_line.content[0].type.expression.type.content, "Second Inner Response");
+
+    split = body[1].type.split;
+    try testing.expectEqualStrings(split.content[0].type.expression.type.content, "choice 2");
+    line = split.body[0].type.line;
+    try testing.expectEqualStrings(line.speaker.?.type.identifier, "Other");
+    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "Second Response");
+}
+
+test "Parse Inline Code" {
+    const allocator = testing.allocator;
+    const input =
+        \\  === BOUGH ===
+        \\      :Speaker: Hi, `sayHello()`, how are you?
+        \\  ===
+    ;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, input, &errors) catch |err| {
+        try errors.write(input, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+    // try tree.print(std.io.getStdErr().writer());
+    const content = tree.root[0].type.block.body[0].type.line.content;
+    try testing.expectEqualStrings("Hi, ", content[0].type.expression.type.content);
+    try testing.expectEqualStrings("sayHello", content[1].type.expression.type.call.name.type.identifier);
+    try testing.expectEqualStrings(", how are you?", content[2].type.expression.type.content);
+}
+
+test "Parse Inline If" {
+    const allocator = testing.allocator;
+    const input =
+        \\  === BOUGH ===
+        \\      :Speaker: Hi, `if (true) {`how are you? `} else {`buzz off! `}`
+        \\  ===
+    ;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, input, &errors) catch |err| {
+        try errors.write(input, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+    // try tree.print(std.io.getStdErr().writer());
+    const content = tree.root[0].type.block.body[0].type.line.content;
+    try testing.expectEqualStrings("Hi, ", content[0].type.expression.type.content);
+    const if_state = content[1].type.if_statement;
+    try testing.expectEqualStrings("how are you? ", if_state.true_body.type.block.body[0].type.expression.type.content);
+    try testing.expectEqualStrings("buzz off! ", if_state.false_body.?.type.block.body[0].type.expression.type.content);
+}
+
+test "Parse Content If Block" {
+    const allocator = testing.allocator;
+    const input =
+        \\  === BOUGH ===
+        \\      `if (true) {`
+        \\      :Speaker: Say words
+        \\      => JUMP.SOMEWHERE
+        \\      `}`
+        \\  ===
+    ;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, input, &errors) catch |err| {
+        try errors.write(input, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+    const bough = tree.root[0].type.block;
+    const if_exp = bough.body[0].type.if_statement;
+    const line = if_exp.true_body.type.block.body[0].type.line;
+    try testing.expectEqualStrings("Say words", line.content[0].type.expression.type.content);
+}
+
+test "Parse Content If/Else Blocks" {
+    const allocator = testing.allocator;
+    const input =
+        \\  === BOUGH ===
+        \\      `if (true) {`
+        \\      :Speaker: Say true
+        \\      `} else {`
+        \\      :Speaker: Say false
+        \\      `}`
+        \\      => JUMP
+        \\  ===
+    ;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, input, &errors) catch |err| {
+        try errors.write(input, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+    const bough = tree.root[0].type.block;
+    const if_exp = bough.body[0].type.if_statement;
+    var line = if_exp.true_body.type.block.body[0].type.line;
+    try testing.expectEqualStrings("Say true", line.content[0].type.expression.type.content);
+    line = if_exp.false_body.?.type.block.body[0].type.line;
+    try testing.expectEqualStrings("Say false", line.content[0].type.expression.type.content);
+    const last = bough.body[1].type.jump;
+    try testing.expectEqualStrings("JUMP", last.type.identifier);
+    // try tree.print(std.io.getStdErr().writer());
+}
+
+test "Parse Test File" {
+    const allocator = testing.allocator;
+    const path = "./src/compiler/test/scene.topi";
+    const file = std.fs.cwd().openFile(path, .{}) catch |e| {
+        return std.log.err("Could not open file: {s}, {}", .{ path, e });
+    };
+    defer file.close();
+
+    var contents = try file.reader().readAllAlloc(allocator, 4000);
+    defer allocator.free(contents);
+
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, contents, &errors) catch |err| {
+        try errors.write(contents, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+    // try tree.print(std.io.getStdErr().writer());
+}

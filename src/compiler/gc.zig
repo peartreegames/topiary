@@ -15,7 +15,7 @@ pub const Gc = struct {
         return .{ .gpa = allocator, .stack = null, .newly_allocated = 0 };
     }
 
-    pub fn newValue(self: *Gc, comptime T: type, val: T) !*Value {
+    pub fn create(self: *Gc, comptime T: type, val: T) !*Value {
         const typed = try self.gpa.create(T);
 
         typed.* = val;

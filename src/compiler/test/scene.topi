@@ -1,4 +1,4 @@
-import './otherfile.topi'
+import "./other-file.topi"
 
 ```
 const sum: func(x: int, y: int) int = {
@@ -6,8 +6,8 @@ const sum: func(x: int, y: int) int = {
 }
 const loop: func(value: string, count: int) string = {
     var result: string = ""
-    for (0..count) {
-        result = result + value
+    for (0..count): i {
+        result = result + i
     }
     return result
 }
@@ -19,8 +19,8 @@ var externalInt: int = extern
 var floatValue: float = 0.1
 var intValue: int = 2
 var listValue: []string = ["value"]
-var mapValue: []string,int = {"one": 1}
-var setValue: []string,void = {"set"}
+var mapValue: {}string,int = {"one": 1}
+var setValue: {}string = {"set"}
 const enumType: enum = {
     one,
     two,
@@ -37,18 +37,14 @@ var enumValue: enumType = one
     -<  Let him be `ifElse(externalInt > 1, ", Virg.", ".")`
         => VIRGIL_WRONG
     `if (floatValue > 1 or intValue == 2) {`
-    -<  Drop it. Both of you.
+    -<   Drop it. Both of you.
         :Alvin: Let's get going.
         -<  We've got a lot to do.
+            :Ell: No we don't!
         -<  I don't want to hear this bickering.
-        >-
+            :Waylon: hah
         => OUTRO.END
-    `} else {`
-    -<  Shouldn't be here.
-        :Alvin: Well this isn't good.
     `}`
-    >-
-    :Waylon: Get back here
 
     --- VIRGIL_RIGHT ---
         :: Ell gives Alvin a look of betrayal.

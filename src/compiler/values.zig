@@ -10,9 +10,20 @@ pub const Nil = Value{ .type = .nil };
 pub const NativeFn = fn (gc: *Gc, args: []*Value) anyerror!*Value;
 
 pub const Value = struct {
-    type: Type,
-    is_gc_marked: bool = false,
+    type: ValType,
+    is_marked: bool = false,
     next: ?*Value = null,
+
+    pub const ValType = union(enum) {
+        void: void,
+        int: i32,
+        float: f64,
+        bool: bool,
+        string: String,
+        list: List,
+        map: Map,
+        set: Set,
+    };
 
     pub fn unwrap(self: *Value, comptime v_type: Type) ?*v_type.ValueType() {
         if (self.type != v_type) return null;
@@ -138,7 +149,6 @@ pub const Type = enum {
     set,
     map,
     native,
-    // module,
     // optional,
     iterable,
     _enum,
@@ -156,7 +166,6 @@ pub const Type = enum {
             .map => Map,
             .set => Set,
             .native => Native,
-            // .module => Module,
             .iterable => Iterable,
             // .optional => Optional,
             ._enum => Enum,
@@ -192,7 +201,7 @@ pub const Integer = struct {
     value: i64,
 
     pub fn create(gc: *Gc, val: i64) !*Value {
-        return try gc.newValue(Integer, .{
+        return try gc.create(Integer, .{
             .base = .{ .type = .integer },
             .value = val,
         });
@@ -213,7 +222,7 @@ pub const String = struct {
     value: []const u8,
 
     pub fn create(gc: *Gc, val: []const u8) !*Value {
-        return try gc.newValue(String, .{
+        return try gc.create(String, .{
             .base = .{ .type = .string },
             .value = try gc.gpa.dupe(u8, val),
         });
@@ -235,18 +244,17 @@ pub const ReturnValue = struct {
 
 pub const Function = struct {
     base: Value,
-    name: ?[]const u8,
+    name: []const u8,
     arg_len: usize,
     locals: usize,
     entry: usize,
 
-    pub fn create(gc: *Gc, name: ?[]const u8, arg_len: usize, locals: usize, entry: usize) !*Value {
-        const n = if (name) |n| try gc.gpa.dupe(u8, n) else null;
-        return try gc.newValue(Function, .{
+    pub fn create(gc: *Gc, name: []const u8, arg_len: usize, locals: usize, entry: usize) !*Value {
+        return try gc.create(Function, .{
             .base = .{ .type = .function },
             .arg_len = arg_len,
             .locals = locals,
-            .name = n,
+            .name = try gc.gpa.dupe(u8, name),
             .entry = entry,
         });
     }
@@ -268,7 +276,7 @@ pub const List = struct {
             .value = ListType{},
         };
         if (len) |n| try self.value.ensureCapacity(gc.gpa, n);
-        return try gc.newValue(List, self);
+        return try gc.create(List, self);
     }
     pub fn destroy(self: *List, gpa: *Allocator) void {
         self.value.deinit(gpa);
@@ -278,11 +286,11 @@ pub const List = struct {
 
 pub const Range = struct {
     base: Value,
-    start: i64,
-    end: i64,
+    start: i32,
+    end: i32,
 
     pub fn create(gc: *Gc, start: i64, end: i64) !*Value {
-        return try gc.newValue(
+        return try gc.create(
             Range,
             .{
                 .base = .{ .ty = .range, .next = null, .is_marked = false },
@@ -310,7 +318,7 @@ pub const Map = struct {
         };
 
         if (len) |n| try self.value.ensureCapacity(gc.gpa, n);
-        return try gc.newValue(Map, self);
+        return try gc.create(Map, self);
     }
 
     pub fn destroy(self: *Map, gpa: *Allocator) void {
@@ -332,7 +340,7 @@ pub const Set = struct {
         };
 
         if (len) |n| try self.value.ensureCapacity(gc.gpa, n);
-        return try gc.newValue(Map, self);
+        return try gc.create(Map, self);
     }
 
     pub fn destroy(self: *Map, gpa: *Allocator) void {
@@ -358,7 +366,7 @@ pub const Enum = struct {
     /// Creates a new `Enum` value. Takes ownership of the memory of the slice
     pub fn create(gc: *Gc, enums: [][]const u8) !*Value {
         for (enums) |*enm| enm.* = try gc.gpa.dupe(u8, enm.*);
-        return try gc.newValue(
+        return try gc.create(
             Enum,
             .{
                 .base = .{ .ty = ._enum, .next = null, .is_marked = false },
@@ -373,6 +381,7 @@ pub const Enum = struct {
         gpa.destroy(self);
     }
 };
+
 // pub fn toModule(self: *Value) *Module {
 //     return @fieldParentPtr(Module, "base", self);
 // }
@@ -388,7 +397,7 @@ pub const Iterable = struct {
     value: *Value,
 
     pub fn create(gc: *Gc, expose: bool, index: usize, value: *Value) !*Value {
-        return try gc.newValue(
+        return try gc.create(
             Iterable,
             .{
                 .base = .{ .type = .iterable },
@@ -433,6 +442,7 @@ pub const Iterable = struct {
         }
     }
 };
+
 fn hash(key: *Value) u32 {
     const hashFn = std.hash.autoHash;
     var hasher = std.hash.Wyhash.init(0);

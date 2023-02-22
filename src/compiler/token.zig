@@ -36,8 +36,8 @@ pub const TokenType = enum {
     not_equal,
     double_period,
     // delimiters
-    limb,
-    branch,
+    bough,
+    twig,
     jump,
     backtick,
     hash,
@@ -113,6 +113,8 @@ pub fn fmtString(token_type: TokenType) []const u8 {
         .eol => "[eol]",
         .identifier => "[identifier]",
         .blackboard => "[blackboard]",
+        .bough => "[bough]",
+        .twig => "[twig]",
         .integer => "[integer]",
         .float => "[float]",
         .string => "[string]",
@@ -134,8 +136,6 @@ pub fn fmtString(token_type: TokenType) []const u8 {
         .not_equal => "!=",
         .double_period => "..",
         // delimiters
-        .limb => "===",
-        .branch => "---",
         .jump => "=>",
         .backtick => "`",
         .hash => "#",
