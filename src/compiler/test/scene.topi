@@ -27,6 +27,7 @@ const enumType: enum = {
     three,
 }
 var enumValue: enumType = one
+intValue = 3
 ```
 
 === INTRO ===

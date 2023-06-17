@@ -38,17 +38,17 @@ const Precedence = enum(u4) {
 
 fn findPrecedence(token_type: TokenType) Precedence {
     return switch (token_type) {
-        .double_period => .range,
+        .dot_dot => .range,
         .@"or" => .@"or",
         .@"and" => .@"and",
-        .assign => .assign,
-        .equal, .not_equal => .equals,
-        .less_than, .greater_than, .less_than_equal, .greater_than_equal => .less_greater,
+        .equal, .plus_equal, .minus_equal, .slash_equal, .star_equal => .assign,
+        .equal_equal, .bang_equal => .equals,
+        .less, .greater, .less_equal, .greater_equal => .less_greater,
         .plus, .minus => .sum,
-        .slash, .asterisk, .percent => .product,
-        .left_parenthesis => .call,
+        .slash, .star, .percent => .product,
+        .left_paren => .call,
         .left_bracket => .index,
-        .period => .index,
+        .dot => .index,
         else => .lowest,
     };
 }
@@ -71,7 +71,7 @@ pub fn parse(allocator: Allocator, source: []const u8, err: *Errors) Parser.Erro
     errdefer nodes.deinit();
 
     while (!parser.currentIs(.eof)) : (parser.next()) {
-        try nodes.append(try parser.parseStatement());
+        try nodes.append(try parser.statement());
     }
 
     return Tree{
@@ -89,13 +89,6 @@ pub const Parser = struct {
     source: []const u8,
     err: *Errors,
     depth: usize = 0,
-    mode: Mode = .root,
-
-    const Mode = enum {
-        root,
-        code,
-        content,
-    };
 
     pub const Error = error{
         ParserError,
@@ -119,171 +112,195 @@ pub const Parser = struct {
     }
 
     fn print(self: *Parser, msg: []const u8) void {
-        std.log.warn("{s} -- {}", .{ msg, self.current_token.token_type });
-    }
-    fn printPeek(self: *Parser, msg: []const u8) void {
-        std.log.warn("{s} -- {}", .{ msg, self.peek_token.token_type });
-    }
-
-    fn skipEol(self: *Parser) void {
-        while (self.peekIs(.eol)) {
-            self.peek_token = self.lexer.next();
-        }
-    }
-
-    fn switchMode(self: *Parser) void {
-        self.peek_token = self.lexer.next();
-        self.mode = if (self.mode == .code) .content else .code;
+        const peek_source = if (self.peekIs(.eof)) "[eof]" else self.source[self.peek_token.start..self.peek_token.end];
+        std.log.warn("=={s}== -- {}:{s} -- {}:{s}", .{ msg, self.current_token.token_type, self.source[self.current_token.start..self.current_token.end], self.peek_token.token_type, peek_source });
     }
 
     fn next(self: *Parser) void {
         self.current_token = self.peek_token;
-
         self.peek_token = self.lexer.next();
-        // switch mode on inline code blocks
-        if (self.peekIs(.backtick)) self.switchMode();
-        // eol are only needed for content
-        if (self.mode == .code) self.skipEol();
     }
 
-    fn parseStatement(self: *Parser) Error!Statement {
-        while (self.currentIs(.eol)) self.next();
-        return switch (self.mode) {
-            .root => return switch (self.current_token.token_type) {
-                .blackboard, .bough => self.parseBlockStatement(),
-                .import => blk: {
-                    self.next(); // skip import keyword
-                    const token = self.current_token;
-                    break :blk .{
-                        .token = token,
-                        .type = .{
-                            .import = try self.allocator.dupe(u8, self.source[token.start..token.end]),
-                        },
-                    };
-                },
-                else => self.fail("Expected blackboard, bough, or import at top level.", self.current_token, .{}),
-            },
-            .code => return switch (self.current_token.token_type) {
-                .comment => self.parseComment(),
-                .constant, .variable => self.parseDeclaration(),
-                .@"return" => self.parseReturn(),
-                // .@"switch" => self.parseSwitchStatement(),
-                .while_loop => self.parseWhile(),
-                .@"if" => try self.parseIfStatement(),
-                .for_loop => self.parseFor(),
-                .@"break" => self.parseBreak(),
-                .@"continue" => self.parseContinue(),
-                .backtick => {
-                    self.next();
-                    self.mode = .content;
-                    return self.parseStatement();
-                },
-                else => self.parseExpressionStatement(),
-            },
-            .content => return switch (self.current_token.token_type) {
-                .bough => return self.fail("Bough must be top level", self.current_token, .{}),
-                .comment => self.parseComment(),
-                .twig => self.parseBlockStatement(),
-                .jump => self.parseJump(),
-                .split => self.parseSplit(),
-                .colon => self.parseDialogueLine(),
-                // .gather => return self.fail("Unexpected gather", self.current_token, .{}),
-                .backtick => {
-                    self.next();
-                    self.mode = .code;
-                    return self.parseExpressionStatement();
-                },
-                else => self.parseExpressionStatement(),
-            },
-        };
+    fn consumeIdentifier(self: *Parser) ![]const u8 {
+        try self.expectCurrent(.identifier);
+        const name = try self.getStringValue();
+        self.next();
+        return name;
     }
 
-    fn parseDeclaration(self: *Parser) Error!Statement {
-        if (self.mode != .code) return self.fail("Declarations can only be used in code", self.current_token, .{});
-        const start_token = self.current_token;
-        const is_mutable = self.currentIs(.variable);
+    fn getStringValue(self: *Parser) ![]const u8 {
+        return try self.allocator.dupe(u8, self.source[self.current_token.start..self.current_token.end]);
+    }
 
-        try self.expectPeek(.identifier);
-        const name = try self.allocator.dupe(u8, self.source[self.current_token.start..self.current_token.end]);
-        try self.expectPeek(.colon);
-        self.next();
-
-        var decl_type = self.current_token.token_type;
-        const type_def = try self.parseTypeDefValue();
-        try self.expectPeek(.assign);
-        self.next();
-
-        if (decl_type == .function_keyword and is_mutable) {
-            return self.fail("Functions must be 'const'", start_token, .{});
-        }
-
-        if (decl_type == .enum_keyword and is_mutable) {
-            return self.fail("Enums must be 'const'", start_token, .{});
-        }
-
-        const value_type = self.current_token.token_type;
-        if (value_type == .@"extern") {
-            const value = .{ .token = self.current_token, .type = .@"extern" };
-            return .{
+    fn statement(self: *Parser) Error!Statement {
+        return switch (self.current_token.token_type) {
+            .@"struct" => try self.structDeclaration(),
+            .@"enum" => try self.enumDeclaration(),
+            .@"extern", .@"var", .@"const" => try self.varDeclaration(),
+            .bough => try self.boughStatement(),
+            .jump => try self.jumpStatement(),
+            .tilde => try self.choiceStatement(),
+            .fork => try self.forkStatement(),
+            .@"for" => try self.forStatement(),
+            .@"if" => try self.ifStatement(),
+            // .@"switch" => switchStatement(),
+            .@"while" => try self.whileStatement(),
+            .@"return" => try self.returnStatement(),
+            .@"break" => try self.breakStatement(),
+            .@"continue" => try self.continueStatement(),
+            .left_brace => .{
                 .token = self.current_token,
                 .type = .{
-                    .declaration = .{
-                        .name = name,
-                        .value = value,
-                        .type_def = type_def,
-                        .is_mutable = is_mutable,
-                    },
+                    .block = try self.block(),
                 },
-            };
-        }
-
-        const value = switch (decl_type) {
-            .function_keyword => try self.parseFunctionLiteral(),
-            .enum_keyword => try self.parseEnumLiteral(),
-            else => try self.parseExpression(.lowest),
-        };
-        return .{
-            .token = self.current_token,
-            .type = .{
-                .declaration = .{
-                    .name = name,
-                    .value = value,
-                    .type_def = type_def,
-                    .is_mutable = is_mutable,
+            },
+            .comment => try self.commentStatement(),
+            else => .{
+                .token = self.current_token,
+                .type = .{
+                    .expression = try self.expression(.lowest),
                 },
             },
         };
     }
 
-    fn parseReturn(self: *Parser) Error!Statement {
+    fn structDeclaration(self: *Parser) Error!Statement {
+        var start = self.current_token;
+        self.next();
+        var name = try self.consumeIdentifier();
+        try self.expectCurrent(.left_brace);
+        self.next();
+
+        var fields = std.ArrayList(Expression).init(self.allocator);
+        errdefer fields.deinit();
+        while (!self.currentIs(.right_brace)) {
+            try fields.append(try self.expression(.lowest));
+            self.next();
+            if (self.currentIs(.comma)) self.next();
+        }
+        try self.expectCurrent(.right_brace);
+        return .{
+            .token = start,
+            .type = .{
+                .@"struct" = .{
+                    .name = name,
+                    .fields = try fields.toOwnedSlice(),
+                },
+            },
+        };
+    }
+
+    fn enumDeclaration(self: *Parser) Error!Statement {
+        var start = self.current_token;
+        self.next();
+        var name = try self.consumeIdentifier();
+        try self.expectCurrent(.left_brace);
+        self.next();
+        var values = std.ArrayList([]const u8).init(self.allocator);
+        errdefer values.deinit();
+        while (!self.currentIs(.right_brace)) {
+            try values.append(try self.consumeIdentifier());
+            if (self.currentIs(.comma)) self.next();
+        }
+        return .{
+            .token = start,
+            .type = .{
+                .@"enum" = .{
+                    .name = name,
+                    .values = try values.toOwnedSlice(),
+                },
+            },
+        };
+    }
+
+    fn fieldDeclaration(self: *Parser) Error!Statement {
+        var start = self.current_token;
+        var name = try self.consumeIdentifier();
+        try self.expectPeek(.equal);
+        self.next();
+        return .{
+            .token = start,
+            .type = .{
+                .variable = .{
+                    .name = name,
+                    .initializer = try self.expression(.lowest),
+                    .is_mutable = true,
+                    .is_extern = false,
+                },
+            },
+        };
+    }
+
+    fn varDeclaration(self: *Parser) Error!Statement {
         const start_token = self.current_token;
-        if (self.peekIs(.eol)) {
+        var is_extern = false;
+        if (self.currentIs(.@"extern")) {
+            is_extern = true;
+            self.next();
+        }
+        const is_mutable = self.currentIs(.@"var");
+        self.next();
+        const name = try self.consumeIdentifier();
+        try self.expectCurrent(.equal);
+        self.next();
+        return .{
+            .token = start_token,
+            .type = .{
+                .variable = .{
+                    .name = name,
+                    .initializer = try self.expression(.lowest),
+                    .is_mutable = is_mutable,
+                    .is_extern = is_extern,
+                },
+            },
+        };
+    }
+
+    fn boughStatement(self: *Parser) Error!Statement {
+        const start = self.current_token;
+        self.next();
+        var name = try self.consumeIdentifier();
+        var body = try self.block();
+        return .{
+            .token = start,
+            .type = .{
+                .bough = .{
+                    .name = name,
+                    .body = body,
+                },
+            },
+        };
+    }
+
+    fn returnStatement(self: *Parser) Error!Statement {
+        const start_token = self.current_token;
+        self.next();
+        if (self.currentIs(.void)) {
             return .{
                 .token = start_token,
                 .type = .return_void,
             };
         }
 
-        self.next();
         return .{
             .token = start_token,
             .type = .{
-                .return_expression = try self.parseExpression(.lowest),
+                .return_expression = try self.expression(.lowest),
             },
         };
     }
 
-    fn parseIdentifier(self: *Parser) Error!Expression {
+    fn identifierExpression(self: *Parser) Error!Expression {
         return .{
             .token = self.current_token,
             .type = .{
-                .identifier = try self.allocator.dupe(u8, self.source[self.current_token.start..self.current_token.end]),
+                .identifier = try self.getStringValue(),
             },
         };
     }
 
-    fn parseAssignment(self: *Parser, target: Expression) Error!Expression {
-        if (self.mode != .code) return self.fail("Assignemnt can only be used in code", self.current_token, .{});
+    fn assignment(self: *Parser, target: Expression) Error!Expression {
+        self.next();
         if (target.type != .identifier and target.type != .indexer)
             return self.fail("Expected identifier or index", target.token, .{});
 
@@ -293,45 +310,36 @@ pub const Parser = struct {
             .type = .{
                 .assignment = .{
                     .target = try self.allocate(target),
-                    .value = try self.allocate(try self.parseExpression(.lowest)),
+                    .value = try self.allocate(try self.expression(.lowest)),
                 },
             },
         };
     }
 
-    fn parseExpressionStatement(self: *Parser) Error!Statement {
+    fn expressionStatement(self: *Parser) Error!Statement {
         return .{
             .token = self.current_token,
             .type = .{
-                .expression = try if (self.mode == .code) self.parseExpression(.lowest) else self.parseContentExpression(),
+                .expression = try self.expression(.lowest),
             },
         };
     }
 
-    fn parseExpression(self: *Parser, prec: Precedence) Error!Expression {
+    fn expression(self: *Parser, prec: Precedence) Error!Expression {
         var left: Expression = switch (self.current_token.token_type) {
-            .identifier => try self.parseIdentifier(),
-            .integer => blk: {
+            .colon => try self.dialogueExpression(),
+            .identifier => try self.identifierExpression(),
+            .number => blk: {
                 const string_number = self.source[self.current_token.start..self.current_token.end];
-                const value = try std.fmt.parseInt(i32, string_number, 10);
+                const value = try std.fmt.parseFloat(f64, string_number);
                 break :blk .{
                     .token = self.current_token,
                     .type = .{
-                        .integer_literal = value,
+                        .number = value,
                     },
                 };
             },
-            .float => blk: {
-                const string_number = self.source[self.current_token.start..self.current_token.end];
-                const value = try std.fmt.parseFloat(f32, string_number);
-                break :blk .{
-                    .token = self.current_token,
-                    .type = .{
-                        .float_literal = value,
-                    },
-                };
-            },
-            .string => try self.parseStringLiteral(),
+            .string => try self.stringExpression(),
             .bang, .minus => blk: {
                 const start_token = self.current_token;
                 self.next();
@@ -340,7 +348,7 @@ pub const Parser = struct {
                     .type = .{
                         .unary = .{
                             .operator = ast.UnaryOp.fromToken(start_token),
-                            .value = try self.allocate(try self.parseExpression(.prefix)),
+                            .value = try self.allocate(try self.expression(.prefix)),
                         },
                     },
                 };
@@ -348,81 +356,50 @@ pub const Parser = struct {
             .true, .false => .{
                 .token = self.current_token,
                 .type = .{
-                    .boolean_literal = self.currentIs(.true),
+                    .boolean = self.currentIs(.true),
                 },
             },
-            .@"if" => try self.parseIfExpression(),
+            .@"if" => try self.ifExpression(),
             // group
-            .left_parenthesis => blk: {
+            .left_paren => blk: {
                 self.next();
-                const exp = try self.parseExpression(.lowest);
-                try self.expectPeek(.right_parenthesis);
+                const exp = try self.expression(.lowest);
+                try self.expectPeek(.right_paren);
                 break :blk exp;
             },
             // map or set
-            .left_brace => try self.parseMapSetLiteral(),
+            .left_brace => try self.mapSetExpression(),
             // list
-            .left_bracket => blk: {
-                const start_token = self.current_token;
-                self.next(); // skip bracket
-                var list = std.ArrayList(Expression).init(self.allocator);
-                errdefer list.deinit();
-                if (self.currentIs(.right_bracket)) break :blk .{
-                    .token = start_token,
-                    .type = .{
-                        .list_literal = try list.toOwnedSlice(),
-                    },
-                };
-
-                try list.append(try self.parseExpression(.lowest));
-                while (self.peekIs(.comma)) {
-                    self.next(); // skip comma
-                    self.next();
-                    try list.append(try self.parseExpression(.lowest));
-                }
-                try self.expectPeek(.right_bracket);
-                break :blk .{
-                    .token = start_token,
-                    .type = .{
-                        .list_literal = try list.toOwnedSlice(),
-                    },
-                };
-            },
+            .left_bracket => try self.listExpression(),
+            .new => try self.structExpression(),
+            .pipe => try self.functionExpression(),
             .nil => .{ .token = self.current_token, .type = .nil },
             else => return self.fail("Unexpected token in expression: {}", self.current_token, .{self.current_token.token_type}),
         };
 
         while (prec.val() < findPrecedence(self.peek_token.token_type).val()) {
             left = switch (self.peek_token.token_type) {
-                .left_parenthesis => blk: {
-                    self.next();
-                    break :blk try self.parseCallExpression(left);
-                },
-                .left_bracket, .period => blk: {
-                    self.next();
-                    break :blk try self.parseIndexExpression(left);
-                },
-                .assign => blk: {
-                    self.next();
-                    break :blk try self.parseAssignment(left);
-                },
-                .double_period => blk: {
-                    self.next();
-                    break :blk try self.parseRange(left);
-                },
+                .left_paren => try self.callExpression(left),
+                .left_bracket, .dot => try self.indexExpression(left),
+                .equal => try self.assignment(left),
+                .dot_dot => try self.range(left),
                 .plus,
                 .minus,
                 .slash,
-                .asterisk,
+                .star,
                 .percent,
-                .equal,
-                .not_equal,
-                .less_than,
-                .greater_than,
-                .less_than_equal,
-                .greater_than_equal,
+                .equal_equal,
+                .bang_equal,
+                .less,
+                .greater,
+                .less_equal,
+                .greater_equal,
                 .@"and",
                 .@"or",
+                .plus_equal,
+                .minus_equal,
+                .star_equal,
+                .slash_equal,
                 => blk: {
                     self.next();
                     const start_token = self.current_token;
@@ -435,7 +412,7 @@ pub const Parser = struct {
                             .binary = .{
                                 .operator = op,
                                 .left = try self.allocate(left),
-                                .right = try self.allocate(try self.parseExpression(inner_prec)),
+                                .right = try self.allocate(try self.expression(inner_prec)),
                             },
                         },
                     };
@@ -447,25 +424,130 @@ pub const Parser = struct {
         return left;
     }
 
-    fn parseStringLiteral(self: *Parser) Error!Expression {
-        const token = self.current_token;
+    fn functionExpression(self: *Parser) Error!Expression {
+        var start = self.current_token;
+        var list = ArrayList([]const u8).init(self.allocator);
+        errdefer list.deinit();
+        self.next();
+        while (!self.currentIs(.pipe)) {
+            try list.append(try self.consumeIdentifier());
+            if (self.currentIs(.comma) or self.peekIs(.pipe)) self.next();
+        }
+
+        self.next();
         return .{
-            .token = token,
+            .token = start,
             .type = .{
-                .string_literal = try self.allocator.dupe(u8, self.source[token.start..token.end]),
+                .function = .{
+                    .parameters = try list.toOwnedSlice(),
+                    .body = try self.block(),
+                },
             },
         };
     }
 
-    fn parseMapPairSetKey(self: *Parser) Error!Expression {
+    // if no braces used will parse a single statement into a list
+    fn block(self: *Parser) Error![]const Statement {
+        var list = std.ArrayList(Statement).init(self.allocator);
+        if (!self.currentIs(.left_brace)) {
+            try list.append(try self.statement());
+            return try list.toOwnedSlice();
+        }
+        self.next();
+        while (!self.currentIs(.right_brace)) {
+            try list.append(try self.statement());
+            self.next();
+        }
+        return try list.toOwnedSlice();
+    }
+
+    fn structExpression(self: *Parser) Error!Expression {
+        var start = self.current_token;
+        self.next();
+        const name = try self.consumeIdentifier();
+        try self.expectCurrent(.left_brace);
+        self.next();
+        var assignments = std.ArrayList(Expression).init(self.allocator);
+        while (!self.currentIs(.right_brace)) {
+            try assignments.append(try self.expression(.lowest));
+            if (self.currentIs(.comma)) self.next();
+            if (self.peekIs(.right_brace)) self.next();
+        }
+        return .{
+            .token = start,
+            .type = .{
+                .@"struct" = .{
+                    .name = name,
+                    .assignments = try assignments.toOwnedSlice(),
+                },
+            },
+        };
+    }
+
+    fn stringExpression(self: *Parser) Error!Expression {
+        var token = self.current_token;
+        var value: []const u8 = "";
+        var depth: usize = 0;
+        var start: usize = token.start;
+
+        var exprs = std.ArrayList(Expression).init(self.allocator);
+        errdefer exprs.deinit();
+        for (self.source[token.start..token.end], 0..) |char, i| {
+            if (char == '{') {
+                if (depth == 0) {
+                    value = try std.fmt.allocPrint(self.allocator, "{s}{s}{s}", .{ value, self.source[start..(start + i)], "{}" });
+                    start = token.start + i + 1;
+                }
+                depth += 1;
+            }
+            if (char == '}') {
+                depth -= 1;
+                if (depth == 0) {
+                    std.log.warn("{s}", .{self.source[start..(start + i)]});
+                    try self.parseInterpolatedExpression(self.source[start..(start + i - 1)], &exprs);
+                    start = token.start + i + 1;
+                }
+            }
+        }
+        value = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ value, self.source[start..token.end] });
+        return .{
+            .token = token,
+            .type = .{
+                .string = .{
+                    .value = value,
+                    .expressions = try exprs.toOwnedSlice(),
+                },
+            },
+        };
+    }
+
+    fn parseInterpolatedExpression(self: *Parser, source: []const u8, exprs: *std.ArrayList(Expression)) !void {
+        var lexer = Lexer.init(source);
+
+        var parser = Parser{
+            .current_token = lexer.next(),
+            .peek_token = lexer.next(),
+            .arena = self.arena,
+            .allocator = self.allocator,
+            .lexer = &lexer,
+            .source = source,
+            .err = self.err,
+        };
+
+        while (!parser.currentIs(.eof)) : (parser.next()) {
+            try exprs.append(try parser.expression(.lowest));
+        }
+    }
+
+    fn mapPairSetKey(self: *Parser) Error!Expression {
         const start_token = self.current_token;
-        const key = try self.parseExpression(.lowest);
-        // set value
+        defer self.next();
+
+        var key = try self.expression(.lowest);
         if (!self.peekIs(.colon)) return key;
         self.next();
         self.next();
-
-        const value = try self.parseExpression(.lowest);
+        const value = try self.expression(.lowest);
         return .{
             .token = start_token,
             .type = .{
@@ -477,458 +559,239 @@ pub const Parser = struct {
         };
     }
 
-    fn parseMapSetLiteral(self: *Parser) Error!Expression {
+    fn listExpression(self: *Parser) Error!Expression {
+        const start_token = self.current_token;
+        self.next();
+        var list = std.ArrayList(Expression).init(self.allocator);
+        errdefer list.deinit();
+        while (!self.currentIs(.right_bracket)) {
+            try list.append(try self.expression(.lowest));
+            if (self.currentIs(.comma) or self.peekIs(.right_bracket)) self.next();
+        }
+        return .{
+            .token = start_token,
+            .type = .{
+                .list = try list.toOwnedSlice(),
+            },
+        };
+    }
+
+    fn mapSetExpression(self: *Parser) Error!Expression {
         const start_token = self.current_token;
         var list = std.ArrayList(Expression).init(self.allocator);
         errdefer list.deinit();
-        self.next(); // skip brace
-
-        // empty set
-        if (self.currentIs(.right_brace)) {
-            self.next();
-            return .{ .token = start_token, .type = .{ .set_literal = try list.toOwnedSlice() } };
-        }
-        // empty map
-        if (self.currentIs(.colon)) {
-            try self.expectPeek(.right_brace);
-            return .{ .token = start_token, .type = .{ .map_literal = try list.toOwnedSlice() } };
-        }
-
-        const first = try self.parseMapPairSetKey();
-        const is_map = first.type == .map_pair;
-        try list.append(first);
-        while (self.peekIs(.comma)) {
-            self.next(); // skip comma
-            self.next();
-            const item = try self.parseMapPairSetKey();
-            if ((is_map and item.type != .map_literal) or (!is_map and item.type == .map_literal)) return self.fail("Items are not of same type", item.token, .{});
-            try list.append(item);
-        }
-        try self.expectPeek(.right_brace);
-        if (is_map) return .{ .token = start_token, .type = .{ .map_literal = try list.toOwnedSlice() } };
-        return .{ .token = start_token, .type = .{ .set_literal = try list.toOwnedSlice() } };
-    }
-
-    fn parseIfExpression(self: *Parser) Error!Expression {
-        try self.expectPeek(.left_parenthesis);
-        self.next(); // skip if
-        const condition = try self.allocate(try self.parseExpression(.lowest));
-        try self.expectPeek(.right_parenthesis);
         self.next();
 
-        const true_value = try self.allocate(try self.parseExpression(.lowest));
+        if (self.currentIs(.right_brace)) {
+            return .{ .token = start_token, .type = .{ .set = try list.toOwnedSlice() } };
+        }
+        if (self.currentIs(.colon)) {
+            self.next();
+            try self.expectCurrent(.right_brace);
+            return .{ .token = start_token, .type = .{ .map = try list.toOwnedSlice() } };
+        }
+
+        const first = try self.mapPairSetKey();
+        const is_map = first.type == .map_pair;
+        const type_name = if (is_map) "map" else "set";
+        try list.append(first);
+        while (!self.currentIs(.right_brace)) {
+            const item = try self.mapPairSetKey();
+            if ((is_map and item.type != .map_pair) or (!is_map and item.type == .map_pair))
+                return self.fail("Item type '{s}' cannot be added to type {s}", item.token, .{ @tagName(item.type), type_name });
+            try list.append(item);
+            if (self.currentIs(.comma) or self.peekIs(.right_brace)) self.next();
+        }
+        if (is_map) return .{ .token = start_token, .type = .{ .map = try list.toOwnedSlice() } };
+        return .{ .token = start_token, .type = .{ .set = try list.toOwnedSlice() } };
+    }
+
+    fn ifExpression(self: *Parser) Error!Expression {
+        try self.expectPeek(.left_paren);
+        self.next(); // skip if
+        const condition = try self.allocate(try self.expression(.lowest));
+        try self.expectPeek(.right_paren);
+        self.next();
+
+        const true_value = try self.allocate(try self.expression(.lowest));
         try self.expectPeek(.@"else");
         self.next();
-        if (self.peekIs(.@"if")) {
-            self.next();
-            const false_value = try self.allocate(try self.parseExpression(.lowest));
-            return .{
-                .token = self.current_token,
-                .type = .{
-                    .if_expression = .{
-                        .condition = condition,
-                        .true_value = true_value,
-                        .false_value = false_value,
-                    },
-                },
-            };
-        }
-
-        const false_value = try self.allocate(try self.parseExpression(.lowest));
+        const false_value = try self.allocate(try self.expression(.lowest));
         return .{
             .token = self.current_token,
             .type = .{
-                .if_expression = .{
+                .@"if" = .{
                     .condition = condition,
-                    .true_value = true_value,
-                    .false_value = false_value,
+                    .then_value = true_value,
+                    .else_value = false_value,
                 },
             },
         };
     }
 
-    fn parseIfStatement(self: *Parser) Error!Statement {
-        try self.expectPeek(.left_parenthesis);
+    fn ifStatement(self: *Parser) Error!Statement {
+        try self.expectPeek(.left_paren);
         self.next(); // skip if
-        const condition = try self.allocate(try self.parseExpression(.lowest));
-        try self.expectPeek(.right_parenthesis);
-        try self.expectPeek(.left_brace);
+        const condition = try self.allocate(try self.expression(.lowest));
+        try self.expectPeek(.right_paren);
+        self.next();
 
-        const true_body = try self.allocate(try self.parseBlockStatement());
-
-        if (self.peekIs(.@"else")) {
-            self.next();
-            if (self.peekIs(.@"if")) {
-                self.next();
-                const false_body = try self.allocate(try self.parseBlockStatement());
-                return .{
-                    .token = self.current_token,
-                    .type = .{
-                        .if_statement = .{
-                            .condition = condition,
-                            .true_body = true_body,
-                            .false_body = false_body,
-                        },
-                    },
-                };
-            }
-
-            try self.expectPeek(.left_brace);
-            const false_body = try self.allocate(try self.parseBlockStatement());
-            return .{
-                .token = self.current_token,
-                .type = .{
-                    .if_statement = .{
-                        .condition = condition,
-                        .true_body = true_body,
-                        .false_body = false_body,
-                    },
-                },
-            };
-        }
-
-        return .{
+        const true_body = try self.block();
+        if (!self.peekIs(.@"else")) return .{
             .token = self.current_token,
             .type = .{
-                .if_statement = .{
+                .@"if" = .{
                     .condition = condition,
-                    .true_body = true_body,
-                    .false_body = null,
+                    .then_branch = true_body,
+                    .else_branch = null,
                 },
             },
         };
-    }
-
-    // const x: bool = true => 'bool'
-    fn parseTypeDefValue(self: *Parser) Error!*Statement.TypeDefValue {
-        return try self.allocate(switch (self.current_token.token_type) {
-            .enum_keyword => .enum_type,
-            .bool_keyword => .boolean_type,
-            .integer_keyword => .integer_type,
-            .float_keyword => .float_type,
-            .string_keyword => .string_type,
-            .void_keyword => .void_type,
-            .function_keyword => blk: {
-                self.next(); // skip func keyword
-                const params = try self.parseFunctionParameters();
-                self.next(); // skip right parenthesis
-                break :blk Statement.TypeDefValue{
-                    .function_type = .{
-                        .params = params,
-                        .return_type = try self.parseTypeDefValue(),
-                    },
-                };
-            },
-            .left_bracket => blk: {
-                try self.expectPeek(.right_bracket);
-                self.next();
-                break :blk Statement.TypeDefValue{
-                    .list_type = try self.parseTypeDefValue(),
-                };
-            },
-            .left_brace => blk: {
-                try self.expectPeek(.right_brace);
-                self.next();
-                const key_type = try self.parseTypeDefValue();
-                if (self.peekIs(.comma)) {
-                    self.next();
-                    self.next();
-                    const value_type = try self.parseTypeDefValue();
-                    break :blk Statement.TypeDefValue{
-                        .map_type = .{
-                            .key_type = key_type,
-                            .value_type = value_type,
-                        },
-                    };
-                }
-                break :blk Statement.TypeDefValue{ .set_type = key_type };
-            },
-            .identifier => Statement.TypeDefValue{
-                .identifier_type = try self.allocator.dupe(u8, self.source[self.current_token.start..self.current_token.end]),
-            },
-            else => return self.fail("Unexpected token as type", self.current_token, .{}),
-        });
-    }
-
-    fn parseSplit(self: *Parser) Error!Statement {
-        self.depth += 1;
-        defer self.depth -= 1;
-        const start_token = self.current_token;
-
-        // -1 to account for backtick blocks
-        const column: usize = self.current_token.column + 1;
-        self.next(); // skip split
-        var content = try self.parseUntilEndOfLine();
-        self.next(); // skip eol
-        var list = ArrayList(Statement).init(self.allocator);
-        errdefer list.deinit();
-
-        while (!self.peekIs(.eof) and self.peek_token.column > column) {
-            var line = try self.parseStatement();
-            try list.append(line);
-            if (self.peek_token.column <= column) break;
-            self.next();
-        }
-
-        return .{
-            .token = start_token,
-            .type = .{
-                .split = .{
-                    .content = content,
-                    .body = try list.toOwnedSlice(),
-                },
-            },
-        };
-    }
-
-    fn parseJump(self: *Parser) Error!Statement {
-        const start_token = self.current_token;
-        try self.expectPeek(.identifier);
-        const destination = try self.parseExpression(.lowest);
-
-        if (!self.peekIs(.eol) and !self.peekIs(.eof)) {
-            return self.fail("Jumps must be on their own line", self.peek_token, .{});
-        }
-        self.next(); // skip eol
-        return .{
-            .token = start_token,
-            .type = .{
-                .jump = destination,
-            },
-        };
-    }
-
-    fn parseUntilEndOfLine(self: *Parser) Error![]const Statement {
-        var list = ArrayList(Statement).init(self.allocator);
-        errdefer list.deinit();
-        while (!self.currentIsOneOf(&[_]TokenType{ .eol, .eof })) {
-            const item = try self.parseStatement();
-            try list.append(item);
-            self.next();
-        }
-        return list.toOwnedSlice();
-    }
-
-    fn parseDialogueLine(self: *Parser) Error!Statement {
-        const start_token = self.current_token;
-        var speaker: ?Expression = null;
-        if (!self.peekIs(.colon)) {
-            try self.expectPeek(.identifier);
-            speaker = try self.parseIdentifier();
-        }
-        try self.expectPeek(.colon);
         self.next();
-        return .{
-            .token = start_token,
-            .type = .{
-                .line = .{
-                    .speaker = speaker,
-                    .content = try self.parseUntilEndOfLine(),
-                },
-            },
-        };
-    }
-
-    fn parseContentExpression(self: *Parser) Error!Expression {
-        const start_token = self.current_token;
-        var end: usize = start_token.end;
-        while (!self.peekIsOneOf(&[_]TokenType{ .eol, .eof, .backtick }) and self.mode == .content) {
-            self.next();
-            end = self.peek_token.start;
-        }
-        var content = try self.allocator.dupe(u8, self.source[start_token.start..end]);
-
-        // hacky
-        if (content.len > 0 and content[content.len - 1] == '`') content = content[0 .. content.len - 1];
-        return .{
-            .token = start_token,
-            .type = .{
-                .content = content,
-            },
-        };
-    }
-
-    fn parseTag(self: *Parser) Error!Expression {
-        const start_token = self.current_token;
-        var end: usize = start_token.end;
-        while (!self.peekIsOneOf(&[_]TokenType{ .eol, .eof, .hash })) {
-            self.next();
-            end = self.current_token.end;
-        }
-        const tag = try self.allocator.dupe(u8, self.source[start_token.start..end]);
-        return .{
-            .token = start_token,
-            .type = .{ .tag = tag },
-        };
-    }
-
-    fn parseBlockStatement(self: *Parser) Error!Statement {
-        self.depth += 1;
-        defer self.depth -= 1;
-        const start_token = self.current_token;
-        const closing_token = switch (start_token.token_type) {
-            .left_brace => .right_brace,
-            .split => .gather,
-            else => start_token.token_type,
-        };
-
-        if (self.currentIs(.bough)) {
-            self.mode = .content;
-        } else if (self.currentIs(.blackboard)) {
-            self.mode = .code;
-        }
-
-        self.next(); //skip opening token
-        const name = switch (closing_token) {
-            .bough, .twig => blk: {
-                try self.expectCurrent(.identifier);
-                const name = try self.allocator.dupe(u8, self.source[self.current_token.start..self.current_token.end]);
-                // omit any additional closing token on this line
-                if (self.peekIs(closing_token)) self.next();
-                try self.expectPeek(.eol);
-                break :blk name;
-            },
-            else => null,
-        };
-
-        var list = ArrayList(Statement).init(self.allocator);
-        errdefer list.deinit();
-        while (!self.currentIs(closing_token) and !self.currentIs(.eof)) {
-            // properly close off content blocks
-            if (self.currentIs(.eol) and self.peekIs(closing_token)) {
-                self.next();
-                break;
-            }
-            const exp = try self.parseStatement();
-            try list.append(exp);
-            self.next();
-        }
-
-        if (closing_token == .bough or closing_token == .blackboard) {
-            self.mode = .root;
-        }
-
-        return .{
-            .token = start_token,
-            .type = .{
-                .block = .{
-                    .name = name,
-                    .body = try list.toOwnedSlice(),
-                },
-            },
-        };
-    }
-
-    fn parseFunctionLiteral(self: *Parser) Error!Expression {
+        self.next();
+        const false_body = try self.block();
         return .{
             .token = self.current_token,
             .type = .{
-                .function_literal = try self.allocate(try self.parseBlockStatement()),
-            },
-        };
-    }
-
-    fn parseFunctionParameters(self: *Parser) Error![]const Statement {
-        var list = ArrayList(Statement).init(self.allocator);
-        errdefer list.deinit();
-        self.next(); // skip left_parenthesis
-        if (self.currentIs(.right_parenthesis)) {
-            return list.toOwnedSlice();
-        }
-
-        try list.append(try self.parseParameter());
-        while (self.peekIs(.comma)) {
-            self.next();
-            self.next();
-            try list.append(try self.parseParameter());
-        }
-
-        try self.expectPeek(.right_parenthesis);
-        return list.toOwnedSlice();
-    }
-
-    fn parseParameter(self: *Parser) Error!Statement {
-        const start_token = self.current_token;
-        const name = try self.allocator.dupe(u8, self.source[self.current_token.start..self.current_token.end]);
-
-        try self.expectPeek(.colon);
-        self.next();
-        const type_def = try self.parseTypeDefValue();
-        return .{
-            .token = start_token,
-            .type = .{
-                .function_parameter = .{
-                    .name = name,
-                    .type_def = type_def,
+                .@"if" = .{
+                    .condition = condition,
+                    .then_branch = true_body,
+                    .else_branch = false_body,
                 },
             },
         };
     }
 
-    fn parseArguments(self: *Parser, comptime end_type: TokenType) Error![]Expression {
+    fn jumpStatement(self: *Parser) Error!Statement {
+        const start_token = self.current_token;
+        // TODO: Perhaps this should just be an expression and indexers used
+        var list = std.ArrayList([]const u8).init(self.allocator);
+        errdefer list.deinit();
+        try self.expectPeek(.identifier);
+        try list.append(try self.getStringValue());
+        while (self.peekIs(.dot)) {
+            self.next();
+            self.next();
+            try list.append(try self.getStringValue());
+        }
+
+        return .{
+            .token = start_token,
+            .type = .{
+                .jump = try list.toOwnedSlice(),
+            },
+        };
+    }
+
+    fn forkStatement(self: *Parser) Error!Statement {
+        const start = self.current_token;
+        var name: ?[]const u8 = null;
+        self.next();
+        if (self.currentIs(.identifier)) name = try self.consumeIdentifier();
+        return .{
+            .token = start,
+            .type = .{
+                .fork = .{
+                    .name = name,
+                    .body = try self.block(),
+                },
+            },
+        };
+    }
+
+    fn choiceStatement(self: *Parser) Error!Statement {
+        const start = self.current_token;
+        self.next();
+        var text = try self.stringExpression();
+        self.next();
+        return .{
+            .token = start,
+            .type = .{
+                .choice = .{
+                    .text = text,
+                    .body = try self.block(),
+                },
+            },
+        };
+    }
+
+    fn dialogueExpression(self: *Parser) Error!Expression {
+        const start_token = self.current_token;
+        self.next();
+        var speaker: ?[]const u8 = null;
+        if (self.currentIs(.identifier)) {
+            speaker = try self.consumeIdentifier();
+        }
+        try self.expectCurrent(.colon);
+        self.next();
+        var text = try self.stringExpression();
+        var tags = std.ArrayList([]const u8).init(self.allocator);
+        while (self.peekIs(.hash)) {
+            self.next();
+            try tags.append(try self.getStringValue());
+        }
+
+        return .{
+            .token = start_token,
+            .type = .{
+                .dialogue = .{
+                    .speaker = speaker,
+                    .content = try self.allocate(text),
+                    .tags = try tags.toOwnedSlice(),
+                },
+            },
+        };
+    }
+
+    fn arguments(self: *Parser) Error![]Expression {
         var list = ArrayList(Expression).init(self.allocator);
         errdefer list.deinit();
 
         // no arguments
-        if (self.peekIs(end_type)) {
+        if (self.peekIs(.right_paren)) {
             self.next();
             return list.toOwnedSlice();
         }
 
         self.next();
-        try list.append(try self.parseExpression(.lowest));
+        try list.append(try self.expression(.lowest));
 
         while (self.peekIs(.comma)) {
             self.next();
             self.next();
-            try list.append(try self.parseExpression(.lowest));
+            try list.append(try self.expression(.lowest));
         }
-        try self.expectPeek(end_type);
+        try self.expectPeek(.right_paren);
         return list.toOwnedSlice();
     }
 
-    fn parseCallExpression(self: *Parser, func: Expression) Error!Expression {
+    fn callExpression(self: *Parser, func: Expression) Error!Expression {
+        self.next();
         return .{
             .token = self.current_token,
             .type = .{
                 .call = .{
                     .name = try self.allocate(func),
-                    .arguments = try self.parseArguments(.right_parenthesis),
+                    .arguments = try self.arguments(),
                 },
             },
         };
     }
 
-    fn parseEnumLiteral(self: *Parser) Error!Expression {
-        const start_token = self.current_token;
-        var enums = std.ArrayList(Expression).init(self.allocator);
-        errdefer enums.deinit();
-        self.next(); // skip brace
-        try enums.append(try self.parseIdentifier());
-        while (self.peekIs(.comma)) {
-            self.next(); // skip identifier
-            if (self.peekIs(.right_brace)) break;
-            self.next(); // skip comma
-            try enums.append(try self.parseIdentifier());
-        }
-
-        try self.expectPeek(.right_brace);
-        return .{ .token = start_token, .type = .{ .enum_literal = try enums.toOwnedSlice() } };
-    }
-
-    fn parseIndexExpression(self: *Parser, value: Expression) Error!Expression {
+    fn indexExpression(self: *Parser, target: Expression) Error!Expression {
+        self.next();
         const start_token = self.current_token;
         self.next();
-        const index_node = if (start_token.token_type == .period) blk: {
+        const index = if (start_token.token_type == .dot) blk: {
             if (!self.currentIs(.identifier))
                 return self.fail("Expected identifier after index '.', found {}", self.current_token, .{self.current_token.token_type});
-            break :blk try self.parseStringLiteral();
+            break :blk try self.stringExpression();
         } else if (!self.currentIs(.colon))
-            try self.parseExpression(.lowest)
+            try self.expression(.lowest)
         else
             unreachable;
 
-        if (start_token.token_type != .period) {
+        if (start_token.token_type != .dot) {
             try self.expectPeek(.right_bracket);
         }
 
@@ -936,84 +799,82 @@ pub const Parser = struct {
             .token = start_token,
             .type = .{
                 .indexer = .{
-                    .index = try self.allocate(index_node),
-                    .value = try self.allocate(value),
+                    .target = try self.allocate(target),
+                    .index = try self.allocate(index),
                 },
             },
         };
     }
 
-    fn parseWhile(self: *Parser) Error!Statement {
+    fn whileStatement(self: *Parser) Error!Statement {
         const start_token = self.current_token;
-        try self.expectPeek(.left_parenthesis);
+        try self.expectPeek(.left_paren);
         self.next();
-        const condition = try self.parseExpression(.lowest);
-        try self.expectPeek(.right_parenthesis);
+        const condition = try self.expression(.lowest);
+        try self.expectPeek(.right_paren);
         try self.expectPeek(.left_brace);
-
-        const body = try self.parseBlockStatement();
         return .{
             .token = start_token,
             .type = .{
-                .while_loop = .{
+                .@"while" = .{
                     .condition = condition,
-                    .body = try self.allocate(body),
+                    .body = try self.block(),
                 },
             },
         };
     }
 
-    fn parseFor(self: *Parser) Error!Statement {
+    fn forStatement(self: *Parser) Error!Statement {
         const start_token = self.current_token;
-        try self.expectPeek(.left_parenthesis);
+        try self.expectPeek(.left_paren);
         self.next();
-        const iterator = try self.parseExpression(.lowest);
+        const iterator = try self.expression(.lowest);
         switch (iterator.type) {
             .range, .identifier => {},
             else => return self.fail("Expected list, set, map, or range in for loop, found {}", iterator.token, .{iterator.token.token_type}),
         }
 
-        try self.expectPeek(.right_parenthesis);
-        try self.expectPeek(.colon);
+        try self.expectPeek(.right_paren);
+        try self.expectPeek(.pipe);
         self.next();
-        const capture = try self.parseIdentifier();
+        const capture = try self.consumeIdentifier();
         try self.expectPeek(.left_brace);
-        const body = try self.parseBlockStatement();
+        const body = try self.block();
         return .{
             .token = start_token,
             .type = .{
-                .for_loop = .{
+                .@"for" = .{
                     .capture = capture,
                     .iterator = iterator,
-                    .body = try self.allocate(body),
+                    .body = body,
                 },
             },
         };
     }
 
-    fn parseRange(self: *Parser, left: Expression) Error!Expression {
+    fn range(self: *Parser, left: Expression) Error!Expression {
+        self.next();
         self.next();
         return .{
             .token = self.current_token,
             .type = .{
                 .range = .{
                     .left = try self.allocate(left),
-                    .right = try self.allocate(try self.parseExpression(.lowest)),
+                    .right = try self.allocate(try self.expression(.lowest)),
                 },
             },
         };
     }
-    //
-    // fn parseSwitchStatement(self: *Parser) Error!Node {
+    // fn switchStatement(self: *Parser) Error!Node {
     //     const node = try self.allocator.create(Node.SwitchLiteral);
     //     node.* = .{ .token = self.current_token, .capture = undefined, .prongs = undefined };
     //
-    //     try self.expectPeek(.left_parenthesis);
+    //     try self.expectPeek(.left_paren);
     //
     //     self.next();
-    //     node.capture = try self.parseExpression(.lowest);
+    //     node.capture = try self.expression(.lowest);
     //
-    //     try self.expectPeek(.right_parenthesis);
+    //     try self.expectPeek(.right_paren);
     //     try self.expectPeek(.left_brace);
     //
     //     self.next();
@@ -1030,13 +891,13 @@ pub const Parser = struct {
     //
     //     try self.expectPeek(.right_brace);
     //
-    //     return Node{ .switch_statement = node };
+    //     return Node{ .@"switch" = node };
     // }
     //
     // /// Parses a switch prong i.e. x: 5 + 5 into a `Node.SwitchProng`
-    // fn parseSwitchProng(self: *Parser) Error!Node {
+    // fn switchCase(self: *Parser) Error!Node {
     //     const node = try self.allocator.create(Node.SwitchProng);
-    //     node.* = .{ .token = undefined, .left = try self.parseExpression(.lowest), .right = undefined };
+    //     node.* = .{ .token = undefined, .left = try self.expression(.lowest), .right = undefined };
     //
     //     try self.expectPeek(.colon);
     //     node.token = self.current_token;
@@ -1045,28 +906,28 @@ pub const Parser = struct {
     //     node.right = if (self.currentIs(.left_brace))
     //         try self.parseBlockStatement(.right_brace)
     //     else
-    //         try self.parseExpressionStatement();
+    //         try self.expressionStatement();
     //
     //     return Node{ .switch_prong = node };
-    // }
     //
-    fn parseComment(self: *Parser) Error!Statement {
+    //
+    fn commentStatement(self: *Parser) Error!Statement {
         return .{
             .token = self.current_token,
             .type = .{
-                .comment = self.source[self.current_token.start..self.current_token.end],
+                .comment = try self.getStringValue(),
             },
         };
     }
 
-    fn parseBreak(self: *Parser) Error!Statement {
+    fn breakStatement(self: *Parser) Error!Statement {
         return .{
             .token = self.current_token,
             .type = .@"break",
         };
     }
 
-    fn parseContinue(self: *Parser) Error!Statement {
+    fn continueStatement(self: *Parser) Error!Statement {
         return .{
             .token = self.current_token,
             .type = .@"continue",
@@ -1118,59 +979,90 @@ pub const Parser = struct {
     }
 };
 
-test "Parse Import" {
-    const allocator = testing.allocator;
-    const input = "import \"./globals.topi\"";
-    var errors = Errors.init(allocator);
-    defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
-        try errors.write(input, std.io.getStdErr().writer());
-        return err;
-    };
-    defer tree.deinit();
-    try testing.expectEqualStrings("./globals.topi", tree.root[0].type.import);
-}
+// test "Parse Import" {
+//     const allocator = testing.allocator;
+//     const input = "import \"./globals.topi\"";
+//     var errors = Errors.init(allocator);
+//     defer errors.deinit();
+//     const tree = parse(allocator, input, &errors) catch |err| {
+//         try errors.write(input, std.io.getStdErr().writer());
+//         return err;
+//     };
+//     defer tree.deinit();
+//     try testing.expectEqualStrings("./globals.topi", tree.root[0].type.import);
+// }
 
 test "Parse Declaration" {
     var allocator = testing.allocator;
-    const test_cases = .{
-        .{ .input = "```\n const x: int = 5 ```", .id = "x", .value = 5, .mutable = false, .type = .integer },
-        .{ .input = "```\n var y: int = 50 ```", .id = "y", .value = 50, .mutable = true, .type = .integer },
-        .{ .input = "```\n var x: float = 2.0 ```", .id = "x", .value = 2.0, .mutable = true, .type = .float },
-        .{ .input = "```\n var b: bool = true ```", .id = "b", .value = true, .mutable = true, .type = .bool },
-        .{ .input = "```\n var s: string = \"STRING\" ```", .id = "s", .value = "STRING", .mutable = true, .type = .string },
+    var t =
+        \\ const intValue = 5
+        \\ var mutableValue = 1.2
+        \\ struct StructType {
+        \\     intField = 0
+        \\ }
+        \\ var structValue = new StructType{}
+        \\ enum EnumType {
+        \\     one,
+        \\     two,
+        \\ }
+        \\ const enumValue = EnumType.one
+    ;
+
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, t, &errors) catch |err| {
+        try errors.write(t, std.io.getStdErr().writer());
+        return err;
     };
+    defer tree.deinit();
+    try testing.expect(tree.root.len == 6);
+    try testing.expect(!tree.root[0].type.variable.is_mutable);
+    try testing.expect(tree.root[1].type.variable.is_mutable);
+    try testing.expect(tree.root[1].type.variable.initializer.type.number == 1.2);
 
-    inline for (test_cases) |case| {
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        const tree = parse(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer tree.deinit();
-        const node = tree.root[0].type.block.body[0];
-        const decl = node.type.declaration;
-        try testing.expectEqualStrings(case.id, decl.name);
+    try testing.expect(tree.root[2].type.@"struct".fields.len == 1);
+    try testing.expectEqualStrings("intField", tree.root[2].type.@"struct".fields[0].type.assignment.target.type.identifier);
+    try testing.expect(tree.root[2].type.@"struct".fields[0].type.assignment.value.*.type.number == 0);
 
-        switch (case.type) {
-            .integer => try testing.expect(case.value == decl.value.type.integer_literal),
-            .float => try testing.expect(case.value == decl.value.type.float_literal),
-            .bool => try testing.expect(case.value == decl.value.type.boolean_literal),
-            .string => try testing.expectEqualStrings(case.value, decl.value.type.string_literal),
-            else => unreachable,
-        }
-        try testing.expect(case.mutable == decl.is_mutable);
-    }
+    try testing.expect(tree.root[3].type.variable.is_mutable);
+    try testing.expectEqualStrings("StructType", tree.root[3].type.variable.initializer.type.@"struct".name);
+    try testing.expect(tree.root[3].type.variable.initializer.type.@"struct".assignments.len == 0);
+
+    try testing.expectEqualStrings("EnumType", tree.root[4].type.@"enum".name);
+    try testing.expect(tree.root[4].type.@"enum".values.len == 2);
+    try testing.expectEqualStrings("one", tree.root[4].type.@"enum".values[0]);
+    try testing.expectEqualStrings("two", tree.root[4].type.@"enum".values[1]);
+}
+
+test "Parse Function Declaration" {
+    var t =
+        \\ const sum = |x, y| return x + y
+        \\ const loop = |value, count| {
+        \\    var result = "This is a string"
+        \\    return result    
+        \\ }
+    ;
+    var allocator = testing.allocator;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, t, &errors) catch |err| {
+        try errors.write(t, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+    try testing.expect(tree.root.len == 2);
+    try testing.expect(!tree.root[0].type.variable.is_mutable);
+    try testing.expectEqualStrings("x", tree.root[0].type.variable.initializer.type.function.parameters[0]);
+    try testing.expectEqualStrings("y", tree.root[0].type.variable.initializer.type.function.parameters[1]);
+    try testing.expect(tree.root[0].type.variable.initializer.type.function.body.len == 1);
 }
 
 test "Parse Iteratable Types" {
     var allocator = testing.allocator;
     const test_cases = .{
-        .{ .input = "```\n const stringList: []string = [\"item\"] ```", .id = "stringList", .item_value = "item", .mutable = false, .type = .list, .item_type = .string },
-        .{ .input = "```\n var intList: []int = [50] ```", .id = "intList", .item_value = 50, .mutable = true, .type = .list, .item_type = .integer },
-        .{ .input = "```\n var floatSet: {}float = {2.0} ```", .id = "floatSet", .item_value = 2.0, .mutable = true, .type = .set, .item_type = .float },
-        .{ .input = "```\n var stringBoolMap: {}string,bool = {\"key\":true} ```", .id = "stringBoolMap", .item_value = true, .mutable = true, .type = .map, .item_type = .bool },
+        .{ .input = "const stringList = [\"item\"]", .id = "stringList", .item_value = "item", .mutable = false, .type = .list },
+        .{ .input = "var floatSet = {2.0}", .id = "floatSet", .item_value = 2.0, .mutable = true, .type = .set },
+        .{ .input = "var stringBoolMap = {\"key\":true}", .id = "stringBoolMap", .item_value = true, .mutable = true, .type = .map },
     };
 
     inline for (test_cases) |case| {
@@ -1181,31 +1073,24 @@ test "Parse Iteratable Types" {
             return err;
         };
         defer tree.deinit();
-        const node = tree.root[0].type.block.body[0];
-        const decl = node.type.declaration;
-        try testing.expectEqualStrings(case.id, decl.name);
+        const node = tree.root[0].type.variable;
+        try testing.expectEqualStrings(case.id, node.name);
 
         switch (case.type) {
-            .list => switch (case.item_type) {
-                .integer => try testing.expect(case.item_value == decl.value.type.list_literal[0].type.integer_literal),
-                .string => try testing.expectEqualStrings(case.item_value, decl.value.type.list_literal[0].type.string_literal),
-                else => unreachable,
-            },
-            .set => try testing.expect(case.item_value == decl.value.type.set_literal[0].type.float_literal),
-            .map => try testing.expect(case.item_value == decl.value.type.map_literal[0].type.map_pair.value.type.boolean_literal),
+            .list => try testing.expectEqualStrings(case.item_value, node.initializer.type.list[0].type.string.value),
+            .set => try testing.expect(case.item_value == node.initializer.type.set[0].type.number),
+            .map => try testing.expect(case.item_value == node.initializer.type.map[0].type.map_pair.value.type.boolean),
             else => unreachable,
         }
-        try testing.expect(case.mutable == decl.is_mutable);
+        try testing.expect(case.mutable == node.is_mutable);
     }
 }
 
 test "Parse Empty Iterable Types" {
     const allocator = testing.allocator;
     const input =
-        \\ ```
-        \\ const emptyMap: {}int,int = {:}
-        \\ const emptySet: {}int = {}
-        \\ ```
+        \\ const emptyMap = {:}
+        \\ const emptySet = {}
     ;
     var errors = Errors.init(allocator);
     defer errors.deinit();
@@ -1214,25 +1099,20 @@ test "Parse Empty Iterable Types" {
         return err;
     };
     defer tree.deinit();
-    var decl = tree.root[0].type.block.body[0].type.declaration;
+    var decl = tree.root[0].type.variable;
     try testing.expectEqualStrings("emptyMap", decl.name);
-    try testing.expect(decl.type_def.map_type.key_type.* == .integer_type);
-    try testing.expect(decl.type_def.map_type.value_type.* == .integer_type);
-    try testing.expect(decl.value.type.map_literal.len == 0);
+    try testing.expect(decl.initializer.type.map.len == 0);
 
-    decl = tree.root[0].type.block.body[1].type.declaration;
+    decl = tree.root[1].type.variable;
     try testing.expectEqualStrings("emptySet", decl.name);
-    try testing.expect(decl.type_def.set_type.* == .integer_type);
-    try testing.expect(decl.value.type.set_literal.len == 0);
+    try testing.expect(decl.initializer.type.set.len == 0);
 }
+
 test "Parse Extern" {
     var allocator = testing.allocator;
     const test_cases = .{
-        .{ .input = "```\n const x: int = extern ```", .id = "x", .mutable = false, .type = .integer },
-        .{ .input = "```\n var y: int = extern ```", .id = "y", .mutable = true, .type = .integer },
-        .{ .input = "```\n var x: float = extern ```", .id = "x", .mutable = true, .type = .float },
-        .{ .input = "```\n var b: bool = extern ```", .id = "b", .mutable = true, .type = .bool },
-        .{ .input = "```\n var s: string = extern ```", .id = "s", .mutable = true, .type = .string },
+        .{ .input = "extern const x = 0", .id = "x", .mutable = false, .@"extern" = true },
+        .{ .input = "extern var y = 0", .id = "y", .mutable = true, .@"extern" = true },
     };
 
     inline for (test_cases) |case| {
@@ -1243,29 +1123,26 @@ test "Parse Extern" {
             return err;
         };
         defer tree.deinit();
-        const node = tree.root[0].type.block.body[0];
-        const decl = node.type.declaration;
+        const decl = tree.root[0].type.variable;
         try testing.expectEqualStrings(case.id, decl.name);
-        try testing.expect(decl.value.type == Expression.Type.@"extern");
         try testing.expect(case.mutable == decl.is_mutable);
+        try testing.expect(case.@"extern" == decl.is_extern);
     }
 }
 
 test "Parse Enum" {
     const allocator = testing.allocator;
     const input =
-        \\ ```
-        \\ const e: enum = {
+        \\ enum E {
         \\     one,
         \\     two,
         \\ }
         \\
-        \\ const en: enum = {
-        \\     one,
-        \\     two
+        \\ enum En {
+        \\     three,
+        \\     four
         \\ }
-        \\ const val: en = one
-        \\ ```
+        \\ const val = En.three
     ;
     var errors = Errors.init(allocator);
     defer errors.deinit();
@@ -1274,82 +1151,36 @@ test "Parse Enum" {
         return err;
     };
     defer tree.deinit();
-    var node = tree.root[0].type.block.body[0];
-    var decl = node.type.declaration;
-    try testing.expectEqualStrings("e", decl.name);
-    var enum_literal = decl.value.type.enum_literal;
-    try testing.expectEqualStrings(enum_literal[0].type.identifier, "one");
-    try testing.expectEqualStrings(enum_literal[1].type.identifier, "two");
+    var decl = tree.root[0].type.@"enum";
+    try testing.expectEqualStrings("E", decl.name);
+    try testing.expectEqualStrings("one", decl.values[0]);
+    try testing.expectEqualStrings("two", decl.values[1]);
 
-    node = tree.root[0].type.block.body[1];
-    decl = node.type.declaration;
-    try testing.expectEqualStrings("en", decl.name);
-    enum_literal = decl.value.type.enum_literal;
-    try testing.expectEqualStrings(enum_literal[0].type.identifier, "one");
-    try testing.expectEqualStrings(enum_literal[1].type.identifier, "two");
+    decl = tree.root[1].type.@"enum";
+    try testing.expectEqualStrings("En", decl.name);
+    try testing.expectEqualStrings("three", decl.values[0]);
+    try testing.expectEqualStrings("four", decl.values[1]);
 
-    node = tree.root[0].type.block.body[2];
-    decl = node.type.declaration;
-    try testing.expectEqualStrings("val", decl.name);
-    try testing.expectEqualStrings("en", decl.type_def.identifier_type);
-    var ident = decl.value.type.identifier;
-    try testing.expectEqualStrings(ident, "one");
-}
-
-test "Parse Function" {
-    const input =
-        \\ ```
-        \\ const someFunc: func() void = {}
-        \\ const sum: func(x: int, y: int) int = {
-        \\     return x + 5
-        \\ }
-        \\ const someExtern: func(str: string) string = extern
-        \\ ```
-    ;
-    const allocator = testing.allocator;
-    var errors = Errors.init(allocator);
-    defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
-        try errors.write(input, std.io.getStdErr().writer());
-        return err;
-    };
-    defer tree.deinit();
-
-    const noop = tree.root[0].type.block.body[0].type.declaration.type_def.function_type;
-    try testing.expect(noop.params.len == 0);
-    try testing.expect(noop.return_type.* == .void_type);
-
-    const sumDecl = tree.root[0].type.block.body[1].type.declaration;
-    const sum = sumDecl.type_def.function_type;
-    try testing.expect(sum.params.len == 2);
-    try testing.expectEqualStrings(sum.params[0].type.function_parameter.name, "x");
-    try testing.expect(sum.params[0].type.function_parameter.type_def.* == .integer_type);
-    try testing.expectEqualStrings(sum.params[1].type.function_parameter.name, "y");
-    try testing.expect(sum.params[1].type.function_parameter.type_def.* == .integer_type);
-    try testing.expect(sum.return_type.* == .integer_type);
-
-    const body = sumDecl.value.type.function_literal.type.block.body[0];
-    const binary_exp = body.type.return_expression.type.binary;
-    try testing.expectEqual(binary_exp.operator, .add);
-    try testing.expectEqualStrings(binary_exp.left.type.identifier, "x");
-    try testing.expect(binary_exp.right.type.integer_literal == 5);
-
-    const someExternDecl = tree.root[0].type.block.body[2].type.declaration;
-    const someExtern = someExternDecl.type_def.function_type;
-    try testing.expect(someExtern.params.len == 1);
-    try testing.expectEqualStrings(someExtern.params[0].type.function_parameter.name, "str");
-    try testing.expect(someExtern.params[0].type.function_parameter.type_def.* == .string_type);
-    try testing.expect(someExtern.return_type.* == .string_type);
-    try testing.expect(someExternDecl.value.type == .@"extern");
+    var varDecl = tree.root[2].type.variable;
+    try testing.expectEqualStrings("val", varDecl.name);
+    try testing.expectEqualStrings("En", varDecl.initializer.type.indexer.target.type.identifier);
+    try testing.expectEqualStrings("three", varDecl.initializer.type.indexer.index.type.string.value);
 }
 
 test "Parse If" {
     const allocator = testing.allocator;
     const input =
-        \\```
-        \\ if (x < y) { return x }
-        \\ const a: string = if (true) "true" else "false"
-        \\ ```
+        \\ var value = 0
+        \\ if (true) value = 1
+        \\ else if (5 < 1) value = 2
+        \\ else value = 3
+        \\ const a = if (true) "true" else "false"
+        \\
+        \\ if (true) {
+        \\     value = 4  
+        \\ } else {
+        \\    value = 5    
+        \\ }
     ;
     var errors = Errors.init(allocator);
     defer errors.deinit();
@@ -1359,22 +1190,26 @@ test "Parse If" {
     };
     defer tree.deinit();
 
-    const if_state = tree.root[0].type.block.body[0].type.if_statement;
-    const ret_exp = if_state.true_body.type.block.body[0].type;
-    try testing.expect(ret_exp == .return_expression);
-    try testing.expectEqualStrings(ret_exp.return_expression.type.identifier, "x");
-    try tree.print(std.io.getStdErr().writer());
+    var if_stmt = tree.root[1].type.@"if";
+    try testing.expect(if_stmt.condition.type.boolean);
+    try testing.expect(if_stmt.then_branch[0].type.expression.type.assignment.value.type.number == 1);
+    try testing.expect(if_stmt.else_branch.?[0].type.@"if".then_branch[0].type.expression.type.assignment.value.type.number == 2);
+    try testing.expect(if_stmt.else_branch.?[0].type.@"if".else_branch.?[0].type.expression.type.assignment.value.type.number == 3);
 
-    const decl = tree.root[0].type.block.body[1].type.declaration;
-    try testing.expectEqualStrings("true", decl.value.type.if_expression.true_value.type.string_literal);
-    try testing.expectEqualStrings("false", decl.value.type.if_expression.false_value.type.string_literal);
+    const decl = tree.root[2].type.variable;
+    try testing.expectEqualStrings("true", decl.initializer.type.@"if".then_value.type.string.value);
+    try testing.expectEqualStrings("false", decl.initializer.type.@"if".else_value.type.string.value);
+
+    if_stmt = tree.root[3].type.@"if";
+
+    try testing.expect(if_stmt.condition.type.boolean);
+    try testing.expect(if_stmt.then_branch[0].type.expression.type.assignment.value.type.number == 4);
+    try testing.expect(if_stmt.else_branch.?[0].type.expression.type.assignment.value.type.number == 5);
 }
 
 test "Parse Call expression" {
     const input =
-        \\ ```
         \\ add(1, 2 * 3, 4 + 5)
-        \\ ```
     ;
     const allocator = testing.allocator;
     var errors = Errors.init(allocator);
@@ -1385,52 +1220,22 @@ test "Parse Call expression" {
     };
     defer tree.deinit();
 
-    const call = tree.root[0].type.block.body[0].type.expression.type.call;
-    try testing.expectEqualStrings(call.name.type.identifier, "add");
+    const call = tree.root[0].type.expression.type.call;
+    try testing.expectEqualStrings("add", call.name.type.identifier);
     try testing.expect(call.arguments.len == 3);
-    try testing.expect(call.arguments[0].type.integer_literal == 1);
-    try testing.expectEqual(call.arguments[1].type.binary.operator, .multiply);
-    try testing.expect(call.arguments[2].type.binary.right.type.integer_literal == 5);
-}
-
-test "Parse Unary Expression" {
-    const input =
-        \\ ```
-        \\ !true
-        \\ ```
-        \\
-        \\ ```
-        \\ -y
-        \\ ```
-    ;
-    const allocator = testing.allocator;
-    var errors = Errors.init(allocator);
-    defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
-        try errors.write(input, std.io.getStdErr().writer());
-        return err;
-    };
-    defer tree.deinit();
-    var unary = tree.root[0].type.block.body[0].type.expression.type.unary;
-    try testing.expect(unary.operator == .not);
-    try testing.expect(unary.value.type.boolean_literal == true);
-
-    unary = tree.root[1].type.block.body[0].type.expression.type.unary;
-    try testing.expect(unary.operator == .minus);
-    try testing.expectEqualStrings(unary.value.type.identifier, "y");
+    try testing.expect(call.arguments[0].type.number == 1);
+    try testing.expect(call.arguments[1].type.binary.operator == .multiply);
+    try testing.expect(call.arguments[2].type.binary.right.type.number == 5);
 }
 
 test "Parse For loop" {
     const input =
-        \\ ```
-        \\ for (list): item {
+        \\ for (list) |item| {
         \\ }
-        \\ for (0..10): i {
+        \\ for (0..10) |i| {
         \\ }
-        \\ for (map): key {
-        \\     const value: int = map[key]
+        \\ for (map) |keyValue| {
         \\ }
-        \\ ```
     ;
     const allocator = testing.allocator;
 
@@ -1442,26 +1247,23 @@ test "Parse For loop" {
     };
     defer tree.deinit();
 
-    var loop = tree.root[0].type.block.body[0].type.for_loop;
+    var loop = tree.root[0].type.@"for";
     try testing.expectEqualStrings("list", loop.iterator.type.identifier);
-    try testing.expectEqualStrings("item", loop.capture.type.identifier);
+    try testing.expectEqualStrings("item", loop.capture);
 
-    loop = tree.root[0].type.block.body[1].type.for_loop;
-    try testing.expect(loop.iterator.type.range.left.type.integer_literal == 0);
-    try testing.expect(loop.iterator.type.range.right.type.integer_literal == 10);
-    try testing.expectEqualStrings("i", loop.capture.type.identifier);
+    loop = tree.root[1].type.@"for";
+    try testing.expect(loop.iterator.type.range.left.type.number == 0);
+    try testing.expect(loop.iterator.type.range.right.type.number == 10);
+    try testing.expectEqualStrings("i", loop.capture);
 
-    loop = tree.root[0].type.block.body[2].type.for_loop;
+    loop = tree.root[2].type.@"for";
     try testing.expectEqualStrings("map", loop.iterator.type.identifier);
-    try testing.expectEqualStrings("key", loop.capture.type.identifier);
-    try testing.expect(loop.body.type.block.body[0].type == .declaration);
+    try testing.expectEqualStrings("keyValue", loop.capture);
 }
 
 test "Parse While loop" {
     const input =
-        \\ ```
         \\ while (x < y) { x }"
-        \\ ```
     ;
     const allocator = testing.allocator;
 
@@ -1472,20 +1274,18 @@ test "Parse While loop" {
         return err;
     };
     defer tree.deinit();
-    var loop = tree.root[0].type.block.body[0].type.while_loop;
+    var loop = tree.root[0].type.@"while";
     try testing.expect(loop.condition.type.binary.operator == .less_than);
-    try testing.expectEqualStrings("x", loop.body.type.block.body[0].type.expression.type.identifier);
+    try testing.expectEqualStrings("x", loop.body[0].type.expression.type.identifier);
 }
 
-test "Parse Limb > Branch > Line" {
-    const allocator = testing.allocator;
+test "Parse Bough" {
     const input =
-        \\ === BOUGH ===
-        \\     --- TWIG ---
-        \\     :Speaker: Text goes here
-        \\     ---
-        \\ ===
+        \\ === BOUGH {
+        \\     :Speaker: "Text goes here" # tagline #tagother#taglast
+        \\ }
     ;
+    const allocator = testing.allocator;
     var errors = Errors.init(allocator);
     defer errors.deinit();
     const tree = parse(allocator, input, &errors) catch |err| {
@@ -1493,25 +1293,23 @@ test "Parse Limb > Branch > Line" {
         return err;
     };
     defer tree.deinit();
-    const bough = tree.root[0];
-    try testing.expect(bough.token.token_type == .bough);
-    try testing.expectEqualStrings(bough.type.block.name.?, "BOUGH");
+    const bough = tree.root[0].type.bough;
+    try testing.expectEqualStrings(bough.name, "BOUGH");
 
-    const twig = bough.type.block.body[0];
-    try testing.expect(twig.token.token_type == .twig);
-    try testing.expectEqualStrings(twig.type.block.name.?, "TWIG");
-
-    const line = twig.type.block.body[0].type.line;
-    try testing.expectEqualStrings(line.speaker.?.type.identifier, "Speaker");
-    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "Text goes here");
+    const line = bough.body[0].type.expression.type.dialogue;
+    try testing.expectEqualStrings("Speaker", line.speaker.?);
+    try testing.expectEqualStrings("Text goes here", line.content.type.string.value);
+    try testing.expectEqualStrings("tagline", line.tags[0]);
+    try testing.expectEqualStrings("tagother", line.tags[1]);
+    try testing.expectEqualStrings("taglast", line.tags[2]);
 }
 
 test "Parse No Speaker" {
     const allocator = testing.allocator;
     const input =
-        \\  === BOUGH ===
-        \\      :: Text goes here
-        \\  ===
+        \\  === BOUGH {
+        \\      :: "Text goes here"
+        \\  }
     ;
     var errors = Errors.init(allocator);
     defer errors.deinit();
@@ -1520,46 +1318,16 @@ test "Parse No Speaker" {
         return err;
     };
     defer tree.deinit();
-    const line = tree.root[0].type.block.body[0].type.line;
+    const line = tree.root[0].type.bough.body[0].type.expression.type.dialogue;
     try testing.expect(line.speaker == null);
-    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "Text goes here");
-}
-
-test "Parse Multiple Limbs" {
-    const allocator = testing.allocator;
-    const input =
-        \\  === BOUGH ===
-        \\      :: Text goes here
-        \\  ===
-        \\  === SECOND ===
-        \\      :: And here
-        \\  ===
-    ;
-    var errors = Errors.init(allocator);
-    defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
-        try errors.write(input, std.io.getStdErr().writer());
-        return err;
-    };
-    defer tree.deinit();
-
-    var bough = tree.root[0].type.block;
-    var line = bough.body[0].type.line;
-    try testing.expectEqualStrings("BOUGH", bough.name.?);
-    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "Text goes here");
-
-    bough = tree.root[1].type.block;
-    line = bough.body[0].type.line;
-    try testing.expectEqualStrings("SECOND", bough.name.?);
-    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "And here");
+    try testing.expectEqualStrings("Text goes here", line.content.type.string.value);
 }
 
 test "Parse Jump" {
     const allocator = testing.allocator;
     const input =
-        \\  === BOUGH ===
-        \\      => JUMP_ID
-        \\  ===
+        \\  === BOUGH {}
+        \\  => BOUGH
     ;
     var errors = Errors.init(allocator);
     defer errors.deinit();
@@ -1568,19 +1336,22 @@ test "Parse Jump" {
         return err;
     };
     defer tree.deinit();
-    const jump = tree.root[0].type.block.body[0].type.jump;
-    try testing.expectEqualStrings(jump.type.identifier, "JUMP_ID");
+    const jump = tree.root[1].type.jump;
+    try testing.expectEqualStrings("BOUGH", jump[0]);
 }
 
-test "Parse Splits" {
+test "Parse Forks" {
     const allocator = testing.allocator;
     const input =
-        \\  === BOUGH ===
-        \\      -<  choice 1
-        \\          :Other: Response
-        \\      -<  choice 2
-        \\          :Other: Second Response
-        \\  ===
+        \\  === BOUGH {
+        \\      fork {
+        \\          ~ "choice 1" {
+        \\              :Other: "Response"
+        \\          }
+        \\          ~ "choice 2" => END
+        \\      }
+        \\  }
+        \\  === END {}
     ;
     var errors = Errors.init(allocator);
     defer errors.deinit();
@@ -1589,79 +1360,27 @@ test "Parse Splits" {
         return err;
     };
     defer tree.deinit();
-    // try tree.print(std.io.getStdErr().writer());
 
-    const body = tree.root[0].type.block.body;
-    var split = body[0].type.split;
-    try testing.expectEqualStrings(split.content[0].type.expression.type.content, "choice 1");
+    var fork = tree.root[0].type.bough.body[0].type.fork;
+    try testing.expect(fork.name == null);
 
-    var line = split.body[0].type.line;
-    try testing.expectEqualStrings(line.speaker.?.type.identifier, "Other");
-    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "Response");
+    var choice = fork.body[0].type.choice;
+    try testing.expectEqualStrings("choice 1", choice.text.type.string.value);
+    var line = choice.body[0].type.expression.type.dialogue;
+    try testing.expectEqualStrings("Other", line.speaker.?);
+    try testing.expectEqualStrings("Response", line.content.type.string.value);
 
-    split = body[1].type.split;
-    try testing.expectEqualStrings(split.content[0].type.expression.type.content, "choice 2");
-    line = split.body[0].type.line;
-    try testing.expectEqualStrings(line.speaker.?.type.identifier, "Other");
-    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "Second Response");
-}
-
-test "Parse Nested Splits" {
-    const allocator = testing.allocator;
-    const input =
-        \\  === BOUGH ===
-        \\      -<  choice 1
-        \\          :Other: Response
-        \\          -<  inner choice 1
-        \\              :Other: Inner Response
-        \\          -<  inner choice 2
-        \\              :Other: Second Inner Response
-        \\          :Other: Gather back here
-        \\      -<  choice 2
-        \\          :Other: Second Response
-        \\  ===
-    ;
-    var errors = Errors.init(allocator);
-    defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
-        try errors.write(input, std.io.getStdErr().writer());
-        return err;
-    };
-    defer tree.deinit();
-    // try tree.print(std.io.getStdErr().writer());
-
-    const body = tree.root[0].type.block.body;
-    var split = body[0].type.split;
-    try testing.expectEqualStrings(split.content[0].type.expression.type.content, "choice 1");
-    var line = split.body[0].type.line;
-    try testing.expectEqualStrings(line.speaker.?.type.identifier, "Other");
-    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "Response");
-
-    var inner_split = split.body[1].type.split;
-    try testing.expectEqualStrings(inner_split.content[0].type.expression.type.content, "inner choice 1");
-    var inner_line = inner_split.body[0].type.line;
-    try testing.expectEqualStrings(inner_line.speaker.?.type.identifier, "Other");
-    try testing.expectEqualStrings(inner_line.content[0].type.expression.type.content, "Inner Response");
-
-    inner_split = split.body[2].type.split;
-    try testing.expectEqualStrings(inner_split.content[0].type.expression.type.content, "inner choice 2");
-    inner_line = inner_split.body[0].type.line;
-    try testing.expectEqualStrings(inner_line.speaker.?.type.identifier, "Other");
-    try testing.expectEqualStrings(inner_line.content[0].type.expression.type.content, "Second Inner Response");
-
-    split = body[1].type.split;
-    try testing.expectEqualStrings(split.content[0].type.expression.type.content, "choice 2");
-    line = split.body[0].type.line;
-    try testing.expectEqualStrings(line.speaker.?.type.identifier, "Other");
-    try testing.expectEqualStrings(line.content[0].type.expression.type.content, "Second Response");
+    choice = fork.body[1].type.choice;
+    try testing.expectEqualStrings("choice 2", choice.text.type.string.value);
+    try testing.expect(choice.body[0].type == .jump);
 }
 
 test "Parse Inline Code" {
     const allocator = testing.allocator;
     const input =
-        \\  === BOUGH ===
-        \\      :Speaker: Hi, `sayHello()`, how are you?
-        \\  ===
+        \\  === BOUGH {
+        \\      :Speaker: "{sayHello()}, how are you?"
+        \\  }
     ;
     var errors = Errors.init(allocator);
     defer errors.deinit();
@@ -1670,105 +1389,8 @@ test "Parse Inline Code" {
         return err;
     };
     defer tree.deinit();
-    // try tree.print(std.io.getStdErr().writer());
-    const content = tree.root[0].type.block.body[0].type.line.content;
-    try testing.expectEqualStrings("Hi, ", content[0].type.expression.type.content);
-    try testing.expectEqualStrings("sayHello", content[1].type.expression.type.call.name.type.identifier);
-    try testing.expectEqualStrings(", how are you?", content[2].type.expression.type.content);
-}
-
-test "Parse Inline If" {
-    const allocator = testing.allocator;
-    const input =
-        \\  === BOUGH ===
-        \\      :Speaker: Hi, `if (true) {`how are you? `} else {`buzz off! `}`
-        \\  ===
-    ;
-    var errors = Errors.init(allocator);
-    defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
-        try errors.write(input, std.io.getStdErr().writer());
-        return err;
-    };
-    defer tree.deinit();
-    // try tree.print(std.io.getStdErr().writer());
-    const content = tree.root[0].type.block.body[0].type.line.content;
-    try testing.expectEqualStrings("Hi, ", content[0].type.expression.type.content);
-    const if_state = content[1].type.if_statement;
-    try testing.expectEqualStrings("how are you? ", if_state.true_body.type.block.body[0].type.expression.type.content);
-    try testing.expectEqualStrings("buzz off! ", if_state.false_body.?.type.block.body[0].type.expression.type.content);
-}
-
-test "Parse Content If Block" {
-    const allocator = testing.allocator;
-    const input =
-        \\  === BOUGH ===
-        \\      `if (true) {`
-        \\      :Speaker: Say words
-        \\      => JUMP.SOMEWHERE
-        \\      `}`
-        \\  ===
-    ;
-    var errors = Errors.init(allocator);
-    defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
-        try errors.write(input, std.io.getStdErr().writer());
-        return err;
-    };
-    defer tree.deinit();
-    const bough = tree.root[0].type.block;
-    const if_exp = bough.body[0].type.if_statement;
-    const line = if_exp.true_body.type.block.body[0].type.line;
-    try testing.expectEqualStrings("Say words", line.content[0].type.expression.type.content);
-}
-
-test "Parse Content If/Else Blocks" {
-    const allocator = testing.allocator;
-    const input =
-        \\  === BOUGH ===
-        \\      `if (true) {`
-        \\      :Speaker: Say true
-        \\      `} else {`
-        \\      :Speaker: Say false
-        \\      `}`
-        \\      => JUMP
-        \\  ===
-    ;
-    var errors = Errors.init(allocator);
-    defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
-        try errors.write(input, std.io.getStdErr().writer());
-        return err;
-    };
-    defer tree.deinit();
-    const bough = tree.root[0].type.block;
-    const if_exp = bough.body[0].type.if_statement;
-    var line = if_exp.true_body.type.block.body[0].type.line;
-    try testing.expectEqualStrings("Say true", line.content[0].type.expression.type.content);
-    line = if_exp.false_body.?.type.block.body[0].type.line;
-    try testing.expectEqualStrings("Say false", line.content[0].type.expression.type.content);
-    const last = bough.body[1].type.jump;
-    try testing.expectEqualStrings("JUMP", last.type.identifier);
-    // try tree.print(std.io.getStdErr().writer());
-}
-
-test "Parse Test File" {
-    const allocator = testing.allocator;
-    const path = "./src/compiler/test/scene.topi";
-    const file = std.fs.cwd().openFile(path, .{}) catch |e| {
-        return std.log.err("Could not open file: {s}, {}", .{ path, e });
-    };
-    defer file.close();
-
-    var contents = try file.reader().readAllAlloc(allocator, 4000);
-    defer allocator.free(contents);
-
-    var errors = Errors.init(allocator);
-    defer errors.deinit();
-    const tree = parse(allocator, contents, &errors) catch |err| {
-        try errors.write(contents, std.io.getStdErr().writer());
-        return err;
-    };
-    defer tree.deinit();
-    // try tree.print(std.io.getStdErr().writer());
+    const dialogue = tree.root[0].type.bough.body[0].type.expression.type.dialogue;
+    const string = dialogue.content.type.string;
+    try testing.expectEqualStrings("sayHello", string.expressions[0].type.call.name.type.identifier);
+    try testing.expectEqualStrings("{}, how are you?", string.value);
 }

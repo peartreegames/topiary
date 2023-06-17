@@ -38,50 +38,66 @@ pub const Lexer = struct {
         self.skipWhitespace();
 
         const token_type: TokenType = switch (self.char) {
-            '\n' => .eol,
+            '(' => .left_paren,
+            ')' => .right_paren,
+            '{' => .left_brace,
+            '}' => .right_brace,
+            '[' => .left_bracket,
+            ']' => .right_bracket,
+            '|' => .pipe,
+            ',' => .comma,
+            '.' => if (self.peekChar() == '.') {
+                return self.readAndCreateToken(.dot_dot, 2);
+            } else .dot,
+            '-' => if (self.peekChar() == '=') {
+                return self.readAndCreateToken(.minus_equal, 2);
+            } else .minus,
+            '~' => .tilde,
+            '+' => if (self.peekChar() == '=') {
+                return self.readAndCreateToken(.plus_equal, 2);
+            } else .plus,
+            ':' => .colon,
+            '#' => {
+                var start = self.position + 1;
+                while (isWhitespace(self.peekChar())) {
+                    start += 1; // allow for starting spaces
+                    self.readChar();
+                }
+                while (self.peekChar() != '#' and !isWhitespace(self.peekChar()) and !isEndOfLine(self.peekChar())) {
+                    self.readChar();
+                }
+                self.readChar();
+                return self.createToken(.hash, start);
+            },
+            '*' => if (self.peekChar() == '=') {
+                return self.readAndCreateToken(.star_equal, 2);
+            } else .star,
+            '%' => if (self.peekChar() == '=') {
+                return self.readAndCreateToken(.percent_equal, 2);
+            } else .percent,
+            '!' => if (self.peekChar() == '=') {
+                return self.readAndCreateToken(.bang_equal, 2);
+            } else .bang,
             '=' => if (std.mem.eql(u8, self.peekChars(2), "==")) {
                 return self.readAndCreateToken(.bough, 3);
             } else if (self.peekChar() == '=') {
-                return self.readAndCreateToken(.equal, 2);
+                return self.readAndCreateToken(.equal_equal, 2);
             } else if (self.peekChar() == '>') {
                 return self.readAndCreateToken(.jump, 2);
-            } else .assign,
-            '(' => .left_parenthesis,
-            ')' => .right_parenthesis,
-            ',' => .comma,
-            '+' => .plus,
-            '-' => if (std.mem.eql(u8, self.peekChars(2), "--")) {
-                return self.readAndCreateToken(.twig, 3);
-            } else if (self.peekChar() == '<') {
-                return self.readAndCreateToken(.split, 2);
-            } else .minus,
-            '!' => .bang,
-            '/' => if (self.peekChar() == '/') {
-                const start = self.position;
-                self.readLine();
-                return self.createToken(.comment, start + 2);
-            } else .slash,
-            '*' => .asterisk,
+            } else .equal,
             '<' => if (self.peekChar() == '=') {
-                return self.readAndCreateToken(.less_than_equal, 2);
-            } else .less_than,
+                return self.readAndCreateToken(.less_equal, 2);
+            } else .less,
             '>' => if (self.peekChar() == '=') {
-                return self.readAndCreateToken(.greater_than_equal, 2);
-            } else if (self.peekChar() == '-') {
-                return self.readAndCreateToken(.gather, 2);
-            } else .greater_than,
-            '{' => .left_brace,
-            '}' => .right_brace,
-            '.' => if (self.peekChar() == '.') {
-                return self.readAndCreateToken(.double_period, 2);
-            } else .period,
-            '`' => if (std.mem.eql(u8, self.peekChars(2), "``")) {
-                return self.readAndCreateToken(.blackboard, 3);
-            } else .backtick,
-            '#' => .hash,
-            '[' => .left_bracket,
-            ']' => .right_bracket,
-            ':' => .colon,
+                return self.readAndCreateToken(.greater_equal, 2);
+            } else .greater,
+            '/' => if (self.peekChar() == '=') {
+                return self.readAndCreateToken(.slash_equal, 2);
+            } else if (self.peekChar() == '/') {
+                var start = self.position;
+                self.readLine();
+                return .{ .token_type = .comment, .start = start + 2, .end = self.position, .line = self.line, .column = self.column };
+            } else .slash,
             '"' => {
                 self.readChar();
                 const start = self.position;
@@ -89,7 +105,6 @@ pub const Lexer = struct {
                 defer self.readChar();
                 return self.createToken(.string, start);
             },
-            '?' => .query,
             0 => .eof,
             else => |c| if (isLetter(c)) {
                 const start = self.position;
@@ -98,16 +113,13 @@ pub const Lexer = struct {
             } else if (isDigit(c)) {
                 const start = self.position;
                 const number = self.readNumber();
-                return self.createToken(token.findNumberType(number), start);
+                _ = number;
+                return self.createToken(.number, start);
             } else .illegal,
         };
 
         defer self.readChar();
         const newToken = self.createToken(token_type, self.position);
-        if (token_type == .eol) {
-            self.column = 0;
-            self.line += 1;
-        }
         return newToken;
     }
 
@@ -139,6 +151,10 @@ pub const Lexer = struct {
 
     fn skipWhitespace(self: *Lexer) void {
         while (isWhitespace(self.char)) {
+            if (isEndOfLine(self.char)) {
+                self.line += 1;
+                self.column = 1;
+            }
             self.readChar();
         }
     }
@@ -161,7 +177,16 @@ pub const Lexer = struct {
     }
 
     fn readString(self: *Lexer) void {
-        while (self.char != '"' and self.char != 0) {
+        var count: usize = 0;
+        var is_string = true;
+        while ((self.char != '"' or count > 0) and self.char != 0) {
+            if (self.source[self.position] == '\\') continue;
+            if (self.char == '}' or self.char == '{') {
+                is_string = !is_string;
+                if (!is_string) {
+                    count += 1;
+                } else count -= 1;
+            }
             self.readChar();
         }
     }
@@ -174,16 +199,13 @@ pub const Lexer = struct {
 
     fn isWhitespace(char: u8) bool {
         return switch (char) {
-            ' ', '\t', '\r' => true,
+            ' ', '\t', '\r', '\n' => true,
             else => false,
         };
     }
 
     fn isEndOfLine(char: u8) bool {
-        return switch (char) {
-            '\n' => true,
-            else => false,
-        };
+        return char == '\n';
     }
 
     fn isLetter(char: u8) bool {
@@ -203,230 +225,166 @@ pub const Lexer = struct {
 
 test "Check supported tokens" {
     const input =
-        \\```
-        \\const five: int = 5
-        \\const two: int = 2
-        \\const decimal: float = 1.234
-        \\const sum: func = (x: int, y: int): int {
-        \\    return x + y
-        \\}
-        \\
-        \\var result: int = sum(five, two)
-        \\!-/*5
-        \\5 < 10 > 5
-        \\if (5 < 10) {
-        \\    return true
-        \\} else {
-        \\    return false
-        \\}
-        \\
-        \\const value: enum = {
-        \\  one,
-        \\  two,
-        \\}
-        \\10 == 10
-        \\10 != 9
-        \\"foo"
-        \\"foo bar"
-        \\"foo".len
-        \\[1, 2]
-        \\{"key": 1}
-        \\//comment goes here
-        \\nil
-        \\```
-        \\=== BOUGH
-        \\--- TWIG
-        \\`sum(1, 5)`
-        \\=> BOUGH.TWIG
-        \\  :Speaker: Text here #tag
-        \\---
-        \\===
+        \\ const five = 5
+        \\ const two = 2
+        \\ const decimal = 1.234
+        \\ const sum = |x, y| {
+        \\   return x + y
+        \\ }
+        \\ var seven = sum(five, two)
+        \\ !-/*5
+        \\ 5 < 10 > 5
+        \\ if (5 < 10) {
+        \\   return true
+        \\ } else {
+        \\   return false
+        \\ }
+        \\ 
+        \\ enum someEnum {
+        \\   one,
+        \\   two
+        \\ }
+        \\ 
+        \\ 10 == 10
+        \\ 10 != 9
+        \\ "foo"
+        \\ "foo bar"
+        \\ [1,2]
+        \\ {"key", 1}
+        \\ // comment
+        \\ struct structValue {
+        \\   intValue = 0,
+        \\   doubleValue = 0.0
+        \\ }
+        \\           
+        \\ === START {
+        \\   :Speaker: "Dialogue text {sum(2,2)}" # tag
+        \\ }
+        \\ var v = new structValue {}
     ;
     const tests = &[_]Token{
-        .{ .token_type = .blackboard, .start = 0, .end = 3, .line = 1, .column = 1 },
-        .{ .token_type = .eol, .start = 3, .end = 3, .line = 1, .column = 4 },
-        .{ .token_type = .constant, .start = 4, .end = 9, .line = 2, .column = 1 },
-        .{ .token_type = .identifier, .start = 10, .end = 14, .line = 2, .column = 7 },
-        .{ .token_type = .colon, .start = 14, .end = 14, .line = 2, .column = 11 },
-        .{ .token_type = .integer_keyword, .start = 16, .end = 19, .line = 2, .column = 13 },
-        .{ .token_type = .assign, .start = 20, .end = 20, .line = 2, .column = 17 },
-        .{ .token_type = .integer, .start = 22, .end = 23, .line = 2, .column = 19 },
-        .{ .token_type = .eol, .start = 23, .end = 23, .line = 2, .column = 20 },
-        .{ .token_type = .constant, .start = 24, .end = 29, .line = 3, .column = 1 },
-        .{ .token_type = .identifier, .start = 30, .end = 33, .line = 3, .column = 7 },
-        .{ .token_type = .colon, .start = 33, .end = 33, .line = 3, .column = 10 },
-        .{ .token_type = .integer_keyword, .start = 35, .end = 38, .line = 3, .column = 12 },
-        .{ .token_type = .assign, .start = 39, .end = 39, .line = 3, .column = 16 },
-        .{ .token_type = .integer, .start = 41, .end = 42, .line = 3, .column = 18 },
-        .{ .token_type = .eol, .start = 42, .end = 42, .line = 3, .column = 19 },
-        .{ .token_type = .constant, .start = 43, .end = 48, .line = 4, .column = 1 },
-        .{ .token_type = .identifier, .start = 49, .end = 56, .line = 4, .column = 7 },
-        .{ .token_type = .colon, .start = 56, .end = 56, .line = 4, .column = 14 },
-        .{ .token_type = .float_keyword, .start = 58, .end = 63, .line = 4, .column = 16 },
-        .{ .token_type = .assign, .start = 64, .end = 64, .line = 4, .column = 22 },
-        .{ .token_type = .float, .start = 66, .end = 71, .line = 4, .column = 24 },
-        .{ .token_type = .eol, .start = 71, .end = 71, .line = 4, .column = 29 },
-        .{ .token_type = .constant, .start = 72, .end = 77, .line = 5, .column = 1 },
-        .{ .token_type = .identifier, .start = 78, .end = 81, .line = 5, .column = 7 },
-        .{ .token_type = .colon, .start = 81, .end = 81, .line = 5, .column = 10 },
-        .{ .token_type = .function_keyword, .start = 83, .end = 87, .line = 5, .column = 12 },
-        .{ .token_type = .assign, .start = 88, .end = 88, .line = 5, .column = 17 },
-        .{ .token_type = .left_parenthesis, .start = 90, .end = 90, .line = 5, .column = 19 },
-        .{ .token_type = .identifier, .start = 91, .end = 92, .line = 5, .column = 20 },
-        .{ .token_type = .colon, .start = 92, .end = 92, .line = 5, .column = 21 },
-        .{ .token_type = .integer_keyword, .start = 94, .end = 97, .line = 5, .column = 23 },
-        .{ .token_type = .comma, .start = 97, .end = 97, .line = 5, .column = 26 },
-        .{ .token_type = .identifier, .start = 99, .end = 100, .line = 5, .column = 28 },
-        .{ .token_type = .colon, .start = 100, .end = 100, .line = 5, .column = 29 },
-        .{ .token_type = .integer_keyword, .start = 102, .end = 105, .line = 5, .column = 31 },
-        .{ .token_type = .right_parenthesis, .start = 105, .end = 105, .line = 5, .column = 34 },
-        .{ .token_type = .colon, .start = 106, .end = 106, .line = 5, .column = 35 },
-        .{ .token_type = .integer_keyword, .start = 108, .end = 111, .line = 5, .column = 37 },
-        .{ .token_type = .left_brace, .start = 112, .end = 112, .line = 5, .column = 41 },
-        .{ .token_type = .eol, .start = 113, .end = 113, .line = 5, .column = 42 },
-        .{ .token_type = .@"return", .start = 118, .end = 124, .line = 6, .column = 5 },
-        .{ .token_type = .identifier, .start = 125, .end = 126, .line = 6, .column = 12 },
-        .{ .token_type = .plus, .start = 127, .end = 127, .line = 6, .column = 14 },
-        .{ .token_type = .identifier, .start = 129, .end = 130, .line = 6, .column = 16 },
-        .{ .token_type = .eol, .start = 130, .end = 130, .line = 6, .column = 17 },
-        .{ .token_type = .right_brace, .start = 131, .end = 131, .line = 7, .column = 1 },
-        .{ .token_type = .eol, .start = 132, .end = 132, .line = 7, .column = 2 },
-        .{ .token_type = .eol, .start = 133, .end = 133, .line = 8, .column = 1 },
-        .{ .token_type = .variable, .start = 134, .end = 137, .line = 9, .column = 1 },
-        .{ .token_type = .identifier, .start = 138, .end = 144, .line = 9, .column = 5 },
-        .{ .token_type = .colon, .start = 144, .end = 144, .line = 9, .column = 11 },
-        .{ .token_type = .integer_keyword, .start = 146, .end = 149, .line = 9, .column = 13 },
-        .{ .token_type = .assign, .start = 150, .end = 150, .line = 9, .column = 17 },
-        .{ .token_type = .identifier, .start = 152, .end = 155, .line = 9, .column = 19 },
-        .{ .token_type = .left_parenthesis, .start = 155, .end = 155, .line = 9, .column = 22 },
-        .{ .token_type = .identifier, .start = 156, .end = 160, .line = 9, .column = 23 },
-        .{ .token_type = .comma, .start = 160, .end = 160, .line = 9, .column = 27 },
-        .{ .token_type = .identifier, .start = 162, .end = 165, .line = 9, .column = 29 },
-        .{ .token_type = .right_parenthesis, .start = 165, .end = 165, .line = 9, .column = 32 },
-        .{ .token_type = .eol, .start = 166, .end = 166, .line = 9, .column = 33 },
-        .{ .token_type = .bang, .start = 167, .end = 167, .line = 10, .column = 1 },
-        .{ .token_type = .minus, .start = 168, .end = 168, .line = 10, .column = 2 },
-        .{ .token_type = .slash, .start = 169, .end = 169, .line = 10, .column = 3 },
-        .{ .token_type = .asterisk, .start = 170, .end = 170, .line = 10, .column = 4 },
-        .{ .token_type = .integer, .start = 171, .end = 172, .line = 10, .column = 5 },
-        .{ .token_type = .eol, .start = 172, .end = 172, .line = 10, .column = 6 },
-        .{ .token_type = .integer, .start = 173, .end = 174, .line = 11, .column = 1 },
-        .{ .token_type = .less_than, .start = 175, .end = 175, .line = 11, .column = 3 },
-        .{ .token_type = .integer, .start = 177, .end = 179, .line = 11, .column = 5 },
-        .{ .token_type = .greater_than, .start = 180, .end = 180, .line = 11, .column = 8 },
-        .{ .token_type = .integer, .start = 182, .end = 183, .line = 11, .column = 10 },
-        .{ .token_type = .eol, .start = 183, .end = 183, .line = 11, .column = 11 },
-        .{ .token_type = .@"if", .start = 184, .end = 186, .line = 12, .column = 1 },
-        .{ .token_type = .left_parenthesis, .start = 187, .end = 187, .line = 12, .column = 4 },
-        .{ .token_type = .integer, .start = 188, .end = 189, .line = 12, .column = 5 },
-        .{ .token_type = .less_than, .start = 190, .end = 190, .line = 12, .column = 7 },
-        .{ .token_type = .integer, .start = 192, .end = 194, .line = 12, .column = 9 },
-        .{ .token_type = .right_parenthesis, .start = 194, .end = 194, .line = 12, .column = 11 },
-        .{ .token_type = .left_brace, .start = 196, .end = 196, .line = 12, .column = 13 },
-        .{ .token_type = .eol, .start = 197, .end = 197, .line = 12, .column = 14 },
-        .{ .token_type = .@"return", .start = 202, .end = 208, .line = 13, .column = 5 },
-        .{ .token_type = .true, .start = 209, .end = 213, .line = 13, .column = 12 },
-        .{ .token_type = .eol, .start = 213, .end = 213, .line = 13, .column = 16 },
-        .{ .token_type = .right_brace, .start = 214, .end = 214, .line = 14, .column = 1 },
-        .{ .token_type = .@"else", .start = 216, .end = 220, .line = 14, .column = 3 },
-        .{ .token_type = .left_brace, .start = 221, .end = 221, .line = 14, .column = 8 },
-        .{ .token_type = .eol, .start = 222, .end = 222, .line = 14, .column = 9 },
-        .{ .token_type = .@"return", .start = 227, .end = 233, .line = 15, .column = 5 },
-        .{ .token_type = .false, .start = 234, .end = 239, .line = 15, .column = 12 },
-        .{ .token_type = .eol, .start = 239, .end = 239, .line = 15, .column = 17 },
-        .{ .token_type = .right_brace, .start = 240, .end = 240, .line = 16, .column = 1 },
-        .{ .token_type = .eol, .start = 241, .end = 241, .line = 16, .column = 2 },
-        .{ .token_type = .eol, .start = 242, .end = 242, .line = 17, .column = 1 },
-        .{ .token_type = .constant, .start = 243, .end = 248, .line = 18, .column = 1 },
-        .{ .token_type = .identifier, .start = 249, .end = 254, .line = 18, .column = 7 },
-        .{ .token_type = .colon, .start = 254, .end = 254, .line = 18, .column = 12 },
-        .{ .token_type = .enum_keyword, .start = 256, .end = 260, .line = 18, .column = 14 },
-        .{ .token_type = .assign, .start = 261, .end = 261, .line = 18, .column = 19 },
-        .{ .token_type = .left_brace, .start = 263, .end = 263, .line = 18, .column = 21 },
-        .{ .token_type = .eol, .start = 264, .end = 264, .line = 18, .column = 22 },
-        .{ .token_type = .identifier, .start = 267, .end = 270, .line = 19, .column = 3 },
-        .{ .token_type = .comma, .start = 270, .end = 270, .line = 19, .column = 6 },
-        .{ .token_type = .eol, .start = 271, .end = 271, .line = 19, .column = 7 },
-        .{ .token_type = .identifier, .start = 274, .end = 277, .line = 20, .column = 3 },
-        .{ .token_type = .comma, .start = 277, .end = 277, .line = 20, .column = 6 },
-        .{ .token_type = .eol, .start = 278, .end = 278, .line = 20, .column = 7 },
-        .{ .token_type = .right_brace, .start = 279, .end = 279, .line = 21, .column = 1 },
-        .{ .token_type = .eol, .start = 280, .end = 280, .line = 21, .column = 2 },
-        .{ .token_type = .integer, .start = 281, .end = 283, .line = 22, .column = 1 },
-        .{ .token_type = .equal, .start = 284, .end = 286, .line = 22, .column = 4 },
-        .{ .token_type = .integer, .start = 287, .end = 289, .line = 22, .column = 7 },
-        .{ .token_type = .eol, .start = 289, .end = 289, .line = 22, .column = 9 },
-        .{ .token_type = .integer, .start = 290, .end = 292, .line = 23, .column = 1 },
-        .{ .token_type = .bang, .start = 293, .end = 293, .line = 23, .column = 4 },
-        .{ .token_type = .assign, .start = 294, .end = 294, .line = 23, .column = 5 },
-        .{ .token_type = .integer, .start = 296, .end = 297, .line = 23, .column = 7 },
-        .{ .token_type = .eol, .start = 297, .end = 297, .line = 23, .column = 8 },
-        .{ .token_type = .string, .start = 299, .end = 302, .line = 24, .column = 2 },
-        .{ .token_type = .eol, .start = 303, .end = 303, .line = 24, .column = 6 },
-        .{ .token_type = .string, .start = 305, .end = 312, .line = 25, .column = 2 },
-        .{ .token_type = .eol, .start = 313, .end = 313, .line = 25, .column = 10 },
-        .{ .token_type = .string, .start = 315, .end = 318, .line = 26, .column = 2 },
-        .{ .token_type = .period, .start = 319, .end = 319, .line = 26, .column = 6 },
-        .{ .token_type = .identifier, .start = 320, .end = 323, .line = 26, .column = 7 },
-        .{ .token_type = .eol, .start = 323, .end = 323, .line = 26, .column = 10 },
-        .{ .token_type = .left_bracket, .start = 324, .end = 324, .line = 27, .column = 1 },
-        .{ .token_type = .integer, .start = 325, .end = 326, .line = 27, .column = 2 },
-        .{ .token_type = .comma, .start = 326, .end = 326, .line = 27, .column = 3 },
-        .{ .token_type = .integer, .start = 328, .end = 329, .line = 27, .column = 5 },
-        .{ .token_type = .right_bracket, .start = 329, .end = 329, .line = 27, .column = 6 },
-        .{ .token_type = .eol, .start = 330, .end = 330, .line = 27, .column = 7 },
-        .{ .token_type = .left_brace, .start = 331, .end = 331, .line = 28, .column = 1 },
-        .{ .token_type = .string, .start = 333, .end = 336, .line = 28, .column = 3 },
-        .{ .token_type = .colon, .start = 337, .end = 337, .line = 28, .column = 7 },
-        .{ .token_type = .integer, .start = 339, .end = 340, .line = 28, .column = 9 },
-        .{ .token_type = .right_brace, .start = 340, .end = 340, .line = 28, .column = 10 },
-        .{ .token_type = .eol, .start = 341, .end = 341, .line = 28, .column = 11 },
-        .{ .token_type = .comment, .start = 344, .end = 361, .line = 29, .column = 3 },
-        .{ .token_type = .eol, .start = 361, .end = 361, .line = 29, .column = 20 },
-        .{ .token_type = .nil, .start = 362, .end = 365, .line = 30, .column = 1 },
-        .{ .token_type = .eol, .start = 365, .end = 365, .line = 30, .column = 4 },
-        .{ .token_type = .blackboard, .start = 366, .end = 369, .line = 31, .column = 1 },
-        .{ .token_type = .eol, .start = 369, .end = 369, .line = 31, .column = 4 },
-        .{ .token_type = .bough, .start = 370, .end = 373, .line = 32, .column = 1 },
-        .{ .token_type = .identifier, .start = 374, .end = 379, .line = 32, .column = 5 },
-        .{ .token_type = .eol, .start = 379, .end = 379, .line = 32, .column = 10 },
-        .{ .token_type = .twig, .start = 380, .end = 383, .line = 33, .column = 1 },
-        .{ .token_type = .identifier, .start = 384, .end = 388, .line = 33, .column = 5 },
-        .{ .token_type = .eol, .start = 388, .end = 388, .line = 33, .column = 9 },
-        .{ .token_type = .backtick, .start = 389, .end = 389, .line = 34, .column = 1 },
-        .{ .token_type = .identifier, .start = 390, .end = 393, .line = 34, .column = 2 },
-        .{ .token_type = .left_parenthesis, .start = 393, .end = 393, .line = 34, .column = 5 },
-        .{ .token_type = .integer, .start = 394, .end = 395, .line = 34, .column = 6 },
-        .{ .token_type = .comma, .start = 395, .end = 395, .line = 34, .column = 7 },
-        .{ .token_type = .integer, .start = 397, .end = 398, .line = 34, .column = 9 },
-        .{ .token_type = .right_parenthesis, .start = 398, .end = 398, .line = 34, .column = 10 },
-        .{ .token_type = .backtick, .start = 399, .end = 399, .line = 34, .column = 11 },
-        .{ .token_type = .eol, .start = 400, .end = 400, .line = 34, .column = 12 },
-        .{ .token_type = .jump, .start = 401, .end = 403, .line = 35, .column = 1 },
-        .{ .token_type = .identifier, .start = 404, .end = 409, .line = 35, .column = 4 },
-        .{ .token_type = .period, .start = 409, .end = 409, .line = 35, .column = 9 },
-        .{ .token_type = .identifier, .start = 410, .end = 414, .line = 35, .column = 10 },
-        .{ .token_type = .eol, .start = 414, .end = 414, .line = 35, .column = 14 },
-        .{ .token_type = .colon, .start = 417, .end = 417, .line = 36, .column = 3 },
-        .{ .token_type = .identifier, .start = 418, .end = 425, .line = 36, .column = 4 },
-        .{ .token_type = .colon, .start = 425, .end = 425, .line = 36, .column = 11 },
-        .{ .token_type = .identifier, .start = 427, .end = 431, .line = 36, .column = 13 },
-        .{ .token_type = .identifier, .start = 432, .end = 436, .line = 36, .column = 18 },
-        .{ .token_type = .hash, .start = 437, .end = 437, .line = 36, .column = 23 },
-        .{ .token_type = .identifier, .start = 438, .end = 441, .line = 36, .column = 24 },
-        .{ .token_type = .eol, .start = 441, .end = 441, .line = 36, .column = 27 },
-        .{ .token_type = .twig, .start = 442, .end = 445, .line = 37, .column = 1 },
-        .{ .token_type = .eol, .start = 445, .end = 445, .line = 37, .column = 4 },
-        .{ .token_type = .bough, .start = 446, .end = 449, .line = 38, .column = 1 },
+        .{ .token_type = .@"const", .start = 1, .end = 6, .line = 1, .column = 2 },
+        .{ .token_type = .identifier, .start = 7, .end = 11, .line = 1, .column = 8 },
+        .{ .token_type = .equal, .start = 12, .end = 12, .line = 1, .column = 13 },
+        .{ .token_type = .number, .start = 14, .end = 15, .line = 1, .column = 15 },
+        .{ .token_type = .@"const", .start = 17, .end = 22, .line = 2, .column = 3 },
+        .{ .token_type = .identifier, .start = 23, .end = 26, .line = 2, .column = 9 },
+        .{ .token_type = .equal, .start = 27, .end = 27, .line = 2, .column = 13 },
+        .{ .token_type = .number, .start = 29, .end = 30, .line = 2, .column = 15 },
+        .{ .token_type = .@"const", .start = 32, .end = 37, .line = 3, .column = 3 },
+        .{ .token_type = .identifier, .start = 38, .end = 45, .line = 3, .column = 9 },
+        .{ .token_type = .equal, .start = 46, .end = 46, .line = 3, .column = 17 },
+        .{ .token_type = .number, .start = 48, .end = 53, .line = 3, .column = 19 },
+        .{ .token_type = .@"const", .start = 55, .end = 60, .line = 4, .column = 3 },
+        .{ .token_type = .identifier, .start = 61, .end = 64, .line = 4, .column = 9 },
+        .{ .token_type = .equal, .start = 65, .end = 65, .line = 4, .column = 13 },
+        .{ .token_type = .pipe, .start = 67, .end = 67, .line = 4, .column = 15 },
+        .{ .token_type = .identifier, .start = 68, .end = 69, .line = 4, .column = 16 },
+        .{ .token_type = .comma, .start = 69, .end = 69, .line = 4, .column = 17 },
+        .{ .token_type = .identifier, .start = 71, .end = 72, .line = 4, .column = 19 },
+        .{ .token_type = .pipe, .start = 72, .end = 72, .line = 4, .column = 20 },
+        .{ .token_type = .left_brace, .start = 74, .end = 74, .line = 4, .column = 22 },
+        .{ .token_type = .@"return", .start = 79, .end = 85, .line = 5, .column = 5 },
+        .{ .token_type = .identifier, .start = 86, .end = 87, .line = 5, .column = 12 },
+        .{ .token_type = .plus, .start = 88, .end = 88, .line = 5, .column = 14 },
+        .{ .token_type = .identifier, .start = 90, .end = 91, .line = 5, .column = 16 },
+        .{ .token_type = .right_brace, .start = 93, .end = 93, .line = 6, .column = 3 },
+        .{ .token_type = .@"var", .start = 96, .end = 99, .line = 7, .column = 3 },
+        .{ .token_type = .identifier, .start = 100, .end = 105, .line = 7, .column = 7 },
+        .{ .token_type = .equal, .start = 106, .end = 106, .line = 7, .column = 13 },
+        .{ .token_type = .identifier, .start = 108, .end = 111, .line = 7, .column = 15 },
+        .{ .token_type = .left_paren, .start = 111, .end = 111, .line = 7, .column = 18 },
+        .{ .token_type = .identifier, .start = 112, .end = 116, .line = 7, .column = 19 },
+        .{ .token_type = .comma, .start = 116, .end = 116, .line = 7, .column = 23 },
+        .{ .token_type = .identifier, .start = 118, .end = 121, .line = 7, .column = 25 },
+        .{ .token_type = .right_paren, .start = 121, .end = 121, .line = 7, .column = 28 },
+        .{ .token_type = .bang, .start = 124, .end = 124, .line = 8, .column = 3 },
+        .{ .token_type = .minus, .start = 125, .end = 125, .line = 8, .column = 4 },
+        .{ .token_type = .slash, .start = 126, .end = 126, .line = 8, .column = 5 },
+        .{ .token_type = .star, .start = 127, .end = 127, .line = 8, .column = 6 },
+        .{ .token_type = .number, .start = 128, .end = 129, .line = 8, .column = 7 },
+        .{ .token_type = .number, .start = 131, .end = 132, .line = 9, .column = 3 },
+        .{ .token_type = .less, .start = 133, .end = 133, .line = 9, .column = 5 },
+        .{ .token_type = .number, .start = 135, .end = 137, .line = 9, .column = 7 },
+        .{ .token_type = .greater, .start = 138, .end = 138, .line = 9, .column = 10 },
+        .{ .token_type = .number, .start = 140, .end = 141, .line = 9, .column = 12 },
+        .{ .token_type = .@"if", .start = 143, .end = 145, .line = 10, .column = 3 },
+        .{ .token_type = .left_paren, .start = 146, .end = 146, .line = 10, .column = 6 },
+        .{ .token_type = .number, .start = 147, .end = 148, .line = 10, .column = 7 },
+        .{ .token_type = .less, .start = 149, .end = 149, .line = 10, .column = 9 },
+        .{ .token_type = .number, .start = 151, .end = 153, .line = 10, .column = 11 },
+        .{ .token_type = .right_paren, .start = 153, .end = 153, .line = 10, .column = 13 },
+        .{ .token_type = .left_brace, .start = 155, .end = 155, .line = 10, .column = 15 },
+        .{ .token_type = .@"return", .start = 160, .end = 166, .line = 11, .column = 5 },
+        .{ .token_type = .true, .start = 167, .end = 171, .line = 11, .column = 12 },
+        .{ .token_type = .right_brace, .start = 173, .end = 173, .line = 12, .column = 3 },
+        .{ .token_type = .@"else", .start = 175, .end = 179, .line = 12, .column = 5 },
+        .{ .token_type = .left_brace, .start = 180, .end = 180, .line = 12, .column = 10 },
+        .{ .token_type = .@"return", .start = 185, .end = 191, .line = 13, .column = 5 },
+        .{ .token_type = .false, .start = 192, .end = 197, .line = 13, .column = 12 },
+        .{ .token_type = .right_brace, .start = 199, .end = 199, .line = 14, .column = 3 },
+        .{ .token_type = .@"enum", .start = 204, .end = 208, .line = 16, .column = 3 },
+        .{ .token_type = .identifier, .start = 209, .end = 217, .line = 16, .column = 8 },
+        .{ .token_type = .left_brace, .start = 218, .end = 218, .line = 16, .column = 17 },
+        .{ .token_type = .identifier, .start = 223, .end = 226, .line = 17, .column = 5 },
+        .{ .token_type = .comma, .start = 226, .end = 226, .line = 17, .column = 8 },
+        .{ .token_type = .identifier, .start = 231, .end = 234, .line = 18, .column = 5 },
+        .{ .token_type = .right_brace, .start = 236, .end = 236, .line = 19, .column = 3 },
+        .{ .token_type = .number, .start = 241, .end = 243, .line = 21, .column = 3 },
+        .{ .token_type = .equal_equal, .start = 244, .end = 246, .line = 21, .column = 6 },
+        .{ .token_type = .number, .start = 247, .end = 249, .line = 21, .column = 9 },
+        .{ .token_type = .number, .start = 251, .end = 253, .line = 22, .column = 3 },
+        .{ .token_type = .bang_equal, .start = 254, .end = 256, .line = 22, .column = 6 },
+        .{ .token_type = .number, .start = 257, .end = 258, .line = 22, .column = 9 },
+        .{ .token_type = .string, .start = 261, .end = 264, .line = 23, .column = 4 },
+        .{ .token_type = .string, .start = 268, .end = 275, .line = 24, .column = 4 },
+        .{ .token_type = .left_bracket, .start = 278, .end = 278, .line = 25, .column = 3 },
+        .{ .token_type = .number, .start = 279, .end = 280, .line = 25, .column = 4 },
+        .{ .token_type = .comma, .start = 280, .end = 280, .line = 25, .column = 5 },
+        .{ .token_type = .number, .start = 281, .end = 282, .line = 25, .column = 6 },
+        .{ .token_type = .right_bracket, .start = 282, .end = 282, .line = 25, .column = 7 },
+        .{ .token_type = .left_brace, .start = 285, .end = 285, .line = 26, .column = 3 },
+        .{ .token_type = .string, .start = 287, .end = 290, .line = 26, .column = 5 },
+        .{ .token_type = .comma, .start = 291, .end = 291, .line = 26, .column = 9 },
+        .{ .token_type = .number, .start = 293, .end = 294, .line = 26, .column = 11 },
+        .{ .token_type = .right_brace, .start = 294, .end = 294, .line = 26, .column = 12 },
+        .{ .token_type = .comment, .start = 299, .end = 307, .line = 27, .column = 13 },
+        .{ .token_type = .@"struct", .start = 309, .end = 315, .line = 28, .column = 3 },
+        .{ .token_type = .identifier, .start = 316, .end = 327, .line = 28, .column = 10 },
+        .{ .token_type = .left_brace, .start = 328, .end = 328, .line = 28, .column = 22 },
+        .{ .token_type = .identifier, .start = 333, .end = 341, .line = 29, .column = 5 },
+        .{ .token_type = .equal, .start = 342, .end = 342, .line = 29, .column = 14 },
+        .{ .token_type = .number, .start = 344, .end = 345, .line = 29, .column = 16 },
+        .{ .token_type = .comma, .start = 345, .end = 345, .line = 29, .column = 17 },
+        .{ .token_type = .identifier, .start = 350, .end = 361, .line = 30, .column = 5 },
+        .{ .token_type = .equal, .start = 362, .end = 362, .line = 30, .column = 17 },
+        .{ .token_type = .number, .start = 364, .end = 367, .line = 30, .column = 19 },
+        .{ .token_type = .right_brace, .start = 369, .end = 369, .line = 31, .column = 3 },
+        .{ .token_type = .bough, .start = 384, .end = 387, .line = 33, .column = 3 },
+        .{ .token_type = .identifier, .start = 388, .end = 393, .line = 33, .column = 7 },
+        .{ .token_type = .left_brace, .start = 394, .end = 394, .line = 33, .column = 13 },
+        .{ .token_type = .colon, .start = 399, .end = 399, .line = 34, .column = 5 },
+        .{ .token_type = .identifier, .start = 400, .end = 407, .line = 34, .column = 6 },
+        .{ .token_type = .colon, .start = 407, .end = 407, .line = 34, .column = 13 },
+        .{ .token_type = .string, .start = 410, .end = 434, .line = 34, .column = 16 },
+        .{ .token_type = .hash, .start = 438, .end = 441, .line = 34, .column = 44 },
+        .{ .token_type = .right_brace, .start = 443, .end = 443, .line = 35, .column = 3 },
+        .{ .token_type = .@"var", .start = 446, .end = 449, .line = 36, .column = 3 },
+        .{ .token_type = .identifier, .start = 450, .end = 451, .line = 36, .column = 7 },
+        .{ .token_type = .equal, .start = 452, .end = 452, .line = 36, .column = 9 },
+        .{ .token_type = .new, .start = 454, .end = 457, .line = 36, .column = 11 },
+        .{ .token_type = .identifier, .start = 458, .end = 469, .line = 36, .column = 15 },
+        .{ .token_type = .left_brace, .start = 470, .end = 470, .line = 36, .column = 27 },
+        .{ .token_type = .right_brace, .start = 471, .end = 471, .line = 36, .column = 28 },
     };
 
     var lexer = Lexer.init(input);
-    // while (lexer.peekChar() != 0) {
-    //     std.debug.print("{}\n", .{lexer.next()});
+    // var next = lexer.next();
+    // while (next.token_type != .eof) : (next = lexer.next()) {
+    //     std.debug.print("{}\n", .{next});
     // }
-    // lexer = Lexer.init(input);
     for (tests) |item| {
-        const current = lexer.next();
+        var current = lexer.next();
         try testing.expectEqual(item.token_type, current.token_type);
         try testing.expectEqual(item.start, current.start);
         try testing.expectEqual(item.end, current.end);
