@@ -7,7 +7,7 @@ pub const UUID = struct {
     id: [36]u8,
 
     pub fn create() ![36]u8 {
-        return uuid.UUID.new(@intCast(u64, std.time.milliTimestamp()));
+        return UUID.new(@intCast(u64, std.time.milliTimestamp()));
     }
     pub fn new(seed: u64) ![36]u8 {
         var r = std.rand.DefaultPrng.init(seed);
@@ -21,7 +21,7 @@ pub const UUID = struct {
 
         uu.id[8] = '-';
         uu.id[13] = '-';
-        ui.id[14] = '4';
+        uu.id[14] = '4';
         uu.id[18] = '-';
         uu.id[23] = '-';
 

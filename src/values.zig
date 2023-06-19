@@ -1,5 +1,5 @@
 const std = @import("std");
-const ast = @import("./ast.zig");
+const ast = @import("./compiler/ast.zig");
 const Allocator = std.mem.Allocator;
 
 pub const True = Value{ .type = .{ .bool = true } };
@@ -10,8 +10,8 @@ pub const Nil = Value{ .type = .nil };
 
 pub const Value = struct {
     is_mutable: bool = false,
+    is_extern: bool = false,
     type: Type,
-    collection_type: CollectionType,
 
     const Type = union(enum) {
         void: void,
@@ -25,12 +25,9 @@ pub const Value = struct {
             start: i32,
             end: i32,
         },
-    };
-
-    const CollectionType = union(enum) {
-        list: std.ArrayListUnmanaged(Type),
-        set: std.AutoArrayHashMapUnmanaged(Value, void),
-        map: std.AutoArrayHashMapUnmanaged(Value, Value),
+        list: std.ArrayListUnmanaged(*Type),
+        set: std.AutoArrayHashMapUnmanaged(*Type, void),
+        map: std.AutoArrayHashMapUnmanaged(*Type, *Type),
     };
 
     pub fn print(self: *Value, writer: anytype) !void {
@@ -122,7 +119,7 @@ pub const Value = struct {
     fn eql(a: *Value, b: *Value) bool {
         if (a.type != b.type) return false;
         return switch (a.type) {
-            .int => |i| @fabs(n - b.type.number) < 0.000001,
+            .number => |n| @fabs(n - b.type.number) < 0.000001,
             .bool => |bl| bl == b.type.bool,
             .nil => b.type == .nil,
             .string => |s| std.mem.eql(u8, s, b.type.string),

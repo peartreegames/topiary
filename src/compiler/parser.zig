@@ -503,7 +503,6 @@ pub const Parser = struct {
             if (char == '}') {
                 depth -= 1;
                 if (depth == 0) {
-                    std.log.warn("{s}", .{self.source[start..(start + i)]});
                     try self.parseInterpolatedExpression(self.source[start..(start + i - 1)], &exprs);
                     start = token.start + i + 1;
                 }
