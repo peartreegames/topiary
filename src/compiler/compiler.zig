@@ -15,10 +15,33 @@ pub const ByteCode = struct {
         allocator.free(self.instructions);
         allocator.free(self.constants);
     }
+
+    pub fn print(self: *ByteCode, writer: anytype) void {
+        var i: usize = 0;
+        writer.print("==BYTECODE==\n", .{});
+        while (i < self.instructions.len) {
+            writer.print("{d:0>4} ", .{i});
+            const op = @intToEnum(OpCode, self.instructions[i]);
+            writer.print("{s: <16} ", .{op.toString()});
+            i += 1;
+            switch (op) {
+                .constant => {
+                    var index = std.mem.readIntSliceBig(u16, self.instructions[i..(i + 2)]);
+                    writer.print("{d: >8} ", .{index});
+                    i += 2;
+                    var value = self.constants[index];
+                    switch (value) {
+                        .number => |n| writer.print(": {d: >8}\n", .{n}),
+                    }
+                },
+                else => writer.print("\n", .{}),
+            }
+        }
+    }
 };
 
 pub const Constant = union(enum) {
-    number: f64,
+    number: f32,
 };
 
 pub const Compiler = struct {
@@ -55,39 +78,72 @@ pub const Compiler = struct {
     }
 
     pub fn compileStatement(self: *Compiler, stmt: ast.Statement) !void {
+        var token = &stmt.token;
         switch (stmt.type) {
-            .expression => |exp| try self.compileExpression(&exp),
+            .expression => |exp| {
+                try self.compileExpression(&exp);
+                try self.writeOp(.pop, token);
+            },
             else => return,
         }
     }
 
     pub fn compileExpression(self: *Compiler, expr: *const ast.Expression) !void {
+        var token = &expr.token;
         switch (expr.type) {
             .binary => |bin| {
+                if (bin.operator == .less_than) {
+                    try self.compileExpression(bin.right);
+                    try self.compileExpression(bin.left);
+                    try self.writeOp(.greater_than, token);
+                    return;
+                }
                 try self.compileExpression(bin.left);
                 try self.compileExpression(bin.right);
+                const op: OpCode = switch (bin.operator) {
+                    .add => .add,
+                    .subtract => .subtract,
+                    .multiply => .multiply,
+                    .divide => .divide,
+                    .modulus => .modulus,
+                    .equal => .equal,
+                    .not_equal => .not_equal,
+                    .greater_than => .greater_than,
+                    else => return error.UnknownOperator,
+                };
+                try self.writeOp(op, token);
             },
             .number => |n| {
                 const i = try self.addConstant(.{ .number = n });
-                _ = try self.writeInstruction(.constant, @intCast(u16, i), &expr.token);
+                try self.writeOp(.constant, token);
+                _ = try self.writeConstant(@intCast(u16, i), token);
             },
-            else => return,
+            .boolean => |b| try self.writeOp(if (b) .true else .false, token),
+            .unary => |u| {
+                try self.compileExpression(u.value);
+                switch (u.operator) {
+                    .minus => try self.writeOp(.negate, token),
+                    .not => return error.UnknownOperator,
+                }
+            },
+            else => {},
         }
     }
 
-    pub fn writeInstruction(self: *Compiler, comptime op: OpCode, value: anytype, token: *const Token) !usize {
-        const T: type = op.Type();
-        if (T != @TypeOf(value)) return error.TypeMismatch;
+    pub fn writeOp(self: *Compiler, op: OpCode, token: *const Token) !void {
+        try self.instructions.append(@enumToInt(op));
+        try self.tokens.append(token);
+    }
 
+    pub fn writeConstant(self: *Compiler, value: anytype, token: *const Token) !usize {
         var start: usize = self.instructions.items.len;
-        var buf: [@sizeOf(T) + 1]u8 = undefined;
-        buf[0] = @enumToInt(op);
-        var i: usize = 0;
-        while (i < buf.len) : (i += 1) {
+        const T = @TypeOf(value);
+        var buf: [@sizeOf(T)]u8 = undefined;
+        for (buf) |_| {
             try self.tokens.append(token);
         }
         switch (T) {
-            u16 => std.mem.writeIntBig(u16, buf[1..], value),
+            u16 => std.mem.writeIntBig(u16, buf[0..], value),
             else => return start,
         }
         try self.instructions.writer().writeAll(&buf);
@@ -99,15 +155,15 @@ pub const Compiler = struct {
         return self.constants.items.len - 1;
     }
 
-    pub fn print(self: *Compiler, writer: anytype) !void {
+    pub fn print(self: *Compiler, writer: anytype) void {
         var i: usize = 0;
-        writer.print("\n", .{});
+        writer.print("==COMPILED==\n", .{});
         while (i < self.instructions.items.len) {
             writer.print("{d:0>4} ", .{i});
             if (i > 0 and self.tokens.items[i].line == self.tokens.items[i - 1].line) {
                 writer.print("[{s}] ", .{"  | "});
             } else {
-                writer.print("[{d:0>4}] ", .{self.tokens.items[i].line});
+                writer.print("[{d:0>4}] ", .{self.tokens.items[i].*.line});
             }
             const op = @intToEnum(OpCode, self.instructions.items[i]);
             writer.print("{s: <16} ", .{op.toString()});
@@ -122,6 +178,7 @@ pub const Compiler = struct {
                         .number => |n| writer.print(": {d: >8}\n", .{n}),
                     }
                 },
+                else => writer.print("\n", .{}),
             }
         }
     }
@@ -132,7 +189,16 @@ test "Basic Compile" {
         .{
             .input = "1 + 2",
             .expectedConstants = [_]Constant{ .{ .number = 1 }, .{ .number = 2 } },
-            .expectedInstructions = [_]u8{ @enumToInt(OpCode.constant), 0, 0, @enumToInt(OpCode.constant), 0, 1 },
+            .expectedInstructions = [_]u8{
+                @enumToInt(OpCode.constant),
+                0,
+                0,
+                @enumToInt(OpCode.constant),
+                0,
+                1,
+                @enumToInt(OpCode.add),
+                @enumToInt(OpCode.pop),
+            },
         },
     };
 
@@ -148,10 +214,11 @@ test "Basic Compile" {
         var compiler = Compiler.init(allocator);
         defer compiler.deinit();
         try compiler.compile(tree);
-        try compiler.print(std.debug);
 
         var bytecode = try compiler.bytecode();
         defer bytecode.free(testing.allocator);
+        bytecode.print(std.debug);
+
         for (case.expectedInstructions, 0..) |instruction, i| {
             try testing.expectEqual(instruction, bytecode.instructions[i]);
         }

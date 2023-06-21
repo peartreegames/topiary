@@ -73,6 +73,10 @@ pub fn parse(allocator: Allocator, source: []const u8, err: *Errors) Parser.Erro
     while (!parser.currentIs(.eof)) : (parser.next()) {
         try nodes.append(try parser.statement());
     }
+    try nodes.append(.{
+        .token = parser.current_token,
+        .type = .return_void,
+    });
 
     return Tree{
         .root = try nodes.toOwnedSlice(),
@@ -331,7 +335,7 @@ pub const Parser = struct {
             .identifier => try self.identifierExpression(),
             .number => blk: {
                 const string_number = self.source[self.current_token.start..self.current_token.end];
-                const value = try std.fmt.parseFloat(f64, string_number);
+                const value = try std.fmt.parseFloat(f32, string_number);
                 break :blk .{
                     .token = self.current_token,
                     .type = .{

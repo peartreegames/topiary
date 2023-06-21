@@ -48,7 +48,7 @@ pub const Expression = struct {
         },
         @"extern": void,
         boolean: bool,
-        number: f64,
+        number: f32,
         string: struct {
             value: []const u8,
             expressions: []const Expression,
