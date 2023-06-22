@@ -1,5 +1,5 @@
 const std = @import("std");
-const ast = @import("./compiler/ast.zig");
+const ast = @import("./ast.zig");
 const Allocator = std.mem.Allocator;
 
 pub const True = Value{ .bool = true };
@@ -20,17 +20,19 @@ const Type = enum(u8) {
     // set,
     // map,
 };
+
 pub const Value = union(Type) {
     void: void,
     nil: void,
     bool: bool,
     number: f32,
-    string: []const u8,
-    @"enum": [][]const u8,
     range: struct {
         start: i32,
         end: i32,
     },
+
+    string: String,
+    @"enum": [][]const u8,
     // list: std.ArrayListUnmanaged(*Value),
 
     pub fn create(comptime T: type, value: T) Value {
@@ -41,8 +43,16 @@ pub const Value = union(Type) {
         };
     }
 
+    pub fn is(self: Value, tag_type: Type) bool {
+        return self.tag() == tag_type;
+    }
+
+    pub fn tag(self: Value) Type {
+        return @as(Type, self);
+    }
+
     pub fn equals(self: Value, other: Value) bool {
-        if (@TypeOf(self) != @TypeOf(other)) return false;
+        if (@enumToInt(self) != @enumToInt(other)) return false;
         return switch (self) {
             .void => true,
             .number => |n| n == other.number,
@@ -170,5 +180,18 @@ pub const Value = union(Type) {
             },
             else => unreachable,
         };
+    }
+};
+
+pub const String = struct {
+    data: []const u8,
+
+    pub fn create(gc: *Gc, value: []const u8) !*String {
+        return try gc.create(String, .{ .data = try gc.allocator.dupe(u8, value) });
+    }
+
+    pub fn destroy(self: *String, gc: *Gc) void {
+        gc.allocator.free(self.data);
+        gc.allocator.destroy(self);
     }
 };

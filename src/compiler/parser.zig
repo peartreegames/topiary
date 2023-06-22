@@ -73,10 +73,6 @@ pub fn parse(allocator: Allocator, source: []const u8, err: *Errors) Parser.Erro
     while (!parser.currentIs(.eof)) : (parser.next()) {
         try nodes.append(try parser.statement());
     }
-    try nodes.append(.{
-        .token = parser.current_token,
-        .type = .return_void,
-    });
 
     return Tree{
         .root = try nodes.toOwnedSlice(),
@@ -330,6 +326,7 @@ pub const Parser = struct {
     }
 
     fn expression(self: *Parser, prec: Precedence) Error!Expression {
+        var start = self.current_token;
         var left: Expression = switch (self.current_token.token_type) {
             .colon => try self.dialogueExpression(),
             .identifier => try self.identifierExpression(),
@@ -337,7 +334,7 @@ pub const Parser = struct {
                 const string_number = self.source[self.current_token.start..self.current_token.end];
                 const value = try std.fmt.parseFloat(f32, string_number);
                 break :blk .{
-                    .token = self.current_token,
+                    .token = start,
                     .type = .{
                         .number = value,
                     },
@@ -345,20 +342,19 @@ pub const Parser = struct {
             },
             .string => try self.stringExpression(),
             .bang, .minus => blk: {
-                const start_token = self.current_token;
                 self.next();
                 break :blk .{
-                    .token = start_token,
+                    .token = start,
                     .type = .{
                         .unary = .{
-                            .operator = ast.UnaryOp.fromToken(start_token),
+                            .operator = ast.UnaryOp.fromToken(start),
                             .value = try self.allocate(try self.expression(.prefix)),
                         },
                     },
                 };
             },
             .true, .false => .{
-                .token = self.current_token,
+                .token = start,
                 .type = .{
                     .boolean = self.currentIs(.true),
                 },
@@ -424,7 +420,6 @@ pub const Parser = struct {
                 else => return left,
             };
         }
-
         return left;
     }
 

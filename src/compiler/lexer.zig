@@ -205,7 +205,7 @@ pub const Lexer = struct {
     }
 
     fn isEndOfLine(char: u8) bool {
-        return char == '\n';
+        return char == '\n' or char == 0;
     }
 
     fn isLetter(char: u8) bool {

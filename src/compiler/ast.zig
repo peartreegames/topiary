@@ -23,7 +23,6 @@ pub const Tree = struct {
 };
 
 pub const Expression = struct {
-    pub const Type = std.meta.Tag(ExpressionValue);
     token: Token,
     type: ExpressionValue,
 
@@ -100,7 +99,6 @@ pub const Expression = struct {
 };
 
 pub const Statement = struct {
-    pub const Type = std.meta.Tag(StatementValue);
     token: Token,
     type: StatementValue,
 
@@ -162,11 +160,11 @@ pub const Statement = struct {
 
 pub const UnaryOp = enum {
     not,
-    minus,
+    negate,
     pub fn fromToken(tok: Token) UnaryOp {
         return switch (tok.token_type) {
             .bang => .not,
-            .minus => .minus,
+            .minus => .negate,
             else => unreachable,
         };
     }
