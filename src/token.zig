@@ -7,6 +7,10 @@ pub const Token = struct {
     end: usize,
     line: usize,
     column: usize,
+
+    pub fn eql(self: Token, other: Token) bool {
+        return self.token_type == other.token_type and self.start == other.start and self.end == other.end;
+    }
 };
 
 pub const TokenType = enum {

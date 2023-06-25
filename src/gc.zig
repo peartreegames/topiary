@@ -2,19 +2,22 @@ const std = @import("std");
 const Vm = @import("./vm.zig").Vm;
 const Value = @import("./values.zig").Value;
 
+pub const Object = struct {
+    is_marked: bool = false,
+    next: ?*Object = null,
+    value: Value,
+};
+
 pub const Gc = struct {
-    vm: *Vm,
     allocator: std.mem.Allocator,
     bytes_allocated: usize,
     next_collection: usize,
-    stack: ?*Value,
+    stack: ?*Object,
 
     const default_collection: usize = 1024 * 1024;
-    const heap_grow_factor = 1.8;
 
-    pub fn init(vm: *Vm, allocator: std.mem.Allocator) Gc {
+    pub fn init(allocator: std.mem.Allocator) Gc {
         return .{
-            .vm = vm,
             .allocator = allocator,
             .bytes_allocated = 0,
             .next_collection = default_collection,
@@ -23,52 +26,63 @@ pub const Gc = struct {
     }
 
     pub fn deinit(self: *Gc) void {
-        self.collect();
-    }
-
-    pub fn create(self: *Gc, comptime T: type, value: T) !*Value {
-        const obj = try self.allocator.create(T);
-        obj.* = value;
-        self.stack = &obj.base;
-
-        self.bytes_allocated += @sizeOf(T);
-        if (self.bytes_allocator > self.next_collection) {
-            self.mark(&obj.base);
-            self.collect();
+        while (self.stack) |obj| {
+            const next = obj.next;
+            obj.value.destroy(self.allocator);
+            self.allocator.destroy(obj);
+            self.stack = next;
         }
-        return &obj.base;
+        self.* = undefined;
     }
 
-    fn mark(self: *Gc, value: *Value) void {
-        _ = self;
+    pub fn create(self: *Gc, vm: *Vm, value: Value) !*Object {
+        var obj = try self.allocator.create(Object);
+        obj.* = .{
+            .value = value,
+            .next = self.stack,
+        };
+        self.stack = obj;
+
+        self.bytes_allocated += @sizeOf(Value);
+        if (self.bytes_allocated > self.next_collection) {
+            mark(obj);
+            self.collect(vm);
+        }
+        return obj;
+    }
+
+    fn mark(value: *Object) void {
         if (value.is_marked) return;
         value.is_marked = true;
     }
 
-    fn markAll(self: *Gc) void {
-        for (self.vm.stack.items) |value| {
-            self.mark(value);
-        }
+    fn markAll(vm: *Vm) void {
+        for (vm.stack.items) |item| mark(item);
+        for (vm.globals.items) |item| mark(item);
     }
 
     fn sweep(self: *Gc) void {
         if (self.stack == null) return;
 
-        var valuePtr = &(self.stack);
-        while (valuePtr.*) |value| {
+        var valuePtr = self.stack;
+        while (valuePtr) |value| {
             if (!value.is_marked) {
                 var unmarked = value;
-                valuePtr.* = value.next;
+                valuePtr = value.next;
+                switch (unmarked.value) {
+                    .string => |s| self.allocator.free(s),
+                    else => {},
+                }
                 self.allocator.destroy(unmarked);
                 continue;
             }
             value.is_marked = false;
-            valuePtr = &(value.next);
+            valuePtr = value.next;
         }
     }
 
-    fn collect(self: *Gc) void {
-        self.markAll();
+    fn collect(self: *Gc, vm: *Vm) void {
+        markAll(vm);
         self.sweep();
         self.bytes_allocated = 0;
     }

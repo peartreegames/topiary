@@ -23,6 +23,9 @@ pub const OpCode = enum(u8) {
     jump,
     jump_if_false,
 
+    get_global,
+    set_global,
+
     @"return",
 
     pub fn toString(self: OpCode) []const u8 {
@@ -44,14 +47,18 @@ pub const OpCode = enum(u8) {
             .greater_than => "OP_GREATER_THAN",
             .jump => "OP_JUMP",
             .jump_if_false => "OP_JUMP_IF_FALSE",
+            .get_global => "OP_GET_GLOBAL",
+            .set_global => "OP_SET_GLOBAL",
             .@"return" => "OP_RETURN",
         };
     }
 
     pub fn Type(comptime self: OpCode) type {
+        // kept separate to easily change if needed
         return switch (self) {
             .constant => u16,
             .jump, .jump_if_false => u16,
+            .set_global, .get_global => u16,
             else => void,
         };
     }

@@ -1,11 +1,12 @@
 const std = @import("std");
 const ast = @import("./ast.zig");
+const Gc = @import("./gc.zig").Gc;
 const Allocator = std.mem.Allocator;
 
 pub const True = Value{ .bool = true };
 pub const False = Value{ .bool = false };
-pub const Void = Value{.void};
-pub const Nil = Value{.nil};
+pub const Nil = Value.nil;
+pub const Void = Value.void;
 // pub const NativeFn = fn (gc: *Gc, args: []*Value) anyerror!*Value;
 
 const Type = enum(u8) {
@@ -31,17 +32,9 @@ pub const Value = union(Type) {
         end: i32,
     },
 
-    string: String,
-    @"enum": [][]const u8,
+    string: []const u8,
+    @"enum": u8,
     // list: std.ArrayListUnmanaged(*Value),
-
-    pub fn create(comptime T: type, value: T) Value {
-        return switch (T) {
-            f32 => .{ .number = value },
-            bool => .{ .bool = value },
-            else => .{.void},
-        };
-    }
 
     pub fn is(self: Value, tag_type: Type) bool {
         return self.tag() == tag_type;
@@ -51,15 +44,19 @@ pub const Value = union(Type) {
         return @as(Type, self);
     }
 
-    pub fn equals(self: Value, other: Value) bool {
-        if (@enumToInt(self) != @enumToInt(other)) return false;
+    pub fn isTruthy(self: Value) !bool {
         return switch (self) {
-            .void => true,
-            .number => |n| n == other.number,
-            .bool => |b| b == other.bool,
-            .range => |r| r.start == other.range.start and r.end == other.range.end,
-            else => false,
+            .bool => |b| b,
+            .nil => false,
+            else => return error.InvalidType,
         };
+    }
+
+    pub fn destroy(self: Value, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .string => |s| if (s.len > 0) allocator.free(s),
+            else => {},
+        }
     }
 
     pub fn print(self: Value, writer: anytype) void {
@@ -149,31 +146,31 @@ pub const Value = union(Type) {
         return @truncate(u32, hasher.final());
     }
 
-    fn eql(a: *Value, b: *Value) bool {
-        if (a != b) return false;
+    pub fn eql(a: Value, b: Value) bool {
+        if (@intFromEnum(a) != @intFromEnum(b)) return false;
         return switch (a) {
             .number => |n| @fabs(n - b.number) < 0.000001,
             .bool => |bl| bl == b.bool,
             .nil => b == .nil,
             .string => |s| std.mem.eql(u8, s, b.string),
-            .list => |l| {
-                const l_b = b.list;
+            // .list => |l| {
+            //     const l_b = b.list;
 
-                if (l.items.len != l_b.items.len) return false;
-                for (l.items, 0..) |item, i| {
-                    if (!item.eql(l_b.items[i])) return false;
-                }
-                return true;
-            },
-            .map => |m| {
-                const map_b = b.map;
+            //     if (l.items.len != l_b.items.len) return false;
+            //     for (l.items, 0..) |item, i| {
+            //         if (!item.eql(l_b.items[i])) return false;
+            //     }
+            //     return true;
+            // },
+            // .map => |m| {
+            //     const map_b = b.map;
 
-                if (m.items().len != map_b.items().len) return false;
-                for (a.items(), 0..) |entry, i| {
-                    if (entry.hash != map_b.items()[i].hash) return false;
-                }
-                return true;
-            },
+            //     if (m.items().len != map_b.items().len) return false;
+            //     for (a.items(), 0..) |entry, i| {
+            //         if (entry.hash != map_b.items()[i].hash) return false;
+            //     }
+            //     return true;
+            // },
             .range => |r| {
                 const range_b = b.range;
                 return r.start == range_b.start and r.end == range_b.end;
@@ -186,12 +183,16 @@ pub const Value = union(Type) {
 pub const String = struct {
     data: []const u8,
 
-    pub fn create(gc: *Gc, value: []const u8) !*String {
-        return try gc.create(String, .{ .data = try gc.allocator.dupe(u8, value) });
+    pub fn create(allocator: std.mem.Allocator, value: []const u8) !*String {
+        const str = try allocator.create(String);
+        str.* = .{
+            .data = try allocator.dupe(u8, value),
+        };
+        return str;
     }
 
-    pub fn destroy(self: *String, gc: *Gc) void {
-        gc.allocator.free(self.data);
-        gc.allocator.destroy(self);
+    pub fn destroy(self: *String, allocator: std.mem.Allocator) void {
+        allocator.free(self.data);
+        allocator.destroy(self);
     }
 };

@@ -2,10 +2,11 @@ const std = @import("std");
 
 pub fn Stack(comptime T: type) type {
     return struct {
+        allocator: std.mem.Allocator,
         backing: []T,
         items: []T,
+
         count: usize = 0,
-        allocator: std.mem.Allocator,
         lastPopped: ?T = null,
 
         const Self = Stack(T);

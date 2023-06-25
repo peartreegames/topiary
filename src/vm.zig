@@ -1,14 +1,18 @@
 const std = @import("std");
-const Compiler = @import("./compiler/compiler.zig").Compiler;
-const ByteCode = @import("./compiler/compiler.zig").ByteCode;
-const Errors = @import("./compiler/error.zig").Errors;
-const parser = @import("./compiler/parser.zig");
-const OpCode = @import("./compiler/opcode.zig").OpCode;
-const values = @import("./compiler/values.zig");
+const Compiler = @import("./compiler.zig").Compiler;
+const ByteCode = @import("./compiler.zig").ByteCode;
+const Errors = @import("./error.zig").Errors;
+const parser = @import("./parser.zig");
+const OpCode = @import("./opcode.zig").OpCode;
+const values = @import("./values.zig");
 const Stack = @import("./stack.zig").Stack;
+const Gc = @import("./gc.zig").Gc;
+const Object = @import("./gc.zig").Object;
+const Token = @import("./token.zig").Token;
 
 const testing = std.testing;
 const stack_size = 2048;
+const globals_size = 65536;
 const Value = values.Value;
 
 const InterpretError = error{
@@ -22,20 +26,29 @@ const InterpretResult = union(enum) {
 };
 
 pub const Vm = struct {
+    allocator: std.mem.Allocator,
+    gc: Gc,
+    globals: std.ArrayList(*Object),
+    stack: Stack(*Object),
+
     bytecode: ByteCode = undefined,
     ip: usize = 0,
-    stack: Stack(Value),
-    allocator: std.mem.Allocator,
+    debug: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) !Vm {
         return .{
             .allocator = allocator,
-            .stack = try Stack(Value).init(allocator, stack_size),
+            .stack = try Stack(*Object).init(allocator, stack_size),
+            .globals = try std.ArrayList(*Object).initCapacity(allocator, 1024),
+            .gc = Gc.init(allocator),
         };
     }
 
     pub fn deinit(self: *Vm) void {
         self.stack.deinit();
+        self.globals.deinit();
+        self.bytecode.free(testing.allocator);
+        self.gc.deinit();
     }
 
     pub fn interpret(self: *Vm, bytecode: ByteCode) !void {
@@ -56,10 +69,19 @@ pub const Vm = struct {
         try compiler.compile(tree);
 
         var bytecode = try compiler.bytecode();
-        defer bytecode.free(testing.allocator);
-        Compiler.print(bytecode, null, std.debug);
+        if (self.debug) {
+            Compiler.print(bytecode, null, std.debug);
+        }
 
         try self.interpret(bytecode);
+    }
+
+    fn fail(self: *Vm, comptime msg: []const u8, token: Token) !void {
+        _ = token;
+        _ = msg;
+        _ = self;
+        // try self.errors.add()
+        return error.RuntimeError;
     }
 
     fn readByte(self: *Vm) u8 {
@@ -68,53 +90,71 @@ pub const Vm = struct {
         return byte;
     }
 
+    fn readInt(self: *Vm, comptime T: type) T {
+        const result = std.mem.readIntSliceBig(T, self.bytecode.instructions[self.ip..(self.ip + @sizeOf(T))]);
+        self.ip += @sizeOf(T);
+        return result;
+    }
+
     fn run(self: *Vm) !void {
         while (self.ip < self.bytecode.instructions.len) {
             const instruction = self.readByte();
-            const op = @intToEnum(OpCode, instruction);
+            const op = @enumFromInt(OpCode, instruction);
             switch (op) {
                 .constant => {
-                    var index = std.mem.readIntSliceBig(u16, self.bytecode.instructions[self.ip..(self.ip + 2)]);
+                    var index = self.readInt(u16);
                     var value = self.bytecode.constants[index];
-                    self.ip += 2;
-                    self.push(Value.create(f32, value.number));
+                    switch (value) {
+                        .string => |s| try self.push(.{ .string = try self.allocator.dupe(u8, s) }),
+                        else => try self.push(value),
+                    }
                 },
                 .pop => _ = self.pop(),
                 .add => {
-                    const right = self.pop();
-                    const left = self.pop();
+                    const right = self.pop().*.value;
+                    const left = self.pop().*.value;
                     if (@TypeOf(right) != @TypeOf(left)) return error.RuntimeError;
                     switch (right) {
-                        .number => self.push(Value.create(f32, right.number + left.number)),
-                        // .string => self.push(Value.create([]const u8, right.string ++ left.string)),
+                        .number => try self.push(.{ .number = right.number + left.number }),
+                        .string => {
+                            try self.push(.{ .string = try std.mem.concat(self.allocator, u8, &.{ left.string, right.string }) });
+                        },
                         else => return error.RuntimeError,
                     }
                 },
                 .subtract, .multiply, .divide, .modulus => try self.binaryNumberOp(op),
                 .equal, .not_equal, .greater_than => try self.comparisonOp(op),
-                .true => self.push(values.True),
-                .false => self.push(values.False),
-                .nil => self.push(values.Nil),
-                .negate => self.push(Value.create(f32, -self.pop().number)),
+                .true => try self.push(values.True),
+                .false => try self.push(values.False),
+                .nil => try self.push(values.Nil),
+                .negate => try self.push(.{ .number = -self.pop().*.value.number }),
                 .not => {
-                    const value = self.pop().bool;
-                    if (value) {
-                        self.push(values.False);
-                    } else if (!value) {
-                        self.push(values.True);
-                    } else self.push(values.False);
+                    const value = self.pop().*.value;
+                    switch (value) {
+                        .bool => |b| try self.push(if (b) values.False else values.True),
+                        .nil => try self.push(values.True),
+                        else => try self.push(values.False),
+                    }
                 },
                 .jump => {
-                    var dest = std.mem.readIntSliceBig(u16, self.bytecode.instructions[self.ip..(self.ip + 2)]);
+                    var dest = self.readInt(u16);
                     self.ip = dest;
                 },
                 .jump_if_false => {
-                    var dest = std.mem.readIntSliceBig(u16, self.bytecode.instructions[self.ip..(self.ip + 2)]);
-                    self.ip += 2;
-                    var condition = self.pop();
-                    if (!condition.bool) {
+                    var dest = self.readInt(u16);
+                    var condition = self.pop().*.value;
+                    if (!try condition.isTruthy()) {
                         self.ip = dest;
                     }
+                },
+                .set_global => {
+                    const index = self.readInt(u16);
+                    if (index >= self.globals.items.len) try self.globals.resize(@intFromFloat(usize, @floatFromInt(f32, index + 1) * @as(f32, 2.0)));
+                    self.globals.items[index] = self.pop();
+                },
+                .get_global => {
+                    const index = self.readInt(u16);
+                    try self.push(self.globals.items[index].*.value);
                 },
                 .@"return" => break,
             }
@@ -122,8 +162,8 @@ pub const Vm = struct {
     }
 
     fn binaryNumberOp(self: *Vm, op: OpCode) !void {
-        const right = self.pop().number;
-        const left = self.pop().number;
+        const right = self.pop().*.value.number;
+        const left = self.pop().*.value.number;
         const total = switch (op) {
             .subtract => left - right,
             .multiply => left * right,
@@ -131,26 +171,26 @@ pub const Vm = struct {
             .modulus => @mod(left, right),
             else => return error.UnknownOperator,
         };
-        self.push(Value.create(f32, total));
+        try self.push(.{ .number = total });
     }
 
     fn comparisonOp(self: *Vm, op: OpCode) !void {
-        const right = self.pop();
-        const left = self.pop();
-        if (@enumToInt(right) != @enumToInt(left)) return error.RuntimeError;
+        const right = self.pop().*.value;
+        const left = self.pop().*.value;
+        if (@intFromEnum(right) != @intFromEnum(left)) return error.RuntimeError;
         switch (op) {
-            .equal => self.push(Value.create(bool, right.equals(left))),
-            .not_equal => self.push(Value.create(bool, !right.equals(left))),
-            .greater_than => self.push(Value.create(bool, left.number > right.number)),
+            .equal => try self.push(.{ .bool = right.eql(left) }),
+            .not_equal => try self.push(.{ .bool = !right.eql(left) }),
+            .greater_than => try self.push(.{ .bool = left.number > right.number }),
             else => return error.UnknownOperator,
         }
     }
 
-    fn push(self: *Vm, value: Value) void {
-        self.stack.push(value);
+    fn push(self: *Vm, value: Value) !void {
+        self.stack.push(try self.gc.create(self, value));
     }
 
-    fn pop(self: *Vm) Value {
+    fn pop(self: *Vm) *Object {
         return self.stack.pop();
     }
 
@@ -191,8 +231,8 @@ test "Basics" {
         defer vm.deinit();
         try vm.interpretSource(case.input);
         switch (case.type) {
-            f32 => try testing.expect(case.value == vm.stack.last().?.number),
-            bool => try testing.expect(case.value == vm.stack.last().?.bool),
+            f32 => try testing.expect(case.value == vm.stack.last().?.*.value.number),
+            bool => try testing.expect(case.value == vm.stack.last().?.*.value.bool),
             else => continue,
         }
     }
@@ -200,11 +240,11 @@ test "Basics" {
 
 test "Conditionals" {
     const test_cases = .{
-        .{ .input = "if (true) { 10 }", .value = 10.0, .type = f32 },
-        .{ .input = "if (true) { 10 } else { 20 }", .value = 10.0, .type = f32 },
-        .{ .input = "if (false) { 10 } else { 20 }", .value = 20.0, .type = f32 },
-        .{ .input = "if (1 == 1) { 10 }", .value = 10.0, .type = f32 },
-        .{ .input = "if (false) { 10 }", .value = null, .type = null },
+        .{ .input = "if (true) { 10 }", .value = 10.0, .type = .number },
+        .{ .input = "if (true) { 10 } else { 20 }", .value = 10.0, .type = .number },
+        .{ .input = "if (false) { 10 } else { 20 }", .value = 20.0, .type = .number },
+        .{ .input = "if (1 == 1) { 10 }", .value = 10.0, .type = .number },
+        .{ .input = "if (false) { 10 }", .value = void, .type = .nil },
     };
 
     inline for (test_cases) |case| {
@@ -212,9 +252,39 @@ test "Conditionals" {
         defer vm.deinit();
         try vm.interpretSource(case.input);
         switch (case.type) {
-            f32 => try testing.expect(case.value == vm.stack.last().?.number),
-            null => try testing.expect(case.value == vm.stack.last().?.nil),
+            .number => try testing.expect(case.value == vm.stack.last().?.*.value.number),
+            .nil => try testing.expect(vm.stack.last().?.*.value.is(.nil)),
             else => continue,
         }
+    }
+}
+test "Variables" {
+    const test_cases = .{
+        .{ .input = "var one = 1 one", .value = 1.0, .type = .number },
+        .{ .input = "var one = 1 var two = 2 one + two", .value = 3.0, .type = .number },
+        .{ .input = "var one = 1 var two = one + one one + two", .value = 3.0, .type = .number },
+    };
+
+    inline for (test_cases) |case| {
+        var vm = try Vm.init(testing.allocator);
+        defer vm.deinit();
+        try vm.interpretSource(case.input);
+        try testing.expect(case.value == vm.stack.last().?.*.value.number);
+    }
+}
+
+test "Strings" {
+    const test_cases = .{
+        .{ .input = "\"testing\"", .value = "testing" },
+        .{ .input = "\"test\" + \"ing\"", .value = "testing" },
+        .{ .input = "\"test\" + \"ing\" + \"testing\"", .value = "testingtesting" },
+    };
+
+    inline for (test_cases) |case| {
+        var vm = try Vm.init(testing.allocator);
+        // vm.debug = true;
+        defer vm.deinit();
+        try vm.interpretSource(case.input);
+        try testing.expectEqualStrings(case.value, vm.stack.last().?.*.value.string);
     }
 }

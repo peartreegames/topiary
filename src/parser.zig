@@ -1,7 +1,3 @@
-// Based on a combination of two other parsers:
-// https://github.com/Luukdegram/luf/blob/master/src/parser.zig
-// https://github.com/MasterQ32/LoLa/blob/master/src/library/compiler/parser.zig
-
 const std = @import("std");
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
@@ -32,7 +28,7 @@ const Precedence = enum(u4) {
     index,
 
     fn val(self: Precedence) u4 {
-        return @enumToInt(self);
+        return @intFromEnum(self);
     }
 };
 
