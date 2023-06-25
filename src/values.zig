@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("./ast.zig");
 const Gc = @import("./gc.zig").Gc;
+const Object = @import("./gc.zig").Object;
 const Allocator = std.mem.Allocator;
 
 pub const True = Value{ .bool = true };
@@ -17,7 +18,7 @@ const Type = enum(u8) {
     string,
     @"enum",
     range,
-    // list,
+    list,
     // set,
     // map,
 };
@@ -34,7 +35,7 @@ pub const Value = union(Type) {
 
     string: []const u8,
     @"enum": u8,
-    // list: std.ArrayListUnmanaged(*Value),
+    list: std.ArrayList(*Object),
 
     pub fn is(self: Value, tag_type: Type) bool {
         return self.tag() == tag_type;
@@ -54,7 +55,8 @@ pub const Value = union(Type) {
 
     pub fn destroy(self: Value, allocator: std.mem.Allocator) void {
         switch (self) {
-            .string => |s| if (s.len > 0) allocator.free(s),
+            .string => |s| allocator.free(s),
+            .list => |l| l.deinit(),
             else => {},
         }
     }
@@ -65,16 +67,15 @@ pub const Value = union(Type) {
             .bool => |b| writer.print("{}", .{b}),
             .string => |s| writer.print("{s}", .{s}),
             .nil => writer.print("nil", .{}),
-            // .list => {
-            //     const list = self.toList();
-            //     writer.print("[", .{});
-            //     for (list.items, 0..) |item, i| {
-            //         item.*.print(writer);
-            //         if (i != list.items.len - 1)
-            //             writer.print(",\n", .{});
-            //     }
-            //     writer.print("]\n", .{});
-            // },
+            .list => |l| {
+                writer.print("[", .{});
+                for (l.items, 0..) |item, i| {
+                    item.*.print(writer);
+                    if (i != l.items.len - 1)
+                        writer.print(",\n", .{});
+                }
+                writer.print("]\n", .{});
+            },
             // .map => |m| {
             //     writer.print("{", .{});
             //     for (m.entries.items, 0..) |item, i| {
@@ -153,15 +154,15 @@ pub const Value = union(Type) {
             .bool => |bl| bl == b.bool,
             .nil => b == .nil,
             .string => |s| std.mem.eql(u8, s, b.string),
-            // .list => |l| {
-            //     const l_b = b.list;
+            .list => |l| {
+                const l_b = b.list;
 
-            //     if (l.items.len != l_b.items.len) return false;
-            //     for (l.items, 0..) |item, i| {
-            //         if (!item.eql(l_b.items[i])) return false;
-            //     }
-            //     return true;
-            // },
+                if (l.items.len != l_b.items.len) return false;
+                for (l.items, 0..) |item, i| {
+                    if (!item.*.value.eql(l_b.items[i].*.value)) return false;
+                }
+                return true;
+            },
             // .map => |m| {
             //     const map_b = b.map;
 
@@ -180,6 +181,8 @@ pub const Value = union(Type) {
     }
 };
 
+// TODO: Decide if this is needed,
+// if not remove
 pub const String = struct {
     data: []const u8,
 

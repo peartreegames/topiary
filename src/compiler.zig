@@ -37,7 +37,7 @@ pub const DebugTokens = struct {
             try tokens.append(.{ .token = token, .length = 0 });
             return;
         }
-        var current = tokens.items[tokens.items.len - 1];
+        var current = tokens.getLast();
         if (current.token.eql(token)) {
             current.length += 1;
             tokens.items[tokens.items.len - 1] = current;
@@ -101,6 +101,18 @@ pub const Compiler = struct {
         }
     }
 
+    // used for testing
+    pub fn compileSource(self: *Compiler, source: []const u8) !void {
+        var errors = Errors.init(self.allocator);
+        defer errors.deinit();
+        const tree = parser.parse(self.allocator, source, &errors) catch |err| {
+            try errors.write(source, std.io.getStdErr().writer());
+            return err;
+        };
+        defer tree.deinit();
+        try self.compile(tree);
+    }
+
     pub fn compileStatement(self: *Compiler, stmt: ast.Statement) CompilerError!void {
         var token = stmt.token;
         switch (stmt.type) {
@@ -133,7 +145,7 @@ pub const Compiler = struct {
                 try self.compileExpression(&v.initializer);
                 var symbol = try self.symbols.define(v.name);
                 try self.writeOp(.set_global, token);
-                _ = try self.writeInt(OpCode.Type(.set_global), symbol.*.index, token);
+                _ = try self.writeInt(OpCode.Size(.set_global), symbol.*.index, token);
             },
             else => {},
         }
@@ -181,14 +193,26 @@ pub const Compiler = struct {
             .number => |n| {
                 const i = try self.addConstant(.{ .number = n });
                 try self.writeOp(.constant, token);
-                _ = try self.writeInt(u16, i, token);
+                _ = try self.writeInt(OpCode.Size(.constant), i, token);
             },
             .boolean => |b| try self.writeOp(if (b) .true else .false, token),
             .string => |s| {
-                // const i = try self.addConstant(.{ .string = try String.create(self.allocator, s.value) });
+                for (s.expressions) |*item| {
+                    try self.compileExpression(item);
+                }
                 const i = try self.addConstant(.{ .string = try self.allocator.dupe(u8, s.value) });
-                try self.writeOp(.constant, token);
-                _ = try self.writeInt(u16, i, token);
+                try self.writeOp(.string, token);
+                _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                _ = try self.writeInt(OpCode.Size(.list), @intCast(u16, s.expressions.len), token);
+            },
+            .list => |l| {
+                for (l) |*item| {
+                    try self.compileExpression(item);
+                }
+                try self.writeOp(.list, token);
+                const size = OpCode.Size(.list);
+                const length = @intCast(size, l.len);
+                _ = try self.writeInt(size, length, token);
             },
             .unary => |u| {
                 try self.compileExpression(u.value);
@@ -201,7 +225,7 @@ pub const Compiler = struct {
                 var symbol = self.symbols.resolve(id);
                 if (symbol) |ptr| {
                     try self.writeOp(.get_global, token);
-                    _ = try self.writeInt(OpCode.Type(.get_global), ptr.*.index, token);
+                    _ = try self.writeInt(OpCode.Size(.get_global), ptr.*.index, token);
                     return;
                 }
                 return error.OutOfMemory;
@@ -275,7 +299,6 @@ pub const Compiler = struct {
             writer.print("{d:0>4} ", .{i});
             if (tokens) |ts| {
                 const token = DebugTokens.get(ts, i);
-                // std.log.warn("{?}", .{token});
                 if (token) |t| {
                     if (i > 0 and t.line == DebugTokens.get(ts, i - 1).?.line) {
                         writer.print("[{s}] ", .{"  | "});
@@ -288,7 +311,7 @@ pub const Compiler = struct {
             writer.print("{s: <16} ", .{op.toString()});
             i += 1;
             switch (op) {
-                .jump, .jump_if_false, .set_global, .get_global => {
+                .jump, .jump_if_false, .set_global, .get_global, .list => {
                     var dest = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
                     writer.print("{d: >8}", .{dest});
                     i += 2;
@@ -315,31 +338,15 @@ test "Basic Compile" {
         .{
             .input = "1 + 2",
             .expectedConstants = [_]Value{ .{ .number = 1 }, .{ .number = 2 } },
-            .expectedInstructions = [_]u8{
-                @intFromEnum(OpCode.constant),
-                0,
-                0,
-                @intFromEnum(OpCode.constant),
-                0,
-                1,
-                @intFromEnum(OpCode.add),
-                @intFromEnum(OpCode.pop),
-            },
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.add), @intFromEnum(OpCode.pop) },
         },
     };
 
     inline for (test_cases) |case| {
         var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        const tree = parser.parse(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer tree.deinit();
         var compiler = Compiler.init(allocator);
         defer compiler.deinit();
-        try compiler.compile(tree);
+        try compiler.compileSource(case.input);
 
         var bytecode = try compiler.bytecode();
         defer bytecode.free(testing.allocator);
@@ -362,64 +369,21 @@ test "Conditionals Compile" {
         .{
             .input = "if (true) { 10 } 333",
             .expectedConstants = [_]Value{ .{ .number = 10 }, .{ .number = 333 } },
-            .expectedInstructions = [_]u8{
-                @intFromEnum(OpCode.true),
-                @intFromEnum(OpCode.jump_if_false),
-                0,
-                10,
-                @intFromEnum(OpCode.constant),
-                0,
-                0,
-                @intFromEnum(OpCode.jump),
-                0,
-                11,
-                @intFromEnum(OpCode.nil),
-                @intFromEnum(OpCode.pop),
-                @intFromEnum(OpCode.constant),
-                0,
-                1,
-                @intFromEnum(OpCode.pop),
-            },
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.true), @intFromEnum(OpCode.jump_if_false), 0, 10, @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.jump), 0, 11, @intFromEnum(OpCode.nil), @intFromEnum(OpCode.pop), @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.pop) },
         },
         .{
             .input = "if (true) { 10 } else { 20 } 333",
             .expectedConstants = [_]Value{ .{ .number = 10 }, .{ .number = 20 }, .{ .number = 333 } },
-            .expectedInstructions = [_]u8{
-                @intFromEnum(OpCode.true),
-                @intFromEnum(OpCode.jump_if_false),
-                0,
-                10,
-                @intFromEnum(OpCode.constant),
-                0,
-                0,
-                @intFromEnum(OpCode.jump),
-                0,
-                13,
-                @intFromEnum(OpCode.constant),
-                0,
-                1,
-                @intFromEnum(OpCode.pop),
-                @intFromEnum(OpCode.constant),
-                0,
-                2,
-                @intFromEnum(OpCode.pop),
-            },
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.true), @intFromEnum(OpCode.jump_if_false), 0, 10, @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.jump), 0, 13, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.pop), @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.pop) },
         },
     };
 
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
         var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        const tree = parser.parse(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer tree.deinit();
         var compiler = Compiler.init(allocator);
         defer compiler.deinit();
-        try compiler.compile(tree);
+        try compiler.compileSource(case.input);
 
         var bytecode = try compiler.bytecode();
         defer bytecode.free(testing.allocator);
@@ -446,20 +410,7 @@ test "Variables" {
             \\ var two = 2
             ,
             .expectedConstants = [_]Value{ .{ .number = 1 }, .{ .number = 2 } },
-            .expectedInstructions = [_]u8{
-                @intFromEnum(OpCode.constant),
-                0,
-                0,
-                @intFromEnum(OpCode.set_global),
-                0,
-                0,
-                @intFromEnum(OpCode.constant),
-                0,
-                1,
-                @intFromEnum(OpCode.set_global),
-                0,
-                1,
-            },
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.set_global), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.set_global), 0, 1 },
         },
         .{
             .input =
@@ -468,40 +419,16 @@ test "Variables" {
             \\ two
             ,
             .expectedConstants = [_]Value{.{ .number = 1 }},
-            .expectedInstructions = [_]u8{
-                @intFromEnum(OpCode.constant),
-                0,
-                0,
-                @intFromEnum(OpCode.set_global),
-                0,
-                0,
-                @intFromEnum(OpCode.get_global),
-                0,
-                0,
-                @intFromEnum(OpCode.set_global),
-                0,
-                1,
-                @intFromEnum(OpCode.get_global),
-                0,
-                1,
-                @intFromEnum(OpCode.pop),
-            },
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.set_global), 0, 0, @intFromEnum(OpCode.get_global), 0, 0, @intFromEnum(OpCode.set_global), 0, 1, @intFromEnum(OpCode.get_global), 0, 1, @intFromEnum(OpCode.pop) },
         },
     };
 
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
         var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        const tree = parser.parse(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer tree.deinit();
         var compiler = Compiler.init(allocator);
         defer compiler.deinit();
-        try compiler.compile(tree);
+        try compiler.compileSource(case.input);
 
         var bytecode = try compiler.bytecode();
         defer bytecode.free(testing.allocator);
@@ -525,23 +452,22 @@ test "Strings" {
         .{
             .input = "\"testing\"",
             .expectedConstants = [_][]const u8{"testing"},
-            .expectedInstructions = [_]u8{
-                @intFromEnum(OpCode.constant),
-                0,
-                0,
-                @intFromEnum(OpCode.pop),
-            },
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.string), 0, 0, 0, 0, @intFromEnum(OpCode.pop) },
         },
         .{
             .input = "\"test\" + \"ing\"",
             .expectedConstants = [_][]const u8{ "test", "ing" },
             .expectedInstructions = [_]u8{
-                @intFromEnum(OpCode.constant),
+                @intFromEnum(OpCode.string),
                 0,
                 0,
-                @intFromEnum(OpCode.constant),
+                0,
+                0,
+                @intFromEnum(OpCode.string),
                 0,
                 1,
+                0,
+                0,
                 @intFromEnum(OpCode.add),
                 @intFromEnum(OpCode.pop),
             },
@@ -551,27 +477,60 @@ test "Strings" {
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
         var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        const tree = parser.parse(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer tree.deinit();
         var compiler = Compiler.init(allocator);
         defer compiler.deinit();
-        try compiler.compile(tree);
+        try compiler.compileSource(case.input);
 
         var bytecode = try compiler.bytecode();
         defer bytecode.free(testing.allocator);
 
-        Compiler.print(bytecode, bytecode.tokens, std.debug);
+        // Compiler.print(bytecode, bytecode.tokens, std.debug);
         for (case.expectedInstructions, 0..) |instruction, i| {
             errdefer std.log.warn("{}", .{i});
             try testing.expectEqual(instruction, bytecode.instructions[i]);
         }
         for (case.expectedConstants, 0..) |constant, i| {
             try testing.expectEqualStrings(constant, bytecode.constants[i].string);
+        }
+    }
+}
+
+test "List" {
+    const test_cases = .{
+        .{
+            .input = "[]",
+            .expectedConstants = [_]f32{},
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.list), 0, 0, @intFromEnum(OpCode.pop) },
+        },
+        .{
+            .input = "[1,2,3]",
+            .expectedConstants = [_]f32{ 1, 2, 3 },
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.list), 0, 3, @intFromEnum(OpCode.pop) },
+        },
+        .{
+            .input = "[1 + 2, 3 - 4, 5 * 6]",
+            .expectedConstants = [_]f32{ 1, 2, 3, 4, 5, 6 },
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.add), @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.constant), 0, 3, @intFromEnum(OpCode.subtract), @intFromEnum(OpCode.constant), 0, 4, @intFromEnum(OpCode.constant), 0, 5, @intFromEnum(OpCode.multiply), @intFromEnum(OpCode.list), 0, 3, @intFromEnum(OpCode.pop) },
+        },
+    };
+
+    inline for (test_cases) |case| {
+        var allocator = testing.allocator;
+        var compiler = Compiler.init(allocator);
+        defer compiler.deinit();
+        try compiler.compileSource(case.input);
+
+        var bytecode = try compiler.bytecode();
+        defer bytecode.free(testing.allocator);
+
+        // Compiler.print(bytecode, bytecode.tokens, std.debug);
+        for (case.expectedInstructions, 0..) |instruction, i| {
+            errdefer std.log.warn("{}", .{i});
+            try testing.expectEqual(instruction, bytecode.instructions[i]);
+        }
+
+        for (case.expectedConstants, 0..) |constant, i| {
+            try testing.expect(constant == bytecode.constants[i].number);
         }
     }
 }

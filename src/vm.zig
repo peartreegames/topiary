@@ -104,10 +104,7 @@ pub const Vm = struct {
                 .constant => {
                     var index = self.readInt(u16);
                     var value = self.bytecode.constants[index];
-                    switch (value) {
-                        .string => |s| try self.push(.{ .string = try self.allocator.dupe(u8, s) }),
-                        else => try self.push(value),
-                    }
+                    try self.push(value);
                 },
                 .pop => _ = self.pop(),
                 .add => {
@@ -155,6 +152,49 @@ pub const Vm = struct {
                 .get_global => {
                     const index = self.readInt(u16);
                     try self.push(self.globals.items[index].*.value);
+                },
+                .string => {
+                    var index = self.readInt(u16);
+                    var value = self.bytecode.constants[index];
+                    var count = self.readInt(u16);
+                    var args = try std.ArrayList(Value).initCapacity(self.allocator, count);
+                    defer args.deinit();
+                    while (count > 0) : (count -= 1) {
+                        try args.append(self.pop().*.value);
+                    }
+                    std.mem.reverse(Value, args.items);
+                    var buf: [1028]u8 = undefined;
+                    var fbs = std.io.fixedBufferStream(&buf);
+                    var writer = fbs.writer();
+                    var i: usize = 0;
+                    var a: usize = 0;
+                    var start: usize = 0;
+                    while (i < value.string.len) : (i += 1) {
+                        var c = value.string[i];
+                        if (c == '{') {
+                            try writer.writeAll(value.string[start..i]);
+                            switch (args.items[a]) {
+                                .number => |n| try std.fmt.formatFloatDecimal(n, std.fmt.FormatOptions{}, fbs.writer()),
+                                .string => |s| try writer.writeAll(s),
+                                .bool => |b| try writer.writeAll(if (b) "true" else "false"),
+                                else => return error.RuntimeError,
+                            }
+                            i += 1;
+                            start = i + 1;
+                            a += 1;
+                        }
+                    }
+                    try writer.writeAll(value.string[start..]);
+                    try self.push(.{ .string = try self.allocator.dupe(u8, fbs.getWritten()) });
+                },
+                .list => {
+                    var count = self.readInt(u16);
+                    var list = try std.ArrayList(*Object).initCapacity(self.allocator, count);
+                    while (count > 0) : (count -= 1) {
+                        try list.append(self.pop());
+                    }
+                    std.mem.reverse(*Object, list.items);
+                    try self.push(.{ .list = list });
                 },
                 .@"return" => break,
             }
@@ -278,6 +318,9 @@ test "Strings" {
         .{ .input = "\"testing\"", .value = "testing" },
         .{ .input = "\"test\" + \"ing\"", .value = "testing" },
         .{ .input = "\"test\" + \"ing\" + \"testing\"", .value = "testingtesting" },
+        .{ .input = "\"{123}test\"", .value = "123test" },
+        .{ .input = "\"test{123}\"", .value = "test123" },
+        .{ .input = "\"{123}te{4 * 5}st{6 + 7}\"", .value = "123te20st13" },
     };
 
     inline for (test_cases) |case| {
@@ -286,5 +329,23 @@ test "Strings" {
         defer vm.deinit();
         try vm.interpretSource(case.input);
         try testing.expectEqualStrings(case.value, vm.stack.last().?.*.value.string);
+    }
+}
+
+test "Lists" {
+    const test_cases = .{
+        .{ .input = "[]", .value = [_]f32{} },
+        .{ .input = "[1,2,3]", .value = [_]f32{ 1, 2, 3 } },
+        .{ .input = "[1 + 2, 3 * 4, 5 + 6]", .value = [_]f32{ 3, 12, 11 } },
+    };
+
+    inline for (test_cases) |case| {
+        var vm = try Vm.init(testing.allocator);
+        // vm.debug = true;
+        defer vm.deinit();
+        try vm.interpretSource(case.input);
+        for (case.value, 0..) |v, i| {
+            try testing.expect(v == vm.stack.last().?.*.value.list.items[i].*.value.number);
+        }
     }
 }

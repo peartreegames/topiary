@@ -490,7 +490,7 @@ pub const Parser = struct {
         for (self.source[token.start..token.end], 0..) |char, i| {
             if (char == '{') {
                 if (depth == 0) {
-                    value = try std.fmt.allocPrint(self.allocator, "{s}{s}{s}", .{ value, self.source[start..(start + i)], "{}" });
+                    value = try std.fmt.allocPrint(self.allocator, "{s}{s}{s}", .{ value, self.source[start..(token.start + i)], "{}" });
                     start = token.start + i + 1;
                 }
                 depth += 1;
@@ -498,7 +498,7 @@ pub const Parser = struct {
             if (char == '}') {
                 depth -= 1;
                 if (depth == 0) {
-                    try self.parseInterpolatedExpression(self.source[start..(start + i - 1)], &exprs);
+                    try self.parseInterpolatedExpression(self.source[start..(token.start + i)], &exprs);
                     start = token.start + i + 1;
                 }
             }
@@ -560,8 +560,10 @@ pub const Parser = struct {
         errdefer list.deinit();
         while (!self.currentIs(.right_bracket)) {
             try list.append(try self.expression(.lowest));
+            self.next();
             if (self.currentIs(.comma) or self.peekIs(.right_bracket)) self.next();
         }
+        try self.expectCurrent(.right_bracket);
         return .{
             .token = start_token,
             .type = .{
@@ -1051,7 +1053,7 @@ test "Parse Function Declaration" {
     try testing.expect(tree.root[0].type.variable.initializer.type.function.body.len == 1);
 }
 
-test "Parse Iteratable Types" {
+test "Parse Iterable Types" {
     var allocator = testing.allocator;
     const test_cases = .{
         .{ .input = "const stringList = [\"item\"]", .id = "stringList", .item_value = "item", .mutable = false, .type = .list },
