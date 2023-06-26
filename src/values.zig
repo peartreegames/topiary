@@ -1,7 +1,6 @@
 const std = @import("std");
 const ast = @import("./ast.zig");
 const Gc = @import("./gc.zig").Gc;
-const Object = @import("./gc.zig").Object;
 const Allocator = std.mem.Allocator;
 
 pub const True = Value{ .bool = true };
@@ -15,13 +14,11 @@ const Type = enum(u8) {
     nil,
     bool,
     number,
-    string,
-    @"enum",
     range,
-    list,
-    // set,
-    // map,
+    obj,
 };
+
+pub const adapter = Value.Adapter{};
 
 pub const Value = union(Type) {
     void: void,
@@ -32,10 +29,38 @@ pub const Value = union(Type) {
         start: i32,
         end: i32,
     },
+    obj: *Obj,
 
-    string: []const u8,
-    @"enum": u8,
-    list: std.ArrayList(*Object),
+    pub const Obj = struct {
+        is_marked: bool = false,
+        next: ?*Obj = null,
+        data: Data,
+
+        pub const Data = union(enum(u4)) {
+            string: []const u8,
+            @"enum": []const u8,
+            list: std.ArrayList(Value),
+            map: MapType,
+            set: SetType,
+        };
+        pub const MapType = std.ArrayHashMap(Value, Value, Adapter, true);
+        pub const SetType = std.ArrayHashMap(Value, void, Adapter, true);
+
+        pub fn toValue(self: *Obj) *Value {
+            return @fieldParentPtr(Value, "obj", self);
+        }
+
+        pub fn destroy(allocator: std.mem.Allocator, obj: *Obj) void {
+            switch (obj.data) {
+                .string => |s| allocator.free(s),
+                .@"enum" => |e| allocator.free(e),
+                .list => |l| l.deinit(),
+                .map => obj.data.map.deinit(),
+                .set => obj.data.set.deinit(),
+            }
+            allocator.destroy(obj);
+        }
+    };
 
     pub fn is(self: Value, tag_type: Type) bool {
         return self.tag() == tag_type;
@@ -43,6 +68,10 @@ pub const Value = union(Type) {
 
     pub fn tag(self: Value) Type {
         return @as(Type, self);
+    }
+
+    pub fn eql(a: Value, b: Value) bool {
+        return adapter.eql(a, b, 0);
     }
 
     pub fn isTruthy(self: Value) !bool {
@@ -53,49 +82,48 @@ pub const Value = union(Type) {
         };
     }
 
-    pub fn destroy(self: Value, allocator: std.mem.Allocator) void {
-        switch (self) {
-            .string => |s| allocator.free(s),
-            .list => |l| l.deinit(),
-            else => {},
-        }
-    }
-
     pub fn print(self: Value, writer: anytype) void {
         switch (self) {
             .number => |n| writer.print("{d}", .{n}),
             .bool => |b| writer.print("{}", .{b}),
-            .string => |s| writer.print("{s}", .{s}),
             .nil => writer.print("nil", .{}),
-            .list => |l| {
-                writer.print("[", .{});
-                for (l.items, 0..) |item, i| {
-                    item.*.print(writer);
-                    if (i != l.items.len - 1)
-                        writer.print(",\n", .{});
+            .obj => |o| {
+                switch (o.data) {
+                    .string => |s| writer.print("{s}", .{s}),
+                    .list => |l| {
+                        writer.print("[", .{});
+                        for (l.items, 0..) |item, i| {
+                            item.print(writer);
+                            if (i != l.items.len - 1)
+                                writer.print(", ", .{});
+                        }
+                        writer.print("]", .{});
+                    },
+                    .map => |m| {
+                        writer.print("{{", .{});
+                        var keys = m.keys();
+                        for (keys, 0..) |k, i| {
+                            k.print(writer);
+                            writer.print(":", .{});
+                            m.get(k).?.print(writer);
+                            if (i != keys.len - 1)
+                                writer.print(", ", .{});
+                        }
+                        writer.print("}}", .{});
+                    },
+                    .set => |s| {
+                        var keys = s.keys();
+                        writer.print("{{", .{});
+                        for (keys, 0..) |k, i| {
+                            k.print(writer);
+                            if (i != keys.len - 1)
+                                writer.print(", ", .{});
+                        }
+                        writer.print("}}", .{});
+                    },
+                    else => {},
                 }
-                writer.print("]\n", .{});
             },
-            // .map => |m| {
-            //     writer.print("{", .{});
-            //     for (m.entries.items, 0..) |item, i| {
-            //         item.key.print(writer);
-            //         writer.print(":", .{});
-            //         item.value.print(writer);
-            //         if (i != m.items().len - 1)
-            //             writer.print(",\n", .{});
-            //     }
-            //     writer.print("}\n", .{});
-            // },
-            // .set => |s| {
-            //     writer.print("{", .{});
-            //     for (s.entries.items, 0..) |item, i| {
-            //         item.key.print(writer);
-            //         if (i != s.items().len - 1)
-            //             writer.print(",\n", .{});
-            //     }
-            //     writer.print("}\n", .{});
-            // },
             // .range => |r| writer.print("{}..{}", .{ r.start, r.end }),
             // .@"enum" => |e| {
             //     writer.print("{", .{});
@@ -110,75 +138,94 @@ pub const Value = union(Type) {
         }
     }
 
-    fn hash(key: *Value) u32 {
-        const hashFn = std.hash.autoHash;
-        var hasher = std.hash.Wyhash.init(0);
+    pub const Adapter = struct {
+        pub fn hash(_: @This(), v: Value) u32 {
+            const hashFn = std.hash.autoHash;
+            var hasher = std.hash.Wyhash.init(0);
 
-        switch (key.type) {
-            .number => |n| hashFn(&hasher, n),
-            .bool => |b| hashFn(&hasher, b),
-            .string => |s| hasher.update(s),
-            // .function |f| => {
-            //     if (f.name) |name|
-            //         hasher.update(name);
-            //     hashFn(&hasher, f.arg_len);
-            //     hashFn(&hasher, f.locals);
-            //     hashFn(&hasher, f.entry);
-            // },
-            .list => |l| {
-                hashFn(&hasher, l.items.len);
-                hashFn(&hasher, l.items.ptr);
-            },
-            .map => |m| {
-                hashFn(&hasher, m.items().len);
-                hashFn(&hasher, m.items().ptr);
-            },
-            // .native => |n| {
-            //     const native = key.toNative();
-            //     hashFn(&hasher, native.arg_len);
-            //     hashFn(&hasher, native.func);
-            // },
-            .range => |r| {
-                hashFn(&hasher, r.start);
-                hashFn(&hasher, r.end);
-            },
-            else => unreachable,
+            switch (v) {
+                .number => |n| hashFn(&hasher, @intFromFloat(u32, n * 10000.0)),
+                .bool => |b| hashFn(&hasher, b),
+                .obj => |o| {
+                    switch (o.data) {
+                        .string => |s| hasher.update(s),
+                        // .function |f| => {
+                        //     if (f.name) |name|
+                        //         hasher.update(name);
+                        //     hashFn(&hasher, f.arg_len);
+                        //     hashFn(&hasher, f.locals);
+                        //     hashFn(&hasher, f.entry);
+                        // },
+                        .list => |l| {
+                            hashFn(&hasher, l.items.len);
+                            hashFn(&hasher, l.items.ptr);
+                        },
+                        .map => |m| {
+                            hashFn(&hasher, m.keys().len);
+                            hashFn(&hasher, m.keys().ptr);
+                        },
+                        else => return 0,
+                    }
+                },
+                // .native => |n| {
+                //     const native = key.toNative();
+                //     hashFn(&hasher, native.arg_len);
+                //     hashFn(&hasher, native.func);
+                // },
+                .range => |r| {
+                    hashFn(&hasher, r.start);
+                    hashFn(&hasher, r.end);
+                },
+                else => unreachable,
+            }
+            return @truncate(u32, hasher.final());
         }
-        return @truncate(u32, hasher.final());
-    }
 
-    pub fn eql(a: Value, b: Value) bool {
-        if (@intFromEnum(a) != @intFromEnum(b)) return false;
-        return switch (a) {
-            .number => |n| @fabs(n - b.number) < 0.000001,
-            .bool => |bl| bl == b.bool,
-            .nil => b == .nil,
-            .string => |s| std.mem.eql(u8, s, b.string),
-            .list => |l| {
-                const l_b = b.list;
+        pub fn lessThan(self: @This(), a_index: usize, b_index: usize) bool {
+            _ = self;
+            return b_index < a_index;
+        }
 
-                if (l.items.len != l_b.items.len) return false;
-                for (l.items, 0..) |item, i| {
-                    if (!item.*.value.eql(l_b.items[i].*.value)) return false;
-                }
-                return true;
-            },
-            // .map => |m| {
-            //     const map_b = b.map;
+        pub fn eql(self: @This(), a: Value, b: Value, _: usize) bool {
+            _ = self;
+            if (@intFromEnum(a) != @intFromEnum(b)) return false;
+            return switch (a) {
+                .number => |n| @fabs(n - b.number) < 0.00001,
+                .bool => |bl| bl == b.bool,
+                .nil => b == .nil,
+                .obj => |o| {
+                    const b_data = b.obj.*.data;
+                    return switch (o.data) {
+                        .string => |s| std.mem.eql(u8, s, b_data.string),
+                        .list => |l| {
+                            const l_b = b_data.list;
 
-            //     if (m.items().len != map_b.items().len) return false;
-            //     for (a.items(), 0..) |entry, i| {
-            //         if (entry.hash != map_b.items()[i].hash) return false;
-            //     }
-            //     return true;
-            // },
-            .range => |r| {
-                const range_b = b.range;
-                return r.start == range_b.start and r.end == range_b.end;
-            },
-            else => unreachable,
-        };
-    }
+                            if (l.items.len != l_b.items.len) return false;
+                            for (l.items, 0..) |item, i| {
+                                if (!adapter.eql(item, l_b.items[i], 0)) return false;
+                            }
+                            return true;
+                        },
+                        else => return false,
+                    };
+                },
+                // .map => |m| {
+                //     const map_b = b.map;
+
+                //     if (m.items().len != map_b.items().len) return false;
+                //     for (a.items(), 0..) |entry, i| {
+                //         if (entry.hash != map_b.items()[i].hash) return false;
+                //     }
+                //     return true;
+                // },
+                .range => |r| {
+                    const range_b = b.range;
+                    return r.start == range_b.start and r.end == range_b.end;
+                },
+                else => unreachable,
+            };
+        }
+    };
 };
 
 // TODO: Decide if this is needed,

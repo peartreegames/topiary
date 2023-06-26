@@ -7,13 +7,13 @@ const OpCode = @import("./opcode.zig").OpCode;
 const values = @import("./values.zig");
 const Stack = @import("./stack.zig").Stack;
 const Gc = @import("./gc.zig").Gc;
-const Object = @import("./gc.zig").Object;
 const Token = @import("./token.zig").Token;
 
 const testing = std.testing;
 const stack_size = 2048;
 const globals_size = 65536;
 const Value = values.Value;
+const adapter = values.adapter;
 
 const InterpretError = error{
     CompileError,
@@ -28,8 +28,8 @@ const InterpretResult = union(enum) {
 pub const Vm = struct {
     allocator: std.mem.Allocator,
     gc: Gc,
-    globals: std.ArrayList(*Object),
-    stack: Stack(*Object),
+    globals: std.ArrayList(Value),
+    stack: Stack(Value),
 
     bytecode: ByteCode = undefined,
     ip: usize = 0,
@@ -38,8 +38,8 @@ pub const Vm = struct {
     pub fn init(allocator: std.mem.Allocator) !Vm {
         return .{
             .allocator = allocator,
-            .stack = try Stack(*Object).init(allocator, stack_size),
-            .globals = try std.ArrayList(*Object).initCapacity(allocator, 1024),
+            .stack = try Stack(Value).init(allocator, stack_size),
+            .globals = try std.ArrayList(Value).initCapacity(allocator, 1024),
             .gc = Gc.init(allocator),
         };
     }
@@ -49,6 +49,10 @@ pub const Vm = struct {
         self.globals.deinit();
         self.bytecode.free(testing.allocator);
         self.gc.deinit();
+    }
+
+    pub fn roots(self: *Vm) []const []Value {
+        return &([_][]Value{ self.globals.items, self.stack.items });
     }
 
     pub fn interpret(self: *Vm, bytecode: ByteCode) !void {
@@ -70,7 +74,7 @@ pub const Vm = struct {
 
         var bytecode = try compiler.bytecode();
         if (self.debug) {
-            Compiler.print(bytecode, null, std.debug);
+            bytecode.print(std.debug);
         }
 
         try self.interpret(bytecode);
@@ -108,13 +112,16 @@ pub const Vm = struct {
                 },
                 .pop => _ = self.pop(),
                 .add => {
-                    const right = self.pop().*.value;
-                    const left = self.pop().*.value;
+                    const right = self.pop();
+                    const left = self.pop();
                     if (@TypeOf(right) != @TypeOf(left)) return error.RuntimeError;
                     switch (right) {
                         .number => try self.push(.{ .number = right.number + left.number }),
-                        .string => {
-                            try self.push(.{ .string = try std.mem.concat(self.allocator, u8, &.{ left.string, right.string }) });
+                        .obj => |o| {
+                            switch (o.data) {
+                                .string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.allocator, u8, &.{ left.obj.*.data.string, s }) }),
+                                else => return error.RuntimeError,
+                            }
                         },
                         else => return error.RuntimeError,
                     }
@@ -124,9 +131,9 @@ pub const Vm = struct {
                 .true => try self.push(values.True),
                 .false => try self.push(values.False),
                 .nil => try self.push(values.Nil),
-                .negate => try self.push(.{ .number = -self.pop().*.value.number }),
+                .negate => try self.push(.{ .number = -self.pop().number }),
                 .not => {
-                    const value = self.pop().*.value;
+                    const value = self.pop();
                     switch (value) {
                         .bool => |b| try self.push(if (b) values.False else values.True),
                         .nil => try self.push(values.True),
@@ -139,7 +146,7 @@ pub const Vm = struct {
                 },
                 .jump_if_false => {
                     var dest = self.readInt(u16);
-                    var condition = self.pop().*.value;
+                    var condition = self.pop();
                     if (!try condition.isTruthy()) {
                         self.ip = dest;
                     }
@@ -151,7 +158,8 @@ pub const Vm = struct {
                 },
                 .get_global => {
                     const index = self.readInt(u16);
-                    try self.push(self.globals.items[index].*.value);
+                    const value = self.globals.items[index];
+                    try self.push(value);
                 },
                 .string => {
                     var index = self.readInt(u16);
@@ -160,7 +168,7 @@ pub const Vm = struct {
                     var args = try std.ArrayList(Value).initCapacity(self.allocator, count);
                     defer args.deinit();
                     while (count > 0) : (count -= 1) {
-                        try args.append(self.pop().*.value);
+                        try args.append(self.pop());
                     }
                     std.mem.reverse(Value, args.items);
                     var buf: [1028]u8 = undefined;
@@ -169,14 +177,15 @@ pub const Vm = struct {
                     var i: usize = 0;
                     var a: usize = 0;
                     var start: usize = 0;
-                    while (i < value.string.len) : (i += 1) {
-                        var c = value.string[i];
+                    const str = value.obj.*.data.string;
+                    while (i < str.len) : (i += 1) {
+                        var c = str[i];
                         if (c == '{') {
-                            try writer.writeAll(value.string[start..i]);
+                            try writer.writeAll(str[start..i]);
                             switch (args.items[a]) {
                                 .number => |n| try std.fmt.formatFloatDecimal(n, std.fmt.FormatOptions{}, fbs.writer()),
-                                .string => |s| try writer.writeAll(s),
                                 .bool => |b| try writer.writeAll(if (b) "true" else "false"),
+                                .obj => |o| try writer.writeAll(o.data.string),
                                 else => return error.RuntimeError,
                             }
                             i += 1;
@@ -184,17 +193,57 @@ pub const Vm = struct {
                             a += 1;
                         }
                     }
-                    try writer.writeAll(value.string[start..]);
-                    try self.push(.{ .string = try self.allocator.dupe(u8, fbs.getWritten()) });
+                    try writer.writeAll(str[start..]);
+                    try self.pushAlloc(.{ .string = try self.allocator.dupe(u8, fbs.getWritten()) });
                 },
                 .list => {
                     var count = self.readInt(u16);
-                    var list = try std.ArrayList(*Object).initCapacity(self.allocator, count);
+                    var list = try std.ArrayList(Value).initCapacity(self.allocator, count);
                     while (count > 0) : (count -= 1) {
                         try list.append(self.pop());
                     }
-                    std.mem.reverse(*Object, list.items);
-                    try self.push(.{ .list = list });
+                    std.mem.reverse(Value, list.items);
+                    try self.pushAlloc(.{ .list = list });
+                },
+                .map => {
+                    var count = self.readInt(u16);
+                    var map = Value.Obj.MapType.initContext(self.allocator, adapter);
+                    while (count > 0) : (count -= 1) {
+                        const value = self.pop();
+                        const key = self.pop();
+                        try map.put(key, value);
+                    }
+                    map.sort(adapter);
+                    try self.pushAlloc(.{ .map = map });
+                },
+                .set => {
+                    var count = self.readInt(u16);
+                    var set = Value.Obj.SetType.initContext(self.allocator, adapter);
+                    while (count > 0) : (count -= 1) {
+                        try set.put(self.pop(), {});
+                    }
+                    set.sort(adapter);
+                    try self.pushAlloc(.{ .set = set });
+                },
+                .index => {
+                    const index = self.pop();
+                    var target = self.pop();
+                    if (target != .obj) return error.RuntimeError;
+                    switch (target.obj.data) {
+                        .list => |l| {
+                            if (index != .number) return error.RuntimeError;
+                            const i = @intFromFloat(u32, index.number);
+                            if (i < 0 or i >= l.items.len) {
+                                try self.push(values.Nil);
+                            } else try self.push(l.items[i]);
+                        },
+                        .map => |m| {
+                            if (m.get(index)) |v| {
+                                try self.push(v);
+                            } else try self.push(values.Nil);
+                        },
+                        else => unreachable,
+                    }
                 },
                 .@"return" => break,
             }
@@ -202,8 +251,8 @@ pub const Vm = struct {
     }
 
     fn binaryNumberOp(self: *Vm, op: OpCode) !void {
-        const right = self.pop().*.value.number;
-        const left = self.pop().*.value.number;
+        const right = self.pop().number;
+        const left = self.pop().number;
         const total = switch (op) {
             .subtract => left - right,
             .multiply => left * right,
@@ -215,8 +264,8 @@ pub const Vm = struct {
     }
 
     fn comparisonOp(self: *Vm, op: OpCode) !void {
-        const right = self.pop().*.value;
-        const left = self.pop().*.value;
+        const right = self.pop();
+        const left = self.pop();
         if (@intFromEnum(right) != @intFromEnum(left)) return error.RuntimeError;
         switch (op) {
             .equal => try self.push(.{ .bool = right.eql(left) }),
@@ -227,10 +276,14 @@ pub const Vm = struct {
     }
 
     fn push(self: *Vm, value: Value) !void {
-        self.stack.push(try self.gc.create(self, value));
+        self.stack.push(value);
     }
 
-    fn pop(self: *Vm) *Object {
+    fn pushAlloc(self: *Vm, data: Value.Obj.Data) !void {
+        self.stack.push(try self.gc.create(self, data));
+    }
+
+    fn pop(self: *Vm) Value {
         return self.stack.pop();
     }
 
@@ -271,8 +324,8 @@ test "Basics" {
         defer vm.deinit();
         try vm.interpretSource(case.input);
         switch (case.type) {
-            f32 => try testing.expect(case.value == vm.stack.last().?.*.value.number),
-            bool => try testing.expect(case.value == vm.stack.last().?.*.value.bool),
+            f32 => try testing.expect(case.value == vm.stack.last().?.number),
+            bool => try testing.expect(case.value == vm.stack.last().?.bool),
             else => continue,
         }
     }
@@ -292,8 +345,8 @@ test "Conditionals" {
         defer vm.deinit();
         try vm.interpretSource(case.input);
         switch (case.type) {
-            .number => try testing.expect(case.value == vm.stack.last().?.*.value.number),
-            .nil => try testing.expect(vm.stack.last().?.*.value.is(.nil)),
+            .number => try testing.expect(case.value == vm.stack.last().?.number),
+            .nil => try testing.expect(vm.stack.last().?.is(.nil)),
             else => continue,
         }
     }
@@ -309,7 +362,7 @@ test "Variables" {
         var vm = try Vm.init(testing.allocator);
         defer vm.deinit();
         try vm.interpretSource(case.input);
-        try testing.expect(case.value == vm.stack.last().?.*.value.number);
+        try testing.expect(case.value == vm.stack.last().?.number);
     }
 }
 
@@ -328,7 +381,7 @@ test "Strings" {
         // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
-        try testing.expectEqualStrings(case.value, vm.stack.last().?.*.value.string);
+        try testing.expectEqualStrings(case.value, vm.stack.last().?.obj.data.string);
     }
 }
 
@@ -345,7 +398,82 @@ test "Lists" {
         defer vm.deinit();
         try vm.interpretSource(case.input);
         for (case.value, 0..) |v, i| {
-            try testing.expect(v == vm.stack.last().?.*.value.list.items[i].*.value.number);
+            try testing.expect(v == vm.stack.last().?.obj.data.list.items[i].number);
+        }
+    }
+}
+
+test "Maps" {
+    const test_cases = .{
+        .{ .input = "({:})", .keys = [_]f32{}, .values = [_]f32{} },
+        .{ .input = "({1:2, 3: 4})", .keys = [_]f32{ 1, 3 }, .values = [_]f32{ 2, 4 } },
+        .{ .input = "({1 + 1: 2 * 2, 3 + 3: 4 * 4})", .keys = [_]f32{ 2, 6 }, .values = [_]f32{ 4, 16 } },
+    };
+
+    inline for (test_cases) |case| {
+        var vm = try Vm.init(testing.allocator);
+        // vm.debug = true;
+        defer vm.deinit();
+        try vm.interpretSource(case.input);
+        const map = vm.stack.last().?.obj.data.map;
+        try testing.expect(map.keys().len == case.keys.len);
+        if (case.keys.len > 0) {
+            for (map.keys(), 0..) |k, i| {
+                errdefer std.log.warn("{}:{}", .{ k.number, map.get(k).?.number });
+                try testing.expect(case.keys[i] == k.number);
+                try testing.expect(case.values[i] == map.get(k).?.number);
+            }
+        }
+    }
+}
+
+test "Sets" {
+    const test_cases = .{
+        .{ .input = "({})", .values = [_]f32{} },
+        .{ .input = "({1, 2})", .values = [_]f32{ 1, 2 } },
+        .{ .input = "({1 + 1, 3 + 3})", .values = [_]f32{ 2, 6 } },
+    };
+
+    inline for (test_cases) |case| {
+        var vm = try Vm.init(testing.allocator);
+        // vm.debug = true;
+        defer vm.deinit();
+        try vm.interpretSource(case.input);
+        const set = vm.stack.last().?.obj.data.set;
+        try testing.expect(set.keys().len == case.values.len);
+        if (case.values.len > 0) {
+            for (set.keys(), 0..) |k, i| {
+                errdefer std.log.warn("{}", .{k.number});
+                try testing.expect(case.values[i] == k.number);
+            }
+        }
+    }
+}
+
+test "Index" {
+    const test_cases = .{
+        .{ .input = "[1,2,3][1]", .value = 2.0 },
+        .{ .input = "[1,2,3][0 + 2]", .value = 3.0 },
+        .{ .input = "[[1,2,3]][0][0]", .value = 1.0 },
+        .{ .input = "[][0]", .value = null },
+        .{ .input = "[1,2,3][99]", .value = null },
+        .{ .input = "({1: 1, 2: 2})[1]", .value = 1.0 },
+        .{ .input = "({1: 1, 2: 2})[2]", .value = 2.0 },
+        .{ .input = "({1: 1})[2]", .value = null },
+        .{ .input = "({:})[0]", .value = null },
+    };
+
+    inline for (test_cases) |case| {
+        var vm = try Vm.init(testing.allocator);
+        vm.debug = true;
+        defer vm.deinit();
+        try vm.interpretSource(case.input);
+        const value = vm.stack.last().?;
+        errdefer std.log.warn("{s}--{}", .{ case.input, @TypeOf(case.value) });
+        errdefer value.print(std.debug);
+        switch (@TypeOf(case.value)) {
+            comptime_float => try testing.expect(case.value == value.number),
+            else => try testing.expect(value == .nil),
         }
     }
 }

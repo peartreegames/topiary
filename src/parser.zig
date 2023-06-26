@@ -533,9 +533,37 @@ pub const Parser = struct {
         }
     }
 
+    fn listExpression(self: *Parser) Error!Expression {
+        const start_token = self.current_token;
+        var list = std.ArrayList(Expression).init(self.allocator);
+        errdefer list.deinit();
+        self.next();
+        if (self.currentIs(.right_bracket)) {
+            return .{
+                .token = start_token,
+                .type = .{
+                    .list = try list.toOwnedSlice(),
+                },
+            };
+        }
+        try list.append(try self.expression(.lowest));
+        while (self.peekIs(.comma)) {
+            self.next();
+            self.next();
+            try list.append(try self.expression(.lowest));
+        }
+        self.next();
+        try self.expectCurrent(.right_bracket);
+        return .{
+            .token = start_token,
+            .type = .{
+                .list = try list.toOwnedSlice(),
+            },
+        };
+    }
+
     fn mapPairSetKey(self: *Parser) Error!Expression {
         const start_token = self.current_token;
-        defer self.next();
 
         var key = try self.expression(.lowest);
         if (!self.peekIs(.colon)) return key;
@@ -549,25 +577,6 @@ pub const Parser = struct {
                     .key = try self.allocate(key),
                     .value = try self.allocate(value),
                 },
-            },
-        };
-    }
-
-    fn listExpression(self: *Parser) Error!Expression {
-        const start_token = self.current_token;
-        self.next();
-        var list = std.ArrayList(Expression).init(self.allocator);
-        errdefer list.deinit();
-        while (!self.currentIs(.right_bracket)) {
-            try list.append(try self.expression(.lowest));
-            self.next();
-            if (self.currentIs(.comma) or self.peekIs(.right_bracket)) self.next();
-        }
-        try self.expectCurrent(.right_bracket);
-        return .{
-            .token = start_token,
-            .type = .{
-                .list = try list.toOwnedSlice(),
             },
         };
     }
@@ -588,6 +597,8 @@ pub const Parser = struct {
         }
 
         const first = try self.mapPairSetKey();
+        self.next();
+        if (self.currentIs(.comma)) self.next();
         const is_map = first.type == .map_pair;
         const type_name = if (is_map) "map" else "set";
         try list.append(first);
@@ -596,6 +607,7 @@ pub const Parser = struct {
             if ((is_map and item.type != .map_pair) or (!is_map and item.type == .map_pair))
                 return self.fail("Item type '{s}' cannot be added to type {s}", item.token, .{ @tagName(item.type), type_name });
             try list.append(item);
+            self.next();
             if (self.currentIs(.comma) or self.peekIs(.right_brace)) self.next();
         }
         if (is_map) return .{ .token = start_token, .type = .{ .map = try list.toOwnedSlice() } };
@@ -782,12 +794,11 @@ pub const Parser = struct {
             if (!self.currentIs(.identifier))
                 return self.fail("Expected identifier after index '.', found {}", self.current_token, .{self.current_token.token_type});
             break :blk try self.stringExpression();
-        } else if (!self.currentIs(.colon))
-            try self.expression(.lowest)
-        else
-            unreachable;
+        } else if (start_token.token_type == .left_bracket) blk: {
+            break :blk try self.expression(.lowest);
+        } else unreachable;
 
-        if (start_token.token_type != .dot) {
+        if (start_token.token_type == .left_bracket) {
             try self.expectPeek(.right_bracket);
         }
 
@@ -1056,9 +1067,12 @@ test "Parse Function Declaration" {
 test "Parse Iterable Types" {
     var allocator = testing.allocator;
     const test_cases = .{
-        .{ .input = "const stringList = [\"item\"]", .id = "stringList", .item_value = "item", .mutable = false, .type = .list },
-        .{ .input = "var floatSet = {2.0}", .id = "floatSet", .item_value = 2.0, .mutable = true, .type = .set },
-        .{ .input = "var stringBoolMap = {\"key\":true}", .id = "stringBoolMap", .item_value = true, .mutable = true, .type = .map },
+        .{ .input = "const stringList = [\"item\"]", .id = "stringList", .item_value = [_][]const u8{"item"}, .mutable = false, .type = .list },
+        .{ .input = "const stringList = [\"item1\", \"item2\"]", .id = "stringList", .item_value = [_][]const u8{ "item1", "item2" }, .mutable = false, .type = .list },
+        .{ .input = "var floatSet = {2.0}", .id = "floatSet", .item_value = [_]f32{2.0}, .mutable = true, .type = .set },
+        .{ .input = "var floatSet = {2.0, 3.4, 5.6}", .id = "floatSet", .item_value = [_]f32{ 2.0, 3.4, 5.6 }, .mutable = true, .type = .set },
+        .{ .input = "var stringBoolMap = {\"key\":true}", .id = "stringBoolMap", .item_value = [_]bool{true}, .mutable = true, .type = .map },
+        .{ .input = "var stringBoolMap = {\"key1\":true, \"key2\": false, \"key3\": true}", .id = "stringBoolMap", .item_value = [_]bool{ true, false, true }, .mutable = true, .type = .map },
     };
 
     inline for (test_cases) |case| {
@@ -1072,11 +1086,13 @@ test "Parse Iterable Types" {
         const node = tree.root[0].type.variable;
         try testing.expectEqualStrings(case.id, node.name);
 
-        switch (case.type) {
-            .list => try testing.expectEqualStrings(case.item_value, node.initializer.type.list[0].type.string.value),
-            .set => try testing.expect(case.item_value == node.initializer.type.set[0].type.number),
-            .map => try testing.expect(case.item_value == node.initializer.type.map[0].type.map_pair.value.type.boolean),
-            else => unreachable,
+        for (case.item_value, 0..) |value, i| {
+            switch (case.type) {
+                .list => try testing.expectEqualStrings(value, node.initializer.type.list[i].type.string.value),
+                .set => try testing.expect(value == node.initializer.type.set[i].type.number),
+                .map => try testing.expect(value == node.initializer.type.map[i].type.map_pair.value.type.boolean),
+                else => unreachable,
+            }
         }
         try testing.expect(case.mutable == node.is_mutable);
     }
@@ -1102,6 +1118,23 @@ test "Parse Empty Iterable Types" {
     decl = tree.root[1].type.variable;
     try testing.expectEqualStrings("emptySet", decl.name);
     try testing.expect(decl.initializer.type.set.len == 0);
+}
+
+test "Parse Nested Iterable Types" {
+    const allocator = testing.allocator;
+    const input =
+        \\ [[1,2]]
+    ;
+
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, input, &errors) catch |err| {
+        try errors.write(input, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+    try testing.expect(tree.root[0].type.expression.type == .list);
+    try testing.expect(tree.root[0].type.expression.type.list[0].type == .list);
 }
 
 test "Parse Extern" {

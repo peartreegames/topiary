@@ -2,17 +2,13 @@ const std = @import("std");
 const Vm = @import("./vm.zig").Vm;
 const Value = @import("./values.zig").Value;
 
-pub const Object = struct {
-    is_marked: bool = false,
-    next: ?*Object = null,
-    value: Value,
-};
+const Obj = Value.Obj;
 
 pub const Gc = struct {
     allocator: std.mem.Allocator,
     bytes_allocated: usize,
     next_collection: usize,
-    stack: ?*Object,
+    stack: ?*Obj,
 
     const default_collection: usize = 1024 * 1024;
 
@@ -28,61 +24,61 @@ pub const Gc = struct {
     pub fn deinit(self: *Gc) void {
         while (self.stack) |obj| {
             const next = obj.next;
-            obj.value.destroy(self.allocator);
-            self.allocator.destroy(obj);
+            Obj.destroy(self.allocator, obj);
             self.stack = next;
         }
         self.* = undefined;
     }
 
-    pub fn create(self: *Gc, vm: *Vm, value: Value) !*Object {
-        var obj = try self.allocator.create(Object);
+    /// root_ctx must have `fn root() []const []Value` function
+    pub fn create(self: *Gc, root_ctx: anytype, data: Obj.Data) !Value {
+        var obj = try self.allocator.create(Obj);
         obj.* = .{
-            .value = value,
+            .data = data,
             .next = self.stack,
         };
         self.stack = obj;
-
-        self.bytes_allocated += @sizeOf(Value);
+        self.bytes_allocated += @sizeOf(Obj);
         if (self.bytes_allocated > self.next_collection) {
             mark(obj);
-            self.collect(vm);
+            self.collect(root_ctx);
         }
-        return obj;
+        return .{
+            .obj = obj,
+        };
     }
 
-    fn mark(value: *Object) void {
-        if (value.is_marked) return;
-        value.is_marked = true;
+    fn mark(obj: *Obj) void {
+        if (obj.is_marked) return;
+        obj.is_marked = true;
     }
 
-    fn markAll(vm: *Vm) void {
-        for (vm.stack.items) |item| mark(item);
-        for (vm.globals.items) |item| mark(item);
+    fn markAll(root_ctx: anytype) void {
+        for (root_ctx.roots()) |list| {
+            for (list) |item| {
+                if (item == .obj) mark(item.obj);
+            }
+        }
     }
 
     fn sweep(self: *Gc) void {
         if (self.stack == null) return;
 
-        var valuePtr = self.stack;
-        while (valuePtr) |value| {
-            if (!value.is_marked) {
-                var unmarked = value;
-                valuePtr = value.next;
-                switch (unmarked.value) {
-                    .string => |s| self.allocator.free(s),
-                    else => {},
-                }
-                self.allocator.destroy(unmarked);
+        var objPtr = self.stack;
+        while (objPtr) |obj| {
+            if (!obj.is_marked) {
+                var unmarked = obj;
+                objPtr = obj.next;
+                Obj.destroy(self.allocator, unmarked);
                 continue;
             }
-            value.is_marked = false;
-            valuePtr = value.next;
+            obj.is_marked = false;
+            objPtr = obj.next;
         }
     }
 
-    fn collect(self: *Gc, vm: *Vm) void {
-        markAll(vm);
+    fn collect(self: *Gc, root_ctx: anytype) void {
+        markAll(root_ctx);
         self.sweep();
         self.bytes_allocated = 0;
     }

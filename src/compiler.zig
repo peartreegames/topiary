@@ -23,11 +23,54 @@ pub const ByteCode = struct {
 
     pub fn free(self: *ByteCode, allocator: std.mem.Allocator) void {
         allocator.free(self.instructions);
-        for (self.constants) |c| {
-            c.destroy(allocator);
+        for (self.constants) |item| {
+            if (item == .obj) {
+                Value.Obj.destroy(allocator, item.obj);
+            }
         }
         allocator.free(self.constants);
         allocator.free(self.tokens);
+    }
+
+    pub fn print(code: *ByteCode, writer: anytype) void {
+        var i: usize = 0;
+        writer.print("\n==BYTECODE==\n", .{});
+        const instructions = code.instructions;
+        const constants = code.constants;
+        const tokens = code.tokens;
+        while (i < instructions.len) {
+            writer.print("{d:0>4} ", .{i});
+            const token = DebugTokens.get(tokens, i);
+            if (token) |t| {
+                if (i > 0 and t.line == DebugTokens.get(tokens, i - 1).?.line) {
+                    writer.print("[{s}] ", .{"  | "});
+                } else {
+                    writer.print("[{d:0>4}] ", .{t.line});
+                }
+            }
+            const op = @enumFromInt(OpCode, instructions[i]);
+            writer.print("{s: <16} ", .{op.toString()});
+            i += 1;
+            switch (op) {
+                .jump, .jump_if_false, .set_global, .get_global, .list, .map, .set => {
+                    var dest = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
+                    writer.print("{d: >8}", .{dest});
+                    i += 2;
+                },
+                .constant => {
+                    var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
+                    writer.print("{d: >8} ", .{index});
+                    i += 2;
+                    var value = constants[index];
+                    switch (value) {
+                        .number => |n| writer.print(": {d: >8}", .{n}),
+                        else => {},
+                    }
+                },
+                else => {},
+            }
+            writer.print("\n", .{});
+        }
     }
 };
 
@@ -200,7 +243,9 @@ pub const Compiler = struct {
                 for (s.expressions) |*item| {
                     try self.compileExpression(item);
                 }
-                const i = try self.addConstant(.{ .string = try self.allocator.dupe(u8, s.value) });
+                const obj = try self.allocator.create(Value.Obj);
+                obj.* = .{ .data = .{ .string = try self.allocator.dupe(u8, s.value) } };
+                const i = try self.addConstant(.{ .obj = obj });
                 try self.writeOp(.string, token);
                 _ = try self.writeInt(OpCode.Size(.constant), i, token);
                 _ = try self.writeInt(OpCode.Size(.list), @intCast(u16, s.expressions.len), token);
@@ -213,6 +258,33 @@ pub const Compiler = struct {
                 const size = OpCode.Size(.list);
                 const length = @intCast(size, l.len);
                 _ = try self.writeInt(size, length, token);
+            },
+            .map => |m| {
+                for (m) |*mp| {
+                    try self.compileExpression(mp);
+                }
+                const size = OpCode.Size(.map);
+                try self.writeOp(.map, token);
+                const length = @intCast(size, m.len);
+                _ = try self.writeInt(size, length, token);
+            },
+            .set => |s| {
+                for (s) |*item| {
+                    try self.compileExpression(item);
+                }
+                const size = OpCode.Size(.set);
+                try self.writeOp(.set, token);
+                const length = @intCast(size, s.len);
+                _ = try self.writeInt(size, length, token);
+            },
+            .map_pair => |mp| {
+                try self.compileExpression(mp.key);
+                try self.compileExpression(mp.value);
+            },
+            .indexer => |idx| {
+                try self.compileExpression(idx.target);
+                try self.compileExpression(idx.index);
+                try self.writeOp(.index, token);
             },
             .unary => |u| {
                 try self.compileExpression(u.value);
@@ -289,48 +361,6 @@ pub const Compiler = struct {
         try self.constants.append(value);
         return @intCast(u16, self.constants.items.len - 1);
     }
-
-    pub fn print(code: ByteCode, tokens: ?[]DebugToken, writer: anytype) void {
-        var i: usize = 0;
-        writer.print("\n==BYTECODE==\n", .{});
-        const instructions = code.instructions;
-        const constants = code.constants;
-        while (i < instructions.len) {
-            writer.print("{d:0>4} ", .{i});
-            if (tokens) |ts| {
-                const token = DebugTokens.get(ts, i);
-                if (token) |t| {
-                    if (i > 0 and t.line == DebugTokens.get(ts, i - 1).?.line) {
-                        writer.print("[{s}] ", .{"  | "});
-                    } else {
-                        writer.print("[{d:0>4}] ", .{t.line});
-                    }
-                }
-            }
-            const op = @enumFromInt(OpCode, instructions[i]);
-            writer.print("{s: <16} ", .{op.toString()});
-            i += 1;
-            switch (op) {
-                .jump, .jump_if_false, .set_global, .get_global, .list => {
-                    var dest = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
-                    writer.print("{d: >8}", .{dest});
-                    i += 2;
-                },
-                .constant => {
-                    var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
-                    writer.print("{d: >8} ", .{index});
-                    i += 2;
-                    var value = constants[index];
-                    switch (value) {
-                        .number => |n| writer.print(": {d: >8}", .{n}),
-                        else => {},
-                    }
-                },
-                else => {},
-            }
-            writer.print("\n", .{});
-        }
-    }
 };
 
 test "Basic Compile" {
@@ -350,7 +380,6 @@ test "Basic Compile" {
 
         var bytecode = try compiler.bytecode();
         defer bytecode.free(testing.allocator);
-        // Compiler.print(bytecode, compiler.lines.items, std.debug);
 
         for (case.expectedInstructions, 0..) |instruction, i| {
             try testing.expectEqual(instruction, bytecode.instructions[i]);
@@ -388,7 +417,6 @@ test "Conditionals Compile" {
         var bytecode = try compiler.bytecode();
         defer bytecode.free(testing.allocator);
 
-        // Compiler.print(bytecode, compiler.lines.items, std.debug);
         for (case.expectedInstructions, 0..) |instruction, i| {
             errdefer std.log.warn("{}", .{i});
             try testing.expectEqual(instruction, bytecode.instructions[i]);
@@ -433,7 +461,6 @@ test "Variables" {
         var bytecode = try compiler.bytecode();
         defer bytecode.free(testing.allocator);
 
-        // Compiler.print(bytecode, compiler.lines.items, std.debug);
         for (case.expectedInstructions, 0..) |instruction, i| {
             errdefer std.log.warn("{}", .{i});
             try testing.expectEqual(instruction, bytecode.instructions[i]);
@@ -484,18 +511,17 @@ test "Strings" {
         var bytecode = try compiler.bytecode();
         defer bytecode.free(testing.allocator);
 
-        // Compiler.print(bytecode, bytecode.tokens, std.debug);
         for (case.expectedInstructions, 0..) |instruction, i| {
             errdefer std.log.warn("{}", .{i});
             try testing.expectEqual(instruction, bytecode.instructions[i]);
         }
         for (case.expectedConstants, 0..) |constant, i| {
-            try testing.expectEqualStrings(constant, bytecode.constants[i].string);
+            try testing.expectEqualStrings(constant, bytecode.constants[i].obj.data.string);
         }
     }
 }
 
-test "List" {
+test "Lists" {
     const test_cases = .{
         .{
             .input = "[]",
@@ -523,9 +549,139 @@ test "List" {
         var bytecode = try compiler.bytecode();
         defer bytecode.free(testing.allocator);
 
-        // Compiler.print(bytecode, bytecode.tokens, std.debug);
         for (case.expectedInstructions, 0..) |instruction, i| {
             errdefer std.log.warn("{}", .{i});
+            try testing.expectEqual(instruction, bytecode.instructions[i]);
+        }
+
+        for (case.expectedConstants, 0..) |constant, i| {
+            try testing.expect(constant == bytecode.constants[i].number);
+        }
+    }
+}
+
+test "Maps and Sets" {
+    // {} denotes a group as well as a map/set,
+    // wrap it in a () to force group expression statements
+    const test_cases = .{
+        .{
+            .input = "({:})",
+            .expectedConstants = [_]f32{},
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.map), 0, 0, @intFromEnum(OpCode.pop) },
+        },
+        .{
+            .input = "({1: 2, 3: 4, 5: 6})",
+            .expectedConstants = [_]f32{ 1, 2, 3, 4, 5, 6 },
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.constant), 0, 3, @intFromEnum(OpCode.constant), 0, 4, @intFromEnum(OpCode.constant), 0, 5, @intFromEnum(OpCode.map), 0, 3, @intFromEnum(OpCode.pop) },
+        },
+        .{
+            .input = "({1: 2 + 3, 4: 5 * 6})",
+            .expectedConstants = [_]f32{ 1, 2, 3, 4, 5, 6 },
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.add), @intFromEnum(OpCode.constant), 0, 3, @intFromEnum(OpCode.constant), 0, 4, @intFromEnum(OpCode.constant), 0, 5, @intFromEnum(OpCode.multiply), @intFromEnum(OpCode.map), 0, 2, @intFromEnum(OpCode.pop) },
+        },
+        .{
+            .input = "({})",
+            .expectedConstants = [_]f32{},
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.set), 0, 0, @intFromEnum(OpCode.pop) },
+        },
+        .{
+            .input = "({1, 2, 3})",
+            .expectedConstants = [_]f32{ 1, 2, 3 },
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.set), 0, 3, @intFromEnum(OpCode.pop) },
+        },
+        .{
+            .input = "({1 + 2, 3 * 4, 5 - 6})",
+            .expectedConstants = [_]f32{ 1, 2, 3, 4, 5, 6 },
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.add), @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.constant), 0, 3, @intFromEnum(OpCode.multiply), @intFromEnum(OpCode.constant), 0, 4, @intFromEnum(OpCode.constant), 0, 5, @intFromEnum(OpCode.subtract), @intFromEnum(OpCode.set), 0, 3, @intFromEnum(OpCode.pop) },
+        },
+    };
+
+    inline for (test_cases) |case| {
+        // std.log.warn("{s}", .{case.input});
+        var allocator = testing.allocator;
+        var arena_inst = std.heap.ArenaAllocator.init(allocator);
+        defer arena_inst.deinit();
+        const arena = arena_inst.allocator();
+        var compiler = Compiler.init(arena);
+        defer compiler.deinit();
+        try compiler.compileSource(case.input);
+
+        var bytecode = try compiler.bytecode();
+        defer bytecode.free(arena);
+        // bytecode.print(std.debug);
+        for (case.expectedInstructions, 0..) |instruction, i| {
+            errdefer std.log.warn("Error on: {}", .{i});
+            try testing.expectEqual(instruction, bytecode.instructions[i]);
+        }
+
+        for (case.expectedConstants, 0..) |constant, i| {
+            try testing.expect(constant == bytecode.constants[i].number);
+        }
+    }
+}
+
+test "Index" {
+    const test_cases = .{
+        .{ .input = "[1,2,3][1 + 1]", .expectedConstants = [_]f32{ 1, 2, 3, 1, 1 }, .expectedInstructions = [_]u8{
+            @intFromEnum(OpCode.constant),
+            0,
+            0,
+            @intFromEnum(OpCode.constant),
+            0,
+            1,
+            @intFromEnum(OpCode.constant),
+            0,
+            2,
+            @intFromEnum(OpCode.list),
+            0,
+            3,
+            @intFromEnum(OpCode.constant),
+            0,
+            3,
+            @intFromEnum(OpCode.constant),
+            0,
+            4,
+            @intFromEnum(OpCode.add),
+            @intFromEnum(OpCode.index),
+            @intFromEnum(OpCode.pop),
+        } },
+        .{ .input = "({1: 2})[2 - 1]", .expectedConstants = [_]f32{ 1, 2, 2, 1 }, .expectedInstructions = [_]u8{
+            @intFromEnum(OpCode.constant),
+            0,
+            0,
+            @intFromEnum(OpCode.constant),
+            0,
+            1,
+            @intFromEnum(OpCode.map),
+            0,
+            1,
+            @intFromEnum(OpCode.constant),
+            0,
+            2,
+            @intFromEnum(OpCode.constant),
+            0,
+            3,
+            @intFromEnum(OpCode.subtract),
+            @intFromEnum(OpCode.index),
+            @intFromEnum(OpCode.pop),
+        } },
+    };
+
+    inline for (test_cases) |case| {
+        // std.log.warn("{s}", .{case.input});
+        var allocator = testing.allocator;
+        var arena_inst = std.heap.ArenaAllocator.init(allocator);
+        defer arena_inst.deinit();
+        const arena = arena_inst.allocator();
+        var compiler = Compiler.init(arena);
+        defer compiler.deinit();
+        try compiler.compileSource(case.input);
+
+        var bytecode = try compiler.bytecode();
+        defer bytecode.free(arena);
+        // bytecode.print(std.debug);
+        for (case.expectedInstructions, 0..) |instruction, i| {
+            errdefer std.log.warn("Error on: {}", .{i});
             try testing.expectEqual(instruction, bytecode.instructions[i]);
         }
 
