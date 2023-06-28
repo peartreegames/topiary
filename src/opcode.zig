@@ -32,8 +32,10 @@ pub const OpCode = enum(u8) {
     set,
 
     index,
+    call,
 
-    @"return",
+    return_void,
+    return_value,
 
     pub fn toString(self: OpCode) []const u8 {
         return switch (self) {
@@ -61,7 +63,9 @@ pub const OpCode = enum(u8) {
             .map => "OP_MAP",
             .set => "OP_SET",
             .index => "OP_INDEX",
-            .@"return" => "OP_RETURN",
+            .call => "OP_CALL",
+            .return_void => "OP_RETURN",
+            .return_value => "OP_RETURN_VALUE",
         };
     }
 

@@ -7,7 +7,6 @@ pub fn Stack(comptime T: type) type {
         items: []T,
 
         count: usize = 0,
-        lastPopped: ?T = null,
 
         const Self = Stack(T);
 
@@ -34,16 +33,15 @@ pub fn Stack(comptime T: type) type {
             self.count -= 1;
             const value = self.items[self.count];
             self.items = self.backing[0..self.count];
-            self.lastPopped = value;
             return value;
         }
 
-        pub fn peek(self: *Self) T {
-            return self.items[self.count];
+        pub fn peek(self: *Self) *T {
+            return &self.items[self.count - 1];
         }
 
-        pub fn last(self: *Self) ?T {
-            return self.lastPopped;
+        pub fn previous(self: *Self) T {
+            return self.backing[self.count];
         }
     };
 }

@@ -73,7 +73,6 @@ pub const TokenType = enum {
     @"switch",
     true,
     @"var",
-    void,
     @"while",
 
     bough,
@@ -107,7 +106,6 @@ pub const Keywords = std.ComptimeStringMap(TokenType, .{
     .{ "switch", .@"switch" },
     .{ "true", .true },
     .{ "var", .@"var" },
-    .{ "void", .void },
     .{ "while", .@"while" },
 });
 
@@ -172,7 +170,6 @@ pub fn fmtString(token_type: TokenType) []const u8 {
         .@"switch" => "switch",
         .true => "true",
         .@"var" => "var",
-        .void => "void",
         .@"while" => "while",
 
         .bough => "bough",

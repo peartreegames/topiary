@@ -7,9 +7,8 @@ pub const True = Value{ .bool = true };
 pub const False = Value{ .bool = false };
 pub const Nil = Value.nil;
 pub const Void = Value.void;
-// pub const NativeFn = fn (gc: *Gc, args: []*Value) anyerror!*Value;
 
-const Type = enum(u8) {
+pub const Type = enum(u8) {
     void,
     nil,
     bool,
@@ -42,6 +41,7 @@ pub const Value = union(Type) {
             list: std.ArrayList(Value),
             map: MapType,
             set: SetType,
+            function: []const u8,
         };
         pub const MapType = std.ArrayHashMap(Value, Value, Adapter, true);
         pub const SetType = std.ArrayHashMap(Value, void, Adapter, true);
@@ -57,6 +57,7 @@ pub const Value = union(Type) {
                 .list => |l| l.deinit(),
                 .map => obj.data.map.deinit(),
                 .set => obj.data.set.deinit(),
+                .function => |f| allocator.free(f),
             }
             allocator.destroy(obj);
         }
@@ -120,6 +121,11 @@ pub const Value = union(Type) {
                                 writer.print(", ", .{});
                         }
                         writer.print("}}", .{});
+                    },
+                    .function => |f| {
+                        for (f) |c| {
+                            writer.print("{d} ", .{c});
+                        }
                     },
                     else => {},
                 }

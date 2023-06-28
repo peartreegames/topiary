@@ -8,10 +8,12 @@ const values = @import("./values.zig");
 const Stack = @import("./stack.zig").Stack;
 const Gc = @import("./gc.zig").Gc;
 const Token = @import("./token.zig").Token;
+const Frame = @import("./frame.zig").Frame;
 
 const testing = std.testing;
-const stack_size = 2048;
-const globals_size = 65536;
+const stack_size = 2047;
+const frame_size = 1023;
+const globals_size = 65535;
 const Value = values.Value;
 const adapter = values.adapter;
 
@@ -27,6 +29,7 @@ const InterpretResult = union(enum) {
 
 pub const Vm = struct {
     allocator: std.mem.Allocator,
+    frames: Stack(Frame),
     gc: Gc,
     globals: std.ArrayList(Value),
     stack: Stack(Value),
@@ -38,14 +41,16 @@ pub const Vm = struct {
     pub fn init(allocator: std.mem.Allocator) !Vm {
         return .{
             .allocator = allocator,
-            .stack = try Stack(Value).init(allocator, stack_size),
+            .frames = try Stack(Frame).init(allocator, frame_size),
             .globals = try std.ArrayList(Value).initCapacity(allocator, 1024),
             .gc = Gc.init(allocator),
+            .stack = try Stack(Value).init(allocator, stack_size),
         };
     }
 
     pub fn deinit(self: *Vm) void {
         self.stack.deinit();
+        self.frames.deinit();
         self.globals.deinit();
         self.bytecode.free(testing.allocator);
         self.gc.deinit();
@@ -55,8 +60,16 @@ pub const Vm = struct {
         return &([_][]Value{ self.globals.items, self.stack.items });
     }
 
+    fn currentFrame(self: *Vm) *Frame {
+        return self.frames.peek();
+    }
+
     pub fn interpret(self: *Vm, bytecode: ByteCode) !void {
         self.bytecode = bytecode;
+        var frame_pointer = try self.allocator.create(Value.Obj);
+        defer self.allocator.destroy(frame_pointer);
+        frame_pointer.* = .{ .data = .{ .function = bytecode.instructions } };
+        self.frames.push(try Frame.create(frame_pointer, 0));
         try self.run();
     }
 
@@ -68,7 +81,7 @@ pub const Vm = struct {
             return err;
         };
         defer tree.deinit();
-        var compiler = Compiler.init(self.allocator);
+        var compiler = try Compiler.init(self.allocator);
         defer compiler.deinit();
         try compiler.compile(tree);
 
@@ -89,19 +102,21 @@ pub const Vm = struct {
     }
 
     fn readByte(self: *Vm) u8 {
-        const byte = self.bytecode.instructions[self.ip];
-        self.ip += 1;
+        var frame = self.currentFrame();
+        const byte = frame.instructions()[frame.ip];
+        frame.ip += 1;
         return byte;
     }
 
     fn readInt(self: *Vm, comptime T: type) T {
-        const result = std.mem.readIntSliceBig(T, self.bytecode.instructions[self.ip..(self.ip + @sizeOf(T))]);
-        self.ip += @sizeOf(T);
+        var frame = self.currentFrame();
+        const result = std.mem.readIntSliceBig(T, frame.instructions()[frame.ip..(frame.ip + @sizeOf(T))]);
+        frame.ip += @sizeOf(T);
         return result;
     }
 
     fn run(self: *Vm) !void {
-        while (self.ip < self.bytecode.instructions.len) {
+        while (self.ip < self.currentFrame().instructions().len) : (self.ip = self.currentFrame().ip) {
             const instruction = self.readByte();
             const op = @enumFromInt(OpCode, instruction);
             switch (op) {
@@ -142,13 +157,13 @@ pub const Vm = struct {
                 },
                 .jump => {
                     var dest = self.readInt(u16);
-                    self.ip = dest;
+                    self.currentFrame().ip = dest;
                 },
                 .jump_if_false => {
                     var dest = self.readInt(u16);
                     var condition = self.pop();
                     if (!try condition.isTruthy()) {
-                        self.ip = dest;
+                        self.currentFrame().ip = dest;
                     }
                 },
                 .set_global => {
@@ -245,7 +260,22 @@ pub const Vm = struct {
                         else => unreachable,
                     }
                 },
-                .@"return" => break,
+                .call => {
+                    var value = self.stack.pop();
+                    if (value != .obj and value.obj.*.data != .function) return error.RuntimeError;
+                    // value.print(std.debug);
+                    var frame = try Frame.create(value.obj, 0);
+                    self.frames.push(frame);
+                },
+                .return_value => {
+                    var value = self.pop();
+                    _ = self.frames.pop();
+                    try self.push(value);
+                },
+                .return_void => {
+                    _ = self.frames.pop();
+                    try self.push(values.Nil);
+                },
             }
         }
     }
@@ -324,8 +354,8 @@ test "Basics" {
         defer vm.deinit();
         try vm.interpretSource(case.input);
         switch (case.type) {
-            f32 => try testing.expect(case.value == vm.stack.last().?.number),
-            bool => try testing.expect(case.value == vm.stack.last().?.bool),
+            f32 => try testing.expect(case.value == vm.stack.previous().number),
+            bool => try testing.expect(case.value == vm.stack.previous().bool),
             else => continue,
         }
     }
@@ -345,8 +375,8 @@ test "Conditionals" {
         defer vm.deinit();
         try vm.interpretSource(case.input);
         switch (case.type) {
-            .number => try testing.expect(case.value == vm.stack.last().?.number),
-            .nil => try testing.expect(vm.stack.last().?.is(.nil)),
+            .number => try testing.expect(case.value == vm.stack.previous().number),
+            .nil => try testing.expect(vm.stack.previous().is(.nil)),
             else => continue,
         }
     }
@@ -362,7 +392,7 @@ test "Variables" {
         var vm = try Vm.init(testing.allocator);
         defer vm.deinit();
         try vm.interpretSource(case.input);
-        try testing.expect(case.value == vm.stack.last().?.number);
+        try testing.expect(case.value == vm.stack.previous().number);
     }
 }
 
@@ -381,7 +411,7 @@ test "Strings" {
         // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
-        try testing.expectEqualStrings(case.value, vm.stack.last().?.obj.data.string);
+        try testing.expectEqualStrings(case.value, vm.stack.previous().obj.data.string);
     }
 }
 
@@ -398,7 +428,7 @@ test "Lists" {
         defer vm.deinit();
         try vm.interpretSource(case.input);
         for (case.value, 0..) |v, i| {
-            try testing.expect(v == vm.stack.last().?.obj.data.list.items[i].number);
+            try testing.expect(v == vm.stack.previous().obj.data.list.items[i].number);
         }
     }
 }
@@ -415,7 +445,7 @@ test "Maps" {
         // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
-        const map = vm.stack.last().?.obj.data.map;
+        const map = vm.stack.previous().obj.data.map;
         try testing.expect(map.keys().len == case.keys.len);
         if (case.keys.len > 0) {
             for (map.keys(), 0..) |k, i| {
@@ -439,7 +469,7 @@ test "Sets" {
         // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
-        const set = vm.stack.last().?.obj.data.set;
+        const set = vm.stack.previous().obj.data.set;
         try testing.expect(set.keys().len == case.values.len);
         if (case.values.len > 0) {
             for (set.keys(), 0..) |k, i| {
@@ -465,12 +495,71 @@ test "Index" {
 
     inline for (test_cases) |case| {
         var vm = try Vm.init(testing.allocator);
+        // vm.debug = true;
+        defer vm.deinit();
+        try vm.interpretSource(case.input);
+        const value = vm.stack.previous();
+        errdefer std.log.warn("{s}--{}", .{ case.input, @TypeOf(case.value) });
+        errdefer value.print(std.debug);
+        switch (@TypeOf(case.value)) {
+            comptime_float => try testing.expect(case.value == value.number),
+            else => try testing.expect(value == .nil),
+        }
+    }
+}
+
+test "Functions" {
+    const test_cases = .{
+        .{ .input = 
+        \\ const fifteen = || return 5 + 10
+        \\ fifteen()    
+        , .value = 15.0 },
+        .{ .input = 
+        \\ const one = || return 1
+        \\ const two = || return 2
+        \\ one() + two() 
+        , .value = 3.0 },
+        .{ .input = 
+        \\ const a = || return 1
+        \\ const b = || return a() + 1
+        \\ const c = || return b() + 1
+        \\ c() 
+        , .value = 3.0 },
+
+        .{ .input = 
+        \\ (|| return 33)()
+        , .value = 33.0 },
+        .{ .input = 
+        \\ const exit = || { return 99 return 100 }
+        \\ exit()
+        , .value = 99.0 },
+        .{ .input = 
+        \\ const cond = || { if (true) return 1 return 0 }
+        \\ cond()
+        , .value = 1.0 },
+        .{ .input = 
+        \\ const cond = || { if (false) return 1 return 0 }
+        \\ cond()
+        , .value = 0.0 },
+        .{ .input = 
+        \\ const noop = || {}
+        \\ noop()
+        , .value = null },
+        .{ .input = 
+        \\ const noop = || {}
+        \\ const noopop = || { noop() }
+        \\ noop()
+        \\ noopop()
+        , .value = null },
+    };
+
+    inline for (test_cases) |case| {
+        var vm = try Vm.init(testing.allocator);
         vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
-        const value = vm.stack.last().?;
-        errdefer std.log.warn("{s}--{}", .{ case.input, @TypeOf(case.value) });
-        errdefer value.print(std.debug);
+        const value = vm.stack.previous();
+        errdefer std.log.warn("{s}:: {any} == {any}", .{ case.input, case.value, value });
         switch (@TypeOf(case.value)) {
             comptime_float => try testing.expect(case.value == value.number),
             else => try testing.expect(value == .nil),

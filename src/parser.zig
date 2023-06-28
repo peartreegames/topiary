@@ -271,13 +271,12 @@ pub const Parser = struct {
     fn returnStatement(self: *Parser) Error!Statement {
         const start_token = self.current_token;
         self.next();
-        if (self.currentIs(.void)) {
+        if (self.currentIsOneOf(&[_]TokenType{ .eof, .right_brace })) {
             return .{
                 .token = start_token,
                 .type = .return_void,
             };
         }
-
         return .{
             .token = start_token,
             .type = .{
@@ -449,7 +448,7 @@ pub const Parser = struct {
             return try list.toOwnedSlice();
         }
         self.next();
-        while (!self.currentIs(.right_brace)) {
+        while (!self.currentIsOneOf([2]TokenType{ .right_brace, .eof })) {
             try list.append(try self.statement());
             self.next();
         }
@@ -779,7 +778,7 @@ pub const Parser = struct {
             .token = self.current_token,
             .type = .{
                 .call = .{
-                    .name = try self.allocate(func),
+                    .target = try self.allocate(func),
                     .arguments = try self.arguments(),
                 },
             },
@@ -1250,7 +1249,7 @@ test "Parse Call expression" {
     defer tree.deinit();
 
     const call = tree.root[0].type.expression.type.call;
-    try testing.expectEqualStrings("add", call.name.type.identifier);
+    try testing.expectEqualStrings("add", call.target.type.identifier);
     try testing.expect(call.arguments.len == 3);
     try testing.expect(call.arguments[0].type.number == 1);
     try testing.expect(call.arguments[1].type.binary.operator == .multiply);
@@ -1420,6 +1419,6 @@ test "Parse Inline Code" {
     defer tree.deinit();
     const dialogue = tree.root[0].type.bough.body[0].type.expression.type.dialogue;
     const string = dialogue.content.type.string;
-    try testing.expectEqualStrings("sayHello", string.expressions[0].type.call.name.type.identifier);
+    try testing.expectEqualStrings("sayHello", string.expressions[0].type.call.target.type.identifier);
     try testing.expectEqualStrings("{}, how are you?", string.value);
 }

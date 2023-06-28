@@ -5,15 +5,19 @@ const Token = @import("./token.zig").Token;
 const OpCode = @import("./opcode.zig").OpCode;
 const Errors = @import("./error.zig").Errors;
 const Value = @import("./values.zig").Value;
+const ValueType = @import("./values.zig").Type;
 const String = @import("./values.zig").String;
 const SymbolTable = @import("./symbols.zig").SymbolTable;
 const Symbol = @import("./symbols.zig").Symbol;
+const Scope = @import("./scope.zig").Scope;
+const DebugToken = @import("./debug.zig").DebugToken;
 
 const testing = std.testing;
 
 const CompilerError = error{
     IllegalOperation,
     OutOfMemory,
+    OutOfScope,
 };
 
 pub const ByteCode = struct {
@@ -40,9 +44,9 @@ pub const ByteCode = struct {
         const tokens = code.tokens;
         while (i < instructions.len) {
             writer.print("{d:0>4} ", .{i});
-            const token = DebugTokens.get(tokens, i);
+            const token = DebugToken.get(tokens, i);
             if (token) |t| {
-                if (i > 0 and t.line == DebugTokens.get(tokens, i - 1).?.line) {
+                if (i > 0 and t.line == DebugToken.get(tokens, i - 1).?.line) {
                     writer.print("[{s}] ", .{"  | "});
                 } else {
                     writer.print("[{d:0>4}] ", .{t.line});
@@ -74,68 +78,41 @@ pub const ByteCode = struct {
     }
 };
 
-pub const DebugTokens = struct {
-    pub fn append(tokens: *std.ArrayList(DebugToken), token: Token) !void {
-        if (tokens.items.len == 0) {
-            try tokens.append(.{ .token = token, .length = 0 });
-            return;
-        }
-        var current = tokens.getLast();
-        if (current.token.eql(token)) {
-            current.length += 1;
-            tokens.items[tokens.items.len - 1] = current;
-            return;
-        }
-        try tokens.append(.{ .token = token, .length = 0 });
-    }
-
-    pub fn get(tokens: []DebugToken, index: usize) ?Token {
-        var current: usize = 0;
-        for (tokens, 0..) |token, i| {
-            current += i;
-            current += token.length;
-            if (current >= index) return token.token;
-        }
-        return null;
-    }
-};
-
-pub const DebugToken = struct {
-    token: Token,
-    length: usize,
-};
-
 pub const Compiler = struct {
     allocator: std.mem.Allocator,
-    tokens: std.ArrayList(DebugToken),
 
-    instructions: std.ArrayList(u8),
     constants: std.ArrayList(Value),
     symbols: SymbolTable,
+    scope: ?*Scope = null,
 
-    pub fn init(allocator: std.mem.Allocator) Compiler {
+    pub fn init(allocator: std.mem.Allocator) !Compiler {
+        var root_scope = try Scope.create(allocator, null, .global);
         return .{
             .allocator = allocator,
-            .tokens = std.ArrayList(DebugToken).init(allocator),
-            .instructions = std.ArrayList(u8).init(allocator),
             .constants = std.ArrayList(Value).init(allocator),
             .symbols = SymbolTable.init(allocator),
+            .scope = root_scope,
         };
     }
 
     pub fn deinit(self: *Compiler) void {
-        self.tokens.deinit();
-        self.instructions.deinit();
+        self.scope.?.destroy();
         self.constants.deinit();
         self.symbols.deinit();
     }
 
     pub fn bytecode(self: *Compiler) !ByteCode {
+        var scope = try self.currentScope();
         return .{
-            .instructions = try self.instructions.toOwnedSlice(),
+            .instructions = try scope.instructions.toOwnedSlice(),
             .constants = try self.constants.toOwnedSlice(),
-            .tokens = try self.tokens.toOwnedSlice(),
+            .tokens = try scope.debug_tokens.toOwnedSlice(),
         };
+    }
+
+    fn currentScope(self: *Compiler) !*Scope {
+        if (self.scope) |scope| return scope;
+        return error.OutOfScope;
     }
 
     pub fn compile(self: *Compiler, tree: ast.Tree) CompilerError!void {
@@ -156,6 +133,21 @@ pub const Compiler = struct {
         try self.compile(tree);
     }
 
+    fn enterScope(self: *Compiler, tag: Scope.Tag) !void {
+        self.scope = try Scope.create(self.allocator, try self.currentScope(), tag);
+    }
+
+    fn exitScope(self: *Compiler) !struct { instructions: []u8, debug_tokens: []DebugToken } {
+        const old_scope = try self.currentScope();
+        const result = .{
+            .instructions = try old_scope.instructions.toOwnedSlice(),
+            .debug_tokens = try old_scope.debug_tokens.toOwnedSlice(),
+        };
+        self.scope = old_scope.parent;
+        old_scope.destroy();
+        return result;
+    }
+
     pub fn compileStatement(self: *Compiler, stmt: ast.Statement) CompilerError!void {
         var token = stmt.token;
         switch (stmt.type) {
@@ -164,20 +156,20 @@ pub const Compiler = struct {
                 try self.writeOp(.jump_if_false, token);
                 const falsePos = try self.writeInt(u16, std.math.maxInt(u16), token);
                 try self.compileBlock(i.then_branch);
-                self.removeLastPop();
+                try self.removeLastPop();
 
                 try self.writeOp(.jump, token);
                 const jumpPos = try self.writeInt(u16, std.math.maxInt(u16), token);
-                try self.replaceValue(falsePos, u16, self.u16Pos());
+                try self.replaceValue(falsePos, u16, self.scopePos());
 
                 if (i.else_branch == null) {
                     try self.writeOp(.nil, token);
                     try self.writeOp(.pop, token);
-                    try self.replaceValue(jumpPos, u16, self.u16Pos() - 1);
+                    try self.replaceValue(jumpPos, u16, self.scopePos() - 1);
                     return;
                 }
                 try self.compileBlock(i.else_branch.?);
-                try self.replaceValue(jumpPos, u16, self.u16Pos() - 1);
+                try self.replaceValue(jumpPos, u16, self.scopePos() - 1);
             },
             .block => |b| try self.compileBlock(b),
             .expression => |exp| {
@@ -190,13 +182,30 @@ pub const Compiler = struct {
                 try self.writeOp(.set_global, token);
                 _ = try self.writeInt(OpCode.Size(.set_global), symbol.*.index, token);
             },
+            .return_expression => |r| {
+                try self.compileExpression(&r);
+                try self.writeOp(.return_value, token);
+            },
+            .return_void => {
+                try self.writeOp(.return_void, token);
+            },
             else => {},
         }
     }
 
-    pub fn removeLastPop(self: *Compiler) void {
-        if (self.instructions.items[self.instructions.items.len - 1] == @intFromEnum(OpCode.pop)) {
-            self.instructions.items = self.instructions.items[0 .. self.instructions.items.len - 1];
+    fn lastIs(self: *Compiler, op: OpCode) !bool {
+        var scope = try self.currentScope();
+        var inst = scope.instructions;
+        const last = inst.getLastOrNull();
+        if (last == null) return false;
+        return last.? == @intFromEnum(op);
+    }
+
+    fn removeLastPop(self: *Compiler) !void {
+        if (try self.lastIs(.pop)) {
+            var scope = try self.currentScope();
+            var inst = scope.instructions;
+            scope.instructions.items = inst.items[0 .. inst.items.len - 1];
         }
     }
 
@@ -311,38 +320,59 @@ pub const Compiler = struct {
 
                 try self.writeOp(.jump, token);
                 const nextPos = try self.writeInt(u16, std.math.maxInt(u16), token);
-                try self.replaceValue(pos, u16, self.u16Pos());
+                try self.replaceValue(pos, u16, self.scopePos());
 
                 try self.compileExpression(i.else_value);
-                try self.replaceValue(nextPos, u16, self.u16Pos());
+                try self.replaceValue(nextPos, u16, self.scopePos());
+            },
+            .function => |f| {
+                try self.enterScope(.function);
+                try self.compileBlock(f.body);
+                if (!(try self.lastIs(.return_value)) and !(try self.lastIs(.return_void))) {
+                    try self.writeOp(.return_void, token);
+                }
+                const inst = try self.exitScope();
+                const obj = try self.allocator.create(Value.Obj);
+
+                // TODO: use debug tokens
+                self.allocator.free(inst.debug_tokens);
+
+                obj.* = .{ .data = .{ .function = inst.instructions } };
+                const i = try self.addConstant(.{ .obj = obj });
+
+                try self.writeOp(.constant, token);
+                _ = try self.writeInt(OpCode.Size(.constant), i, token);
+            },
+            .call => |c| {
+                try self.compileExpression(c.target);
+                try self.writeOp(.call, token);
             },
             else => {},
         }
     }
 
-    fn u16Pos(self: *Compiler) u16 {
-        return @intCast(u16, self.instructions.items.len);
+    fn scopePos(self: *Compiler) u16 {
+        return @intCast(u16, self.scope.?.instructions.items.len);
     }
 
-    fn writeOp(
-        self: *Compiler,
-        op: OpCode,
-        token: Token,
-    ) !void {
-        try self.instructions.append(@intFromEnum(op));
-        try DebugTokens.append(&self.tokens, token);
+    fn writeOp(self: *Compiler, op: OpCode, token: Token) !void {
+        var scope = try self.currentScope();
+        try scope.instructions.append(@intFromEnum(op));
+        try DebugToken.add(&scope.debug_tokens, token);
     }
 
     fn writeValue(self: *Compiler, buf: []const u8, token: Token) !void {
-        try self.instructions.writer().writeAll(buf);
+        var scope = try self.currentScope();
+        try scope.instructions.writer().writeAll(buf);
         var i: usize = 0;
         while (i < buf.len) : (i += 1) {
-            try DebugTokens.append(&self.tokens, token);
+            try DebugToken.add(&scope.debug_tokens, token);
         }
     }
 
     fn writeInt(self: *Compiler, comptime T: type, value: T, token: Token) !usize {
-        var start = self.instructions.items.len;
+        var scope = try self.currentScope();
+        var start = scope.instructions.items.len;
         var buf: [@sizeOf(T)]u8 = undefined;
         std.mem.writeIntBig(T, buf[0..], value);
         try self.writeValue(&buf, token);
@@ -352,8 +382,9 @@ pub const Compiler = struct {
     pub fn replaceValue(self: *Compiler, pos: usize, comptime T: type, value: T) !void {
         var buf: [@sizeOf(T)]u8 = undefined;
         std.mem.writeIntBig(T, buf[0..], value);
+        var scope = try self.currentScope();
         for (buf, 0..) |v, i| {
-            self.instructions.items[pos + i] = v;
+            scope.instructions.items[pos + i] = v;
         }
     }
 
@@ -374,7 +405,7 @@ test "Basic Compile" {
 
     inline for (test_cases) |case| {
         var allocator = testing.allocator;
-        var compiler = Compiler.init(allocator);
+        var compiler = try Compiler.init(allocator);
         defer compiler.deinit();
         try compiler.compileSource(case.input);
 
@@ -398,7 +429,24 @@ test "Conditionals Compile" {
         .{
             .input = "if (true) { 10 } 333",
             .expectedConstants = [_]Value{ .{ .number = 10 }, .{ .number = 333 } },
-            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.true), @intFromEnum(OpCode.jump_if_false), 0, 10, @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.jump), 0, 11, @intFromEnum(OpCode.nil), @intFromEnum(OpCode.pop), @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.pop) },
+            .expectedInstructions = [_]u8{
+                @intFromEnum(OpCode.true),
+                @intFromEnum(OpCode.jump_if_false),
+                0,
+                10,
+                @intFromEnum(OpCode.constant),
+                0,
+                0,
+                @intFromEnum(OpCode.jump),
+                0,
+                11,
+                @intFromEnum(OpCode.nil),
+                @intFromEnum(OpCode.pop),
+                @intFromEnum(OpCode.constant),
+                0,
+                1,
+                @intFromEnum(OpCode.pop),
+            },
         },
         .{
             .input = "if (true) { 10 } else { 20 } 333",
@@ -410,7 +458,7 @@ test "Conditionals Compile" {
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
         var allocator = testing.allocator;
-        var compiler = Compiler.init(allocator);
+        var compiler = try Compiler.init(allocator);
         defer compiler.deinit();
         try compiler.compileSource(case.input);
 
@@ -454,7 +502,7 @@ test "Variables" {
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
         var allocator = testing.allocator;
-        var compiler = Compiler.init(allocator);
+        var compiler = try Compiler.init(allocator);
         defer compiler.deinit();
         try compiler.compileSource(case.input);
 
@@ -504,7 +552,7 @@ test "Strings" {
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
         var allocator = testing.allocator;
-        var compiler = Compiler.init(allocator);
+        var compiler = try Compiler.init(allocator);
         defer compiler.deinit();
         try compiler.compileSource(case.input);
 
@@ -542,7 +590,7 @@ test "Lists" {
 
     inline for (test_cases) |case| {
         var allocator = testing.allocator;
-        var compiler = Compiler.init(allocator);
+        var compiler = try Compiler.init(allocator);
         defer compiler.deinit();
         try compiler.compileSource(case.input);
 
@@ -602,7 +650,7 @@ test "Maps and Sets" {
         var arena_inst = std.heap.ArenaAllocator.init(allocator);
         defer arena_inst.deinit();
         const arena = arena_inst.allocator();
-        var compiler = Compiler.init(arena);
+        var compiler = try Compiler.init(arena);
         defer compiler.deinit();
         try compiler.compileSource(case.input);
 
@@ -622,49 +670,16 @@ test "Maps and Sets" {
 
 test "Index" {
     const test_cases = .{
-        .{ .input = "[1,2,3][1 + 1]", .expectedConstants = [_]f32{ 1, 2, 3, 1, 1 }, .expectedInstructions = [_]u8{
-            @intFromEnum(OpCode.constant),
-            0,
-            0,
-            @intFromEnum(OpCode.constant),
-            0,
-            1,
-            @intFromEnum(OpCode.constant),
-            0,
-            2,
-            @intFromEnum(OpCode.list),
-            0,
-            3,
-            @intFromEnum(OpCode.constant),
-            0,
-            3,
-            @intFromEnum(OpCode.constant),
-            0,
-            4,
-            @intFromEnum(OpCode.add),
-            @intFromEnum(OpCode.index),
-            @intFromEnum(OpCode.pop),
-        } },
-        .{ .input = "({1: 2})[2 - 1]", .expectedConstants = [_]f32{ 1, 2, 2, 1 }, .expectedInstructions = [_]u8{
-            @intFromEnum(OpCode.constant),
-            0,
-            0,
-            @intFromEnum(OpCode.constant),
-            0,
-            1,
-            @intFromEnum(OpCode.map),
-            0,
-            1,
-            @intFromEnum(OpCode.constant),
-            0,
-            2,
-            @intFromEnum(OpCode.constant),
-            0,
-            3,
-            @intFromEnum(OpCode.subtract),
-            @intFromEnum(OpCode.index),
-            @intFromEnum(OpCode.pop),
-        } },
+        .{
+            .input = "[1,2,3][1 + 1]",
+            .expectedConstants = [_]f32{ 1, 2, 3, 1, 1 },
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.list), 0, 3, @intFromEnum(OpCode.constant), 0, 3, @intFromEnum(OpCode.constant), 0, 4, @intFromEnum(OpCode.add), @intFromEnum(OpCode.index), @intFromEnum(OpCode.pop) },
+        },
+        .{
+            .input = "({1: 2})[2 - 1]",
+            .expectedConstants = [_]f32{ 1, 2, 2, 1 },
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.map), 0, 1, @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.constant), 0, 3, @intFromEnum(OpCode.subtract), @intFromEnum(OpCode.index), @intFromEnum(OpCode.pop) },
+        },
     };
 
     inline for (test_cases) |case| {
@@ -673,7 +688,7 @@ test "Index" {
         var arena_inst = std.heap.ArenaAllocator.init(allocator);
         defer arena_inst.deinit();
         const arena = arena_inst.allocator();
-        var compiler = Compiler.init(arena);
+        var compiler = try Compiler.init(arena);
         defer compiler.deinit();
         try compiler.compileSource(case.input);
 
@@ -687,6 +702,134 @@ test "Index" {
 
         for (case.expectedConstants, 0..) |constant, i| {
             try testing.expect(constant == bytecode.constants[i].number);
+        }
+    }
+}
+
+test "Functions" {
+    var test_cases = .{
+        .{
+            .input = "|| return 5 + 10",
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.pop) },
+            .expectedConstants = [_]f32{ 5, 10 },
+            .expectedFunctions = [_][]const u8{
+                &[_]u8{},
+                &[_]u8{},
+                &[_]u8{
+                    @intFromEnum(OpCode.constant), 0,                                 0,
+                    @intFromEnum(OpCode.constant), 0,                                 1,
+                    @intFromEnum(OpCode.add),      @intFromEnum(OpCode.return_value),
+                },
+            },
+        },
+        .{
+            .input = "|| 5 + 10",
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.pop) },
+            .expectedConstants = [_]f32{ 5, 10 },
+            .expectedFunctions = [_][]const u8{
+                &[_]u8{},
+                &[_]u8{},
+                &[_]u8{
+                    @intFromEnum(OpCode.constant),
+                    0,
+                    0,
+                    @intFromEnum(OpCode.constant),
+                    0,
+                    1,
+                    @intFromEnum(OpCode.add),
+                    @intFromEnum(OpCode.pop),
+                    @intFromEnum(OpCode.return_void),
+                },
+            },
+        },
+        .{
+            .input = "|| { 5 + 10 return }",
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.pop) },
+            .expectedConstants = [_]f32{ 5, 10 },
+            .expectedFunctions = [_][]const u8{
+                &[_]u8{},
+                &[_]u8{},
+                &[_]u8{
+                    @intFromEnum(OpCode.constant), 0,                        0,
+                    @intFromEnum(OpCode.constant), 0,                        1,
+                    @intFromEnum(OpCode.add),      @intFromEnum(OpCode.pop), @intFromEnum(OpCode.return_void),
+                },
+            },
+        },
+        .{
+            .input = "|| {}",
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.pop) },
+            .expectedConstants = [_]f32{ 0, 0, 0 },
+            .expectedFunctions = [_][]const u8{
+                &[_]u8{
+                    @intFromEnum(OpCode.return_void),
+                },
+            },
+        },
+        .{
+            .input = "|| { return 5 }()",
+            .expectedInstructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.call), @intFromEnum(OpCode.pop) },
+            .expectedConstants = [_]f32{5},
+            .expectedFunctions = [_][]const u8{
+                &[_]u8{},
+                &[_]u8{
+                    @intFromEnum(OpCode.constant),     0, 0,
+                    @intFromEnum(OpCode.return_value),
+                },
+            },
+        },
+        .{
+            .input =
+            \\ const five = || return 5
+            \\ five()
+            ,
+            .expectedInstructions = [_]u8{
+                @intFromEnum(OpCode.constant),
+                0,
+                1,
+                @intFromEnum(OpCode.set_global),
+                0,
+                0,
+                @intFromEnum(OpCode.get_global),
+                0,
+                0,
+                @intFromEnum(OpCode.call),
+                @intFromEnum(OpCode.pop),
+            },
+            .expectedConstants = [_]f32{5},
+            .expectedFunctions = [_][]const u8{
+                &[_]u8{},
+                &[_]u8{
+                    @intFromEnum(OpCode.constant),     0, 0,
+                    @intFromEnum(OpCode.return_value),
+                },
+            },
+        },
+    };
+
+    inline for (test_cases) |case| {
+        // std.log.warn("{s}", .{case.input});
+        var allocator = testing.allocator;
+        var arena_inst = std.heap.ArenaAllocator.init(allocator);
+        defer arena_inst.deinit();
+        const arena = arena_inst.allocator();
+        var compiler = try Compiler.init(arena);
+        defer compiler.deinit();
+        try compiler.compileSource(case.input);
+
+        var bytecode = try compiler.bytecode();
+        defer bytecode.free(arena);
+        // bytecode.print(std.debug);
+        for (case.expectedInstructions, 0..) |instruction, i| {
+            errdefer std.log.warn("Error on: {}", .{i});
+            try testing.expectEqual(instruction, bytecode.instructions[i]);
+        }
+        for (bytecode.constants, 0..) |constant, i| {
+            switch (constant) {
+                .number => |n| try testing.expect(case.expectedConstants[i] == n),
+                .obj => |o| try testing.expectEqualSlices(u8, case.expectedFunctions[i], o.data.function),
+                else => unreachable,
+            }
         }
     }
 }

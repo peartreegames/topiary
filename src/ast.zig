@@ -42,7 +42,7 @@ pub const Expression = struct {
         },
         identifier: []const u8,
         call: struct {
-            name: *Expression,
+            target: *Expression,
             arguments: []const Expression,
         },
         @"extern": void,
