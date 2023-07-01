@@ -53,7 +53,7 @@ pub const Errors = struct {
             const start = @min(err.token.start, source.len - 1);
             const end = @min(err.token.end, source.len - 1);
 
-            try writer.print("type: {s}, line: {d}, column: {d}\n", .{ tok.fmtString(err.token.token_type), err.token.line, err.token.column });
+            try writer.print("type: {s}, line: {d}, column: {d}\n", .{ tok.toString(err.token.token_type), err.token.line, err.token.column });
             try writer.print("{s}\n", .{source[start..end]});
             try writer.writeByteNTimes('~', end - start);
             try writer.writeAll("\x1b[0;35m^\n\x1b[0m");

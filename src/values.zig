@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("./ast.zig");
 const Gc = @import("./gc.zig").Gc;
+const ByteCode = @import("./compiler.zig").ByteCode;
 const Allocator = std.mem.Allocator;
 
 pub const True = Value{ .bool = true };
@@ -41,7 +42,10 @@ pub const Value = union(Type) {
             list: std.ArrayList(Value),
             map: MapType,
             set: SetType,
-            function: []const u8,
+            function: struct {
+                instructions: []const u8,
+                locals_count: usize,
+            },
         };
         pub const MapType = std.ArrayHashMap(Value, Value, Adapter, true);
         pub const SetType = std.ArrayHashMap(Value, void, Adapter, true);
@@ -57,7 +61,7 @@ pub const Value = union(Type) {
                 .list => |l| l.deinit(),
                 .map => obj.data.map.deinit(),
                 .set => obj.data.set.deinit(),
-                .function => |f| allocator.free(f),
+                .function => |f| allocator.free(f.instructions),
             }
             allocator.destroy(obj);
         }
@@ -123,9 +127,7 @@ pub const Value = union(Type) {
                         writer.print("}}", .{});
                     },
                     .function => |f| {
-                        for (f) |c| {
-                            writer.print("{d} ", .{c});
-                        }
+                        ByteCode.printInstructions(writer, f.instructions);
                     },
                     else => {},
                 }
@@ -155,13 +157,11 @@ pub const Value = union(Type) {
                 .obj => |o| {
                     switch (o.data) {
                         .string => |s| hasher.update(s),
-                        // .function |f| => {
-                        //     if (f.name) |name|
-                        //         hasher.update(name);
-                        //     hashFn(&hasher, f.arg_len);
-                        //     hashFn(&hasher, f.locals);
-                        //     hashFn(&hasher, f.entry);
-                        // },
+                        .function => |f| {
+                            hashFn(&hasher, f.locals_count);
+                            hashFn(&hasher, f.instructions.len);
+                            hashFn(&hasher, f.instructions.ptr);
+                        },
                         .list => |l| {
                             hashFn(&hasher, l.items.len);
                             hashFn(&hasher, l.items.ptr);

@@ -1,18 +1,20 @@
 const Obj = @import("./values.zig").Value.Obj;
 
 pub const Frame = struct {
-    frame_pointer: *Obj,
+    fp: *Obj,
     ip: usize,
+    bp: usize,
 
-    pub fn create(obj: *Obj, ip: usize) !Frame {
-        if (obj.*.data != .function) return error.InvalidType;
+    pub fn create(obj: *Obj, ip: usize, bp: usize) !Frame {
+        if (obj.data != .function) return error.InvalidType;
         return .{
-            .frame_pointer = obj,
+            .fp = obj,
             .ip = ip,
+            .bp = bp,
         };
     }
 
     pub fn instructions(self: *Frame) []const u8 {
-        return self.frame_pointer.*.data.function;
+        return self.fp.data.function.instructions;
     }
 };

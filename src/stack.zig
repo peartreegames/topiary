@@ -29,6 +29,11 @@ pub fn Stack(comptime T: type) type {
             self.items[self.count - 1] = item;
         }
 
+        pub fn resize(self: *Self, i: usize) void {
+            self.count = i;
+            self.items = self.backing[0..self.count];
+        }
+
         pub fn pop(self: *Self) T {
             self.count -= 1;
             const value = self.items[self.count];

@@ -277,10 +277,11 @@ pub const Parser = struct {
                 .type = .return_void,
             };
         }
+        const expr = try self.expression(.lowest);
         return .{
             .token = start_token,
             .type = .{
-                .return_expression = try self.expression(.lowest),
+                .return_expression = expr,
             },
         };
     }
@@ -362,9 +363,7 @@ pub const Parser = struct {
                 try self.expectPeek(.right_paren);
                 break :blk exp;
             },
-            // map or set
             .left_brace => try self.mapSetExpression(),
-            // list
             .left_bracket => try self.listExpression(),
             .new => try self.structExpression(),
             .pipe => try self.functionExpression(),
@@ -401,12 +400,13 @@ pub const Parser = struct {
                     const op = ast.BinaryOp.fromToken(self.current_token);
                     const inner_prec = findPrecedence(self.current_token.token_type);
                     self.next();
+                    const allocated = try self.allocate(left);
                     break :blk .{
                         .token = start_token,
                         .type = .{
                             .binary = .{
                                 .operator = op,
-                                .left = try self.allocate(left),
+                                .left = allocated,
                                 .right = try self.allocate(try self.expression(inner_prec)),
                             },
                         },
@@ -943,7 +943,7 @@ pub const Parser = struct {
     fn expectCurrent(self: *Parser, comptime token_type: TokenType) !void {
         if (self.currentIs(token_type)) return;
         return self.fail(
-            "Expected current token to be '" ++ tok.fmtString(token_type) ++ "', found {}",
+            "Expected current token to be '" ++ tok.toString(token_type) ++ "', found {}",
             self.current_token,
             .{self.current_token.token_type},
         );
@@ -956,7 +956,7 @@ pub const Parser = struct {
         }
 
         return self.fail(
-            "Expected next token to be '" ++ tok.fmtString(token_type) ++ "', found {}",
+            "Expected next token to be '" ++ tok.toString(token_type) ++ "', found {}",
             self.peek_token,
             .{self.peek_token.token_type},
         );
@@ -1061,6 +1061,31 @@ test "Parse Function Declaration" {
     try testing.expectEqualStrings("x", tree.root[0].type.variable.initializer.type.function.parameters[0]);
     try testing.expectEqualStrings("y", tree.root[0].type.variable.initializer.type.function.parameters[1]);
     try testing.expect(tree.root[0].type.variable.initializer.type.function.body.len == 1);
+}
+
+test "Parse Function Arguments" {
+    var t =
+        \\ const sum = |x, y| return x + y
+        \\ sum(1, 2) + sum(3, 4)
+    ;
+    var allocator = testing.allocator;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, t, &errors) catch |err| {
+        try errors.write(t, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+    // tree.print(std.debug);
+    try testing.expect(tree.root.len == 2);
+    try testing.expect(tree.root[1].type.expression.type.binary.operator == .add);
+    const bin = tree.root[1].type.expression.type.binary;
+    try testing.expect(bin.right.type.call.arguments.len == 2);
+    try testing.expect(bin.right.type.call.arguments[0].type.number == 3);
+    try testing.expect(bin.right.type.call.arguments[1].type.number == 4);
+    try testing.expect(bin.left.type.call.arguments.len == 2);
+    try testing.expect(bin.left.type.call.arguments[0].type.number == 1);
+    try testing.expect(bin.left.type.call.arguments[1].type.number == 2);
 }
 
 test "Parse Iterable Types" {

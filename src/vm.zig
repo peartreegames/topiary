@@ -1,5 +1,5 @@
 const std = @import("std");
-const Compiler = @import("./compiler.zig").Compiler;
+const compiler = @import("./compiler.zig");
 const ByteCode = @import("./compiler.zig").ByteCode;
 const Errors = @import("./error.zig").Errors;
 const parser = @import("./parser.zig");
@@ -30,6 +30,7 @@ const InterpretResult = union(enum) {
 pub const Vm = struct {
     allocator: std.mem.Allocator,
     frames: Stack(Frame),
+    errors: Errors,
     gc: Gc,
     globals: std.ArrayList(Value),
     stack: Stack(Value),
@@ -41,6 +42,7 @@ pub const Vm = struct {
     pub fn init(allocator: std.mem.Allocator) !Vm {
         return .{
             .allocator = allocator,
+            .errors = Errors.init(allocator),
             .frames = try Stack(Frame).init(allocator, frame_size),
             .globals = try std.ArrayList(Value).initCapacity(allocator, 1024),
             .gc = Gc.init(allocator),
@@ -50,9 +52,9 @@ pub const Vm = struct {
 
     pub fn deinit(self: *Vm) void {
         self.stack.deinit();
-        self.frames.deinit();
         self.globals.deinit();
-        self.bytecode.free(testing.allocator);
+        self.bytecode.free(self.allocator);
+        self.frames.deinit();
         self.gc.deinit();
     }
 
@@ -68,24 +70,17 @@ pub const Vm = struct {
         self.bytecode = bytecode;
         var frame_pointer = try self.allocator.create(Value.Obj);
         defer self.allocator.destroy(frame_pointer);
-        frame_pointer.* = .{ .data = .{ .function = bytecode.instructions } };
-        self.frames.push(try Frame.create(frame_pointer, 0));
+        frame_pointer.* = .{
+            .data = .{
+                .function = .{ .instructions = bytecode.instructions, .locals_count = 0 },
+            },
+        };
+        self.frames.push(try Frame.create(frame_pointer, 0, 0));
         try self.run();
     }
 
     pub fn interpretSource(self: *Vm, source: []const u8) !void {
-        var errors = Errors.init(self.allocator);
-        defer errors.deinit();
-        const tree = parser.parse(self.allocator, source, &errors) catch |err| {
-            try errors.write(source, std.io.getStdErr().writer());
-            return err;
-        };
-        defer tree.deinit();
-        var compiler = try Compiler.init(self.allocator);
-        defer compiler.deinit();
-        try compiler.compile(tree);
-
-        var bytecode = try compiler.bytecode();
+        var bytecode = try compiler.compileSource(self.allocator, source, &self.errors);
         if (self.debug) {
             bytecode.print(std.debug);
         }
@@ -129,7 +124,10 @@ pub const Vm = struct {
                 .add => {
                     const right = self.pop();
                     const left = self.pop();
-                    if (@TypeOf(right) != @TypeOf(left)) return error.RuntimeError;
+                    if (@intFromEnum(right) != @intFromEnum(left)) {
+                        std.log.warn("{any} != {any}", .{ left, right });
+                        return error.RuntimeError;
+                    }
                     switch (right) {
                         .number => try self.push(.{ .number = right.number + left.number }),
                         .obj => |o| {
@@ -156,30 +154,40 @@ pub const Vm = struct {
                     }
                 },
                 .jump => {
-                    var dest = self.readInt(u16);
+                    var dest = self.readInt(OpCode.Size(.jump));
                     self.currentFrame().ip = dest;
                 },
                 .jump_if_false => {
-                    var dest = self.readInt(u16);
+                    var dest = self.readInt(OpCode.Size(.jump_if_false));
                     var condition = self.pop();
                     if (!try condition.isTruthy()) {
                         self.currentFrame().ip = dest;
                     }
                 },
                 .set_global => {
-                    const index = self.readInt(u16);
+                    const index = self.readInt(OpCode.Size(.set_global));
                     if (index >= self.globals.items.len) try self.globals.resize(@intFromFloat(usize, @floatFromInt(f32, index + 1) * @as(f32, 2.0)));
                     self.globals.items[index] = self.pop();
                 },
                 .get_global => {
-                    const index = self.readInt(u16);
+                    const index = self.readInt(OpCode.Size(.get_global));
                     const value = self.globals.items[index];
                     try self.push(value);
+                },
+                .set_local => {
+                    const index = self.readInt(OpCode.Size(.set_local));
+                    var frame = self.currentFrame();
+                    self.stack.items[frame.bp + index] = self.pop();
+                },
+                .get_local => {
+                    const index = self.readInt(OpCode.Size(.get_local));
+                    var frame = self.currentFrame();
+                    try self.push(self.stack.items[frame.bp + index]);
                 },
                 .string => {
                     var index = self.readInt(u16);
                     var value = self.bytecode.constants[index];
-                    var count = self.readInt(u16);
+                    var count = self.readInt(u8);
                     var args = try std.ArrayList(Value).initCapacity(self.allocator, count);
                     defer args.deinit();
                     while (count > 0) : (count -= 1) {
@@ -261,19 +269,24 @@ pub const Vm = struct {
                     }
                 },
                 .call => {
-                    var value = self.stack.pop();
+                    const arg_count = self.readInt(OpCode.Size(.call));
+                    var value = self.stack.items[self.stack.count - 1 - arg_count];
                     if (value != .obj and value.obj.*.data != .function) return error.RuntimeError;
-                    // value.print(std.debug);
-                    var frame = try Frame.create(value.obj, 0);
+                    var frame = try Frame.create(value.obj, 0, self.stack.count - arg_count);
                     self.frames.push(frame);
+                    self.stack.count = frame.bp + value.obj.data.function.locals_count;
                 },
                 .return_value => {
                     var value = self.pop();
-                    _ = self.frames.pop();
+                    var frame = self.frames.pop();
+                    _ = self.pop();
+                    self.stack.count = frame.bp - 1;
                     try self.push(value);
                 },
                 .return_void => {
-                    _ = self.frames.pop();
+                    var frame = self.frames.pop();
+                    _ = self.pop();
+                    self.stack.count = frame.bp - 1;
                     try self.push(values.Nil);
                 },
             }
@@ -525,7 +538,6 @@ test "Functions" {
         \\ const c = || return b() + 1
         \\ c() 
         , .value = 3.0 },
-
         .{ .input = 
         \\ (|| return 33)()
         , .value = 33.0 },
@@ -547,13 +559,150 @@ test "Functions" {
         , .value = null },
         .{ .input = 
         \\ const noop = || {}
-        \\ const noopop = || { noop() }
+        \\ const noopop = || noop()
         \\ noop()
         \\ noopop()
         , .value = null },
+        .{ .input = 
+        \\ const one = || return 1
+        \\ const curry = || return one
+        \\ curry()()
+        , .value = 1.0 },
     };
 
     inline for (test_cases) |case| {
+        var vm = try Vm.init(testing.allocator);
+        vm.debug = true;
+        defer vm.deinit();
+        try vm.interpretSource(case.input);
+        const value = vm.stack.previous();
+        errdefer std.log.warn("{s}:: {any} == {any}", .{ case.input, case.value, value });
+        switch (@TypeOf(case.value)) {
+            comptime_float => try testing.expect(case.value == value.number),
+            else => try testing.expect(value == .nil),
+        }
+    }
+}
+
+test "Locals" {
+    const test_cases = .{
+        .{
+            .input =
+            \\ const oneFn = || {
+            \\     var one = 1
+            \\     return one      
+            \\ }
+            \\ oneFn()
+            ,
+            .value = 1.0,
+        },
+        .{
+            .input =
+            \\ const threeFn = || {
+            \\     var one = 1
+            \\     var two = 2
+            \\     return one + two     
+            \\ }
+            \\ threeFn()
+            ,
+            .value = 3.0,
+        },
+        .{
+            .input =
+            \\ const threeFn = || {
+            \\     var one = 1
+            \\     var two = 2
+            \\     return one + two     
+            \\ }
+            \\ const sevenFn = || {
+            \\     var three = 3
+            \\     var four = 4    
+            \\     return three + four
+            \\ }
+            \\ threeFn() + sevenFn()
+            ,
+            .value = 10.0,
+        },
+        .{
+            .input =
+            \\ const five = 5
+            \\ const minusOne = || {
+            \\     const one = 1
+            \\     return five - one
+            \\ }
+            \\ const minusTwo = || {
+            \\     const two = 2
+            \\     return five - two    
+            \\ }
+            \\ minusOne() + minusTwo()
+            ,
+            .value = 7.0,
+        },
+    };
+
+    inline for (test_cases) |case| {
+        var vm = try Vm.init(testing.allocator);
+        // vm.debug = true;
+        defer vm.deinit();
+        try vm.interpretSource(case.input);
+        const value = vm.stack.previous();
+        errdefer std.log.warn("{s}:: {any} == {any}", .{ case.input, case.value, value });
+        switch (@TypeOf(case.value)) {
+            comptime_float => try testing.expect(case.value == value.number),
+            else => try testing.expect(value == .nil),
+        }
+    }
+}
+
+test "Function Arguments" {
+    const test_cases = .{
+        .{ .input = 
+        \\ const ident = |a| return a
+        \\ ident(4)
+        , .value = 4.0 },
+        .{ .input = 
+        \\ const sum = |a, b| return a + b
+        \\ sum(1, 2)
+        , .value = 3.0 },
+        .{ .input = 
+        \\ const sum = |a, b| { 
+        \\    const c = a + b
+        \\    return c
+        \\ }       
+        \\ sum(1, 2)
+        , .value = 3.0 },
+        .{ .input = 
+        \\ const sum = |a, b| { 
+        \\    const c = a + b
+        \\    return c
+        \\ }
+        \\ sum(1, 2) + sum(3, 4)
+        , .value = 10.0 },
+        .{ .input = 
+        \\ const globalNum = 10
+        \\ const sum = |a, b| {
+        \\     const c = a + b
+        \\     return c + globalNum
+        \\ }
+        \\ sum(5, 5) + globalNum
+        , .value = 30.0 },
+        .{ .input = 
+        \\ const globalNum = 10
+        \\ const sum = |a, b| {
+        \\     const c = a + b
+        \\     return c + globalNum
+        \\ }
+        \\ const outer = || { 
+        \\    return 
+        \\    sum(1, 2) + 
+        \\    sum(3, 4) + 
+        \\    globalNum 
+        \\ }
+        \\ outer() + globalNum
+        , .value = 50.0 },
+    };
+    inline for (test_cases) |case| {
+        std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator);
         vm.debug = true;
         defer vm.deinit();

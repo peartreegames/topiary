@@ -14,11 +14,12 @@ pub const Tree = struct {
         self.arena.promote(self.allocator).deinit();
     }
 
-    pub fn print(self: *const Tree, writer: anytype) !void {
-        try writer.print("\n", .{});
+    pub fn print(self: *const Tree, writer: anytype) void {
+        writer.print("\n===TREE===", .{});
         for (self.root) |state| {
-            try state.print(writer, "", 0);
+            state.print(writer, "", 0);
         }
+        writer.print("\n", .{});
     }
 };
 
@@ -96,6 +97,36 @@ pub const Expression = struct {
             body: []const Statement,
         },
     };
+    pub fn print(self: Expression, writer: anytype, prefix: []const u8, depth: usize) void {
+        writer.print("\n", .{});
+        var d: usize = 0;
+        while (d < depth) : (d += 1) {
+            writer.print("    ", .{});
+        }
+        writer.print("{s}", .{prefix});
+        switch (self.type) {
+            .binary => |b| {
+                writer.print("BINARY::{s}", .{b.operator.toString()});
+                b.left.print(writer, "LEFT::", depth + 1);
+                b.right.print(writer, "RIGHT::", depth + 1);
+            },
+            .call => |c| {
+                writer.print("CALL::{d}", .{c.arguments.len});
+                for (c.arguments) |arg| {
+                    arg.print(writer, "ARG::", depth + 1);
+                }
+            },
+            .identifier => |i| writer.print("{s}", .{i}),
+            .number => |n| writer.print("{d}", .{n}),
+            .function => |f| {
+                writer.print("FUNCTION::{s}", .{f.parameters});
+                for (f.body) |s| {
+                    s.print(writer, "", depth + 1);
+                }
+            },
+            else => writer.print("{any}", .{self}),
+        }
+    }
 };
 
 pub const Statement = struct {
@@ -156,6 +187,37 @@ pub const Statement = struct {
         @"continue": void,
         comment: []const u8,
     };
+
+    pub fn print(self: Statement, writer: anytype, prefix: []const u8, depth: usize) void {
+        writer.print("\n", .{});
+        var d: usize = 0;
+        while (d < depth) : (d += 1) {
+            writer.print("  ", .{});
+        }
+        writer.print("{s}", .{prefix});
+        switch (self.type) {
+            .block => |b| {
+                for (b) |s| s.print(writer, "BLOCK::", depth + 1);
+            },
+            .expression => |e| e.print(writer, "EXPRESSION::", depth + 1),
+            .@"if" => |i| {
+                writer.print("IF", .{});
+                i.condition.print(writer, "CONDITION", depth + 1);
+                for (i.then_branch) |s| s.print(writer, "THEN", depth + 1);
+                if (i.else_branch) |eb| {
+                    for (eb) |s| s.print(writer, "ELSE", depth + 1);
+                }
+            },
+            .return_expression => |re| re.print(writer, "RETURN VALUE::", depth + 1),
+            .return_void => writer.print("RETURN::", .{}),
+            .variable => |v| {
+                v.initializer.print(writer, "VARIABLE::", depth + 1);
+            },
+            else => {
+                writer.print("{any}", .{self});
+            },
+        }
+    }
 };
 
 pub const UnaryOp = enum {
@@ -166,6 +228,12 @@ pub const UnaryOp = enum {
             .bang => .not,
             .minus => .negate,
             else => unreachable,
+        };
+    }
+    pub fn toString(self: UnaryOp) []const u8 {
+        return switch (self) {
+            .not => "!",
+            .negate => "-",
         };
     }
 };
@@ -210,6 +278,28 @@ pub const BinaryOp = enum {
             .star_equal => .assign_multiply,
             .slash_equal => .assign_divide,
             else => unreachable,
+        };
+    }
+    pub fn toString(self: BinaryOp) []const u8 {
+        return switch (self) {
+            .add => "+",
+            .subtract => "-",
+            .multiply => "*",
+            .divide => "/",
+            .modulus => "%",
+            .less_than => "<",
+            .greater_than => ">",
+            .less_than_equal => "<=",
+            .greater_than_equal => ">=",
+            .equal => "==",
+            .not_equal => "!=",
+            .assign => "=",
+            .assign_add => "+=",
+            .assign_subtract => "-=",
+            .assign_multiply => "*=",
+            .assign_divide => "/=",
+            .@"and" => "and",
+            .@"or" => "or",
         };
     }
 };

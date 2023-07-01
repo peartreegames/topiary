@@ -109,7 +109,7 @@ pub const Keywords = std.ComptimeStringMap(TokenType, .{
     .{ "while", .@"while" },
 });
 
-pub fn fmtString(token_type: TokenType) []const u8 {
+pub fn toString(token_type: TokenType) []const u8 {
     return switch (token_type) {
         .left_paren => "(",
         .right_paren => ")",
