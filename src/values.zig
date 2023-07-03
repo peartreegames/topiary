@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("./ast.zig");
 const Gc = @import("./gc.zig").Gc;
 const ByteCode = @import("./compiler.zig").ByteCode;
+const Builtin = @import("./builtins.zig").Builtin;
 const Allocator = std.mem.Allocator;
 
 pub const True = Value{ .bool = true };
@@ -43,12 +44,45 @@ pub const Value = union(Type) {
             map: MapType,
             set: SetType,
             function: struct {
+                arity: u8,
                 instructions: []const u8,
                 locals_count: usize,
+            },
+            builtin: struct {
+                arity: u8,
+                backing: Builtin,
+            },
+            closure: struct {
+                data: *Data,
+                free_values: []Value,
             },
         };
         pub const MapType = std.ArrayHashMap(Value, Value, Adapter, true);
         pub const SetType = std.ArrayHashMap(Value, void, Adapter, true);
+
+        pub fn add(self: *Data, value: Value) !void {
+            switch (self) {
+                .list => |l| try l.append(value),
+                .set => |s| try s.putNoClobber(value, void),
+                else => return error.RuntimeError,
+            }
+        }
+
+        pub fn addMap(self: *Data, key: Value, value: Value) !void {
+            switch (self) {
+                .map => |m| try m.putNoClobber(key, value),
+                else => return error.RuntimeError,
+            }
+        }
+
+        pub fn remove(self: *Data, key: Value) !void {
+            switch (self) {
+                .list => |l| _ = l.orderedRemove(key),
+                .set => |s| _ = s.orderedRemove(key),
+                .map => |m| _ = m.orderedRemove(key),
+                else => return error.RuntimeError,
+            }
+        }
 
         pub fn toValue(self: *Obj) *Value {
             return @fieldParentPtr(Value, "obj", self);
@@ -62,6 +96,8 @@ pub const Value = union(Type) {
                 .map => obj.data.map.deinit(),
                 .set => obj.data.set.deinit(),
                 .function => |f| allocator.free(f.instructions),
+                .builtin => {},
+                .closure => |c| allocator.free(c.free_values),
             }
             allocator.destroy(obj);
         }
@@ -129,6 +165,9 @@ pub const Value = union(Type) {
                     .function => |f| {
                         ByteCode.printInstructions(writer, f.instructions);
                     },
+                    .closure => |c| {
+                        ByteCode.printInstructions(writer, c.data.function.instructions);
+                    },
                     else => {},
                 }
             },
@@ -170,14 +209,13 @@ pub const Value = union(Type) {
                             hashFn(&hasher, m.keys().len);
                             hashFn(&hasher, m.keys().ptr);
                         },
+                        .builtin => |b| {
+                            hashFn(&hasher, b.arity);
+                            hashFn(&hasher, b.backing);
+                        },
                         else => return 0,
                     }
                 },
-                // .native => |n| {
-                //     const native = key.toNative();
-                //     hashFn(&hasher, native.arg_len);
-                //     hashFn(&hasher, native.func);
-                // },
                 .range => |r| {
                     hashFn(&hasher, r.start);
                     hashFn(&hasher, r.end);

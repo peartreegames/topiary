@@ -12,6 +12,9 @@ pub const OpCode = enum(u8) {
     negate,
     not,
 
+    @"or",
+    @"and",
+
     true,
     false,
     nil,
@@ -29,6 +32,9 @@ pub const OpCode = enum(u8) {
     get_local,
     set_local,
 
+    get_builtin,
+    get_free,
+
     string,
     list,
     map,
@@ -36,6 +42,8 @@ pub const OpCode = enum(u8) {
 
     index,
     call,
+    closure,
+    current_closure,
 
     return_void,
     return_value,
@@ -51,6 +59,8 @@ pub const OpCode = enum(u8) {
             .modulus => "OP_MODULUS",
             .negate => "OP_NEGATE",
             .not => "OP_NOT",
+            .@"or" => "OP_OR",
+            .@"and" => "OP_AND",
             .true => "OP_TRUE",
             .false => "OP_FALSE",
             .nil => "OP_NIL",
@@ -63,12 +73,16 @@ pub const OpCode = enum(u8) {
             .set_global => "OP_SET_GLOBAL",
             .get_local => "OP_GET_LOCAL",
             .set_local => "OP_SET_LOCAL",
+            .get_builtin => "OP_GET_BUILTIN",
+            .get_free => "OP_GET_FREE",
             .list => "OP_LIST",
             .string => "OP_STRING",
             .map => "OP_MAP",
             .set => "OP_SET",
             .index => "OP_INDEX",
             .call => "OP_CALL",
+            .closure => "OP_CLOSURE",
+            .current_closure => "OP_CURRENT_CLOSURE",
             .return_void => "OP_RETURN",
             .return_value => "OP_RETURN_VALUE",
         };
@@ -81,8 +95,8 @@ pub const OpCode = enum(u8) {
             .jump, .jump_if_false => u16,
             .set_global, .get_global => u16,
             .list, .map, .set => u16,
-            .string => u24, // u16 for constant location, u8 for expressions count
-            .get_local, .set_local, .call => u8,
+            .get_local, .set_local, .get_builtin, .get_free, .call => u8,
+            .string, .closure => u24, // u16 for constant location, u8 for expressions count
             else => void,
         };
     }

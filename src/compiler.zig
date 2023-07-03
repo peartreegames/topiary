@@ -10,6 +10,7 @@ const String = @import("./values.zig").String;
 const Scope = @import("./scope.zig").Scope;
 const Symbol = @import("./scope.zig").Symbol;
 const DebugToken = @import("./debug.zig").DebugToken;
+const builtins = @import("./builtins.zig").builtins;
 
 const testing = std.testing;
 
@@ -61,7 +62,7 @@ pub const ByteCode = struct {
                     writer.print("{d: >8}", .{dest});
                     i += 2;
                 },
-                .get_local, .set_local, .call => {
+                .get_local, .set_local, .get_free, .call => {
                     var dest = std.mem.readIntSliceBig(u8, instructions[i..(i + 1)]);
                     writer.print("{d: >8}", .{dest});
                     i += 1;
@@ -70,6 +71,16 @@ pub const ByteCode = struct {
                     var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
                     writer.print("{d: >8} ", .{index});
                     i += 2;
+                    var value = constants[index];
+                    value.print(writer);
+                },
+                .string, .closure => {
+                    var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
+                    i += 2;
+                    writer.print("{d: >8}", .{index});
+                    var count = std.mem.readIntSliceBig(u8, instructions[i..(i + 1)]);
+                    i += 1;
+                    writer.print("{d: >4}", .{count});
                     var value = constants[index];
                     value.print(writer);
                 },
@@ -94,10 +105,18 @@ pub const ByteCode = struct {
                     writer.print("{d: >8}", .{dest});
                     i += 2;
                 },
-                .get_local, .set_local, .call => {
+                .get_local, .set_local, .get_free, .call => {
                     var dest = std.mem.readIntSliceBig(u8, instructions[i..(i + 1)]);
                     writer.print("{d: >8}", .{dest});
                     i += 1;
+                },
+                .string, .closure => {
+                    var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
+                    i += 2;
+                    writer.print("{d: >8}", .{index});
+                    var count = std.mem.readIntSliceBig(u8, instructions[i..(i + 1)]);
+                    i += 1;
+                    writer.print("{d: >4}", .{count});
                 },
                 .constant => {
                     var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
@@ -126,21 +145,34 @@ pub fn compileSource(allocator: std.mem.Allocator, source: []const u8, errors: *
 
 pub const Compiler = struct {
     allocator: std.mem.Allocator,
+    builtins: Scope,
     constants: std.ArrayList(Value),
-    scope: *Scope,
     errors: *Errors,
+    scope: *Scope,
 
     pub fn init(allocator: std.mem.Allocator, root_scope: *Scope, errors: *Errors) Compiler {
         return .{
             .allocator = allocator,
+            .builtins = .{
+                .allocator = allocator,
+                .parent = null,
+                .symbols = std.StringArrayHashMap(*Symbol).init(allocator),
+                .tag = .builtin,
+                .instructions = undefined,
+                .debug_tokens = undefined,
+            },
             .constants = std.ArrayList(Value).init(allocator),
-            .scope = root_scope,
             .errors = errors,
+            .scope = root_scope,
         };
     }
 
     pub fn deinit(self: *Compiler) void {
         self.constants.deinit();
+        for (self.builtins.symbols.values()) |s| {
+            self.allocator.destroy(s);
+        }
+        self.builtins.symbols.deinit();
     }
 
     pub fn bytecode(self: *Compiler) !ByteCode {
@@ -153,6 +185,9 @@ pub const Compiler = struct {
     }
 
     pub fn compile(self: *Compiler, tree: ast.Tree) CompilerError!void {
+        inline for (builtins) |builtin| {
+            _ = try self.builtins.define(builtin.name);
+        }
         for (tree.root) |stmt| {
             try self.compileStatement(stmt);
         }
@@ -202,9 +237,10 @@ pub const Compiler = struct {
                 try self.writeOp(.pop, token);
             },
             .variable => |v| {
-                try self.compileExpression(&v.initializer);
+                if (self.builtins.symbols.contains(v.name)) return CompilerError.IllegalOperation;
                 var symbol = try self.scope.define(v.name);
-                if (symbol.scope.tag == .global) {
+                try self.compileExpression(&v.initializer);
+                if (symbol.tag == .global) {
                     try self.writeOp(.set_global, token);
                     _ = try self.writeInt(OpCode.Size(.set_global), symbol.index, token);
                 } else {
@@ -267,6 +303,8 @@ pub const Compiler = struct {
                     .equal => .equal,
                     .not_equal => .not_equal,
                     .greater_than => .greater_than,
+                    .@"or" => .@"or",
+                    .@"and" => .@"and",
                     else => {
                         return error.IllegalOperation;
                     },
@@ -334,17 +372,8 @@ pub const Compiler = struct {
                 }
             },
             .identifier => |id| {
-                var symbol = self.scope.resolve(id);
-                if (symbol) |ptr| {
-                    if (ptr.scope.tag == .global) {
-                        try self.writeOp(.get_global, token);
-                        _ = try self.writeInt(OpCode.Size(.get_global), ptr.index, token);
-                    } else {
-                        try self.writeOp(.get_local, token);
-                        const size = OpCode.Size(.set_local);
-                        _ = try self.writeInt(size, @intCast(size, ptr.index), token);
-                    }
-                } else return CompilerError.SymbolNotFound;
+                var symbol = try self.builtins.resolve(id) orelse try self.scope.resolve(id);
+                return self.loadSymbol(symbol, token);
             },
             .@"if" => |i| {
                 try self.compileExpression(i.condition);
@@ -361,8 +390,11 @@ pub const Compiler = struct {
                 try self.replaceValue(nextPos, u16, self.scopePos());
             },
             .function => |f| {
-                try self.enterScope(.function);
+                try self.enterScope(.closure);
 
+                if (f.name) |name| {
+                    _ = try self.scope.defineFunction(name);
+                }
                 for (f.parameters) |param| {
                     _ = try self.scope.define(param);
                 }
@@ -371,8 +403,15 @@ pub const Compiler = struct {
                 if (!(try self.lastIs(.return_value)) and !(try self.lastIs(.return_void))) {
                     try self.writeOp(.return_void, token);
                 }
+
+                const free_symbols = try self.scope.free_symbols.toOwnedSlice();
+                defer self.allocator.free(free_symbols);
                 const locals_count = self.scope.symbols.count();
                 const inst = try self.exitScope();
+                for (free_symbols) |s| {
+                    try self.loadSymbol(s, token);
+                }
+
                 const obj = try self.allocator.create(Value.Obj);
 
                 // TODO: use debug tokens
@@ -383,13 +422,15 @@ pub const Compiler = struct {
                         .function = .{
                             .instructions = inst.instructions,
                             .locals_count = locals_count,
+                            .arity = @intCast(u8, f.parameters.len),
                         },
                     },
                 };
                 const i = try self.addConstant(.{ .obj = obj });
 
-                try self.writeOp(.constant, token);
+                try self.writeOp(.closure, token);
                 _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                _ = try self.writeInt(u8, @intCast(u8, free_symbols.len), token);
             },
             .call => |c| {
                 try self.compileExpression(c.target);
@@ -404,6 +445,35 @@ pub const Compiler = struct {
             },
             else => {},
         }
+    }
+
+    fn loadSymbol(self: *Compiler, symbol: ?*Symbol, token: Token) !void {
+        if (symbol) |ptr| {
+            switch (ptr.tag) {
+                .global => {
+                    try self.writeOp(.get_global, token);
+                    _ = try self.writeInt(OpCode.Size(.get_global), ptr.index, token);
+                },
+                .builtin => {
+                    try self.writeOp(.get_builtin, token);
+                    const size = OpCode.Size(.get_builtin);
+                    _ = try self.writeInt(size, @intCast(size, ptr.index), token);
+                },
+                .free => {
+                    try self.writeOp(.get_free, token);
+                    const size = OpCode.Size(.get_free);
+                    _ = try self.writeInt(size, @intCast(size, ptr.index), token);
+                },
+                .function => {
+                    try self.writeOp(.current_closure, token);
+                },
+                else => {
+                    try self.writeOp(.get_local, token);
+                    const size = OpCode.Size(.get_local);
+                    _ = try self.writeInt(size, @intCast(size, ptr.index), token);
+                },
+            }
+        } else return CompilerError.SymbolNotFound;
     }
 
     fn scopePos(self: *Compiler) u16 {
@@ -482,7 +552,7 @@ test "Basic Compile" {
 test "Conditionals Compile" {
     const test_cases = .{
         .{
-            .input = "if (true) { 10 } 333",
+            .input = "if true { 10 } 333",
             .constants = [_]Value{ .{ .number = 10 }, .{ .number = 333 } },
             .instructions = [_]u8{
                 @intFromEnum(OpCode.true),
@@ -504,7 +574,7 @@ test "Conditionals Compile" {
             },
         },
         .{
-            .input = "if (true) { 10 } else { 20 } 333",
+            .input = "if true { 10 } else { 20 } 333",
             .constants = [_]Value{ .{ .number = 10 }, .{ .number = 20 }, .{ .number = 333 } },
             .instructions = [_]u8{ @intFromEnum(OpCode.true), @intFromEnum(OpCode.jump_if_false), 0, 10, @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.jump), 0, 13, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.pop), @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.pop) },
         },
@@ -752,7 +822,7 @@ test "Functions" {
     var test_cases = .{
         .{
             .input = "|| return 5 + 10",
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.pop) },
+            .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 2, 0, @intFromEnum(OpCode.pop) },
             .constants = [_]f32{ 5, 10 },
             .functions = [_][]const u8{
                 &[_]u8{},
@@ -766,7 +836,7 @@ test "Functions" {
         },
         .{
             .input = "|| 5 + 10",
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.pop) },
+            .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 2, 0, @intFromEnum(OpCode.pop) },
             .constants = [_]f32{ 5, 10 },
             .functions = [_][]const u8{
                 &[_]u8{},
@@ -786,7 +856,7 @@ test "Functions" {
         },
         .{
             .input = "|| { 5 + 10 return }",
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.pop) },
+            .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 2, 0, @intFromEnum(OpCode.pop) },
             .constants = [_]f32{ 5, 10 },
             .functions = [_][]const u8{
                 &[_]u8{},
@@ -800,7 +870,7 @@ test "Functions" {
         },
         .{
             .input = "|| {}",
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.pop) },
+            .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 0, 0, @intFromEnum(OpCode.pop) },
             .constants = [_]f32{ 0, 0, 0 },
             .functions = [_][]const u8{
                 &[_]u8{
@@ -810,7 +880,7 @@ test "Functions" {
         },
         .{
             .input = "|| { return 5 }()",
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.call), 0, @intFromEnum(OpCode.pop) },
+            .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 1, 0, @intFromEnum(OpCode.call), 0, @intFromEnum(OpCode.pop) },
             .constants = [_]f32{5},
             .functions = [_][]const u8{
                 &[_]u8{},
@@ -826,9 +896,10 @@ test "Functions" {
             \\ five()
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.constant),
+                @intFromEnum(OpCode.closure),
                 0,
                 1,
+                0,
                 @intFromEnum(OpCode.set_global),
                 0,
                 0,
@@ -854,11 +925,10 @@ test "Functions" {
             \\ two() + two()
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.constant),   0,                        1,
-                @intFromEnum(OpCode.set_global), 0,                        0,
-                @intFromEnum(OpCode.get_global), 0,                        0,
-                @intFromEnum(OpCode.call),       0,                        @intFromEnum(OpCode.get_global),
-                0,                               0,                        @intFromEnum(OpCode.call),
+                @intFromEnum(OpCode.closure),    0,                        1,                         0,
+                @intFromEnum(OpCode.set_global), 0,                        0,                         @intFromEnum(OpCode.get_global),
+                0,                               0,                        @intFromEnum(OpCode.call), 0,
+                @intFromEnum(OpCode.get_global), 0,                        0,                         @intFromEnum(OpCode.call),
                 0,                               @intFromEnum(OpCode.add), @intFromEnum(OpCode.pop),
             },
             .constants = [_]f32{2},
@@ -876,14 +946,13 @@ test "Functions" {
             \\ value(1) + value(1)
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.constant),   0,                        0,
-                @intFromEnum(OpCode.set_global), 0,                        0,
-                @intFromEnum(OpCode.get_global), 0,                        0,
-                @intFromEnum(OpCode.constant),   0,                        1,
-                @intFromEnum(OpCode.call),       1,                        @intFromEnum(OpCode.get_global),
-                0,                               0,                        @intFromEnum(OpCode.constant),
-                0,                               2,                        @intFromEnum(OpCode.call),
-                1,                               @intFromEnum(OpCode.add), @intFromEnum(OpCode.pop),
+                @intFromEnum(OpCode.closure),    0,                         0,                             0,
+                @intFromEnum(OpCode.set_global), 0,                         0,                             @intFromEnum(OpCode.get_global),
+                0,                               0,                         @intFromEnum(OpCode.constant), 0,
+                1,                               @intFromEnum(OpCode.call), 1,                             @intFromEnum(OpCode.get_global),
+                0,                               0,                         @intFromEnum(OpCode.constant), 0,
+                2,                               @intFromEnum(OpCode.call), 1,                             @intFromEnum(OpCode.add),
+                @intFromEnum(OpCode.pop),
             },
             .constants = [_]f32{ 0, 1, 1 },
             .functions = [_][]const u8{
@@ -899,11 +968,10 @@ test "Functions" {
             \\ oneArg(24)
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.constant),   0, 0,
-                @intFromEnum(OpCode.set_global), 0, 0,
-                @intFromEnum(OpCode.get_global), 0, 0,
-                @intFromEnum(OpCode.constant),   0, 1,
-                @intFromEnum(OpCode.call),       1, @intFromEnum(OpCode.pop),
+                @intFromEnum(OpCode.closure),    0,                         0,                             0,
+                @intFromEnum(OpCode.set_global), 0,                         0,                             @intFromEnum(OpCode.get_global),
+                0,                               0,                         @intFromEnum(OpCode.constant), 0,
+                1,                               @intFromEnum(OpCode.call), 1,                             @intFromEnum(OpCode.pop),
             },
             .constants = [_]f32{ 0, 24 },
             .functions = [_][]const u8{
@@ -919,13 +987,12 @@ test "Functions" {
             \\ multiArg(24,25,26)
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.constant),   0, 0,
-                @intFromEnum(OpCode.set_global), 0, 0,
-                @intFromEnum(OpCode.get_global), 0, 0,
-                @intFromEnum(OpCode.constant),   0, 1,
-                @intFromEnum(OpCode.constant),   0, 2,
-                @intFromEnum(OpCode.constant),   0, 3,
-                @intFromEnum(OpCode.call),       3, @intFromEnum(OpCode.pop),
+                @intFromEnum(OpCode.closure),    0,                             0,                             0,
+                @intFromEnum(OpCode.set_global), 0,                             0,                             @intFromEnum(OpCode.get_global),
+                0,                               0,                             @intFromEnum(OpCode.constant), 0,
+                1,                               @intFromEnum(OpCode.constant), 0,                             2,
+                @intFromEnum(OpCode.constant),   0,                             3,                             @intFromEnum(OpCode.call),
+                3,                               @intFromEnum(OpCode.pop),
             },
             .constants = [_]f32{ 0, 24, 25, 26 },
             .functions = [_][]const u8{
@@ -976,7 +1043,19 @@ test "Locals" {
             \\ const num = 5
             \\ || return num
             ,
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.set_global), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.pop) },
+            .instructions = [_]u8{
+                @intFromEnum(OpCode.constant),
+                0,
+                0,
+                @intFromEnum(OpCode.set_global),
+                0,
+                0,
+                @intFromEnum(OpCode.closure),
+                0,
+                1,
+                0,
+                @intFromEnum(OpCode.pop),
+            },
             .constants = [_]f32{5},
             .functions = [_][]const u8{
                 &[_]u8{},
@@ -993,7 +1072,7 @@ test "Locals" {
             \\     return num       
             \\ }
             ,
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.pop) },
+            .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 1, 0, @intFromEnum(OpCode.pop) },
             .constants = [_]f32{5},
             .functions = [_][]const u8{
                 &[_]u8{},
@@ -1008,7 +1087,7 @@ test "Locals" {
             \\    return a + b       
             \\ }
             ,
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.pop) },
+            .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 2, 0, @intFromEnum(OpCode.pop) },
             .constants = [_]f32{ 5, 7 },
             .functions = [_][]const u8{
                 &[_]u8{},
@@ -1029,6 +1108,242 @@ test "Locals" {
                     @intFromEnum(OpCode.get_local),
                     1,
                     @intFromEnum(OpCode.add),
+                    @intFromEnum(OpCode.return_value),
+                },
+            },
+        },
+    };
+
+    inline for (test_cases) |case| {
+        errdefer std.log.warn("{s}", .{case.input});
+        var allocator = testing.allocator;
+        var errors = Errors.init(allocator);
+        defer errors.deinit();
+        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
+            try errors.write(case.input, std.io.getStdErr().writer());
+            return err;
+        };
+        defer bytecode.free(allocator);
+        errdefer bytecode.print(std.debug);
+        for (case.instructions, 0..) |instruction, i| {
+            errdefer std.log.warn("Error on: {}", .{i});
+            try testing.expectEqual(instruction, bytecode.instructions[i]);
+        }
+        for (bytecode.constants, 0..) |constant, i| {
+            switch (constant) {
+                .number => |n| try testing.expect(case.constants[i] == n),
+                .obj => |o| try testing.expectEqualSlices(u8, case.functions[i], o.data.function.instructions),
+                else => unreachable,
+            }
+        }
+    }
+}
+
+test "Builtin Functions" {
+    var test_cases = .{
+        .{
+            .input =
+            \\ rnd(1, 10)
+            ,
+            .instructions = [_]u8{
+                @intFromEnum(OpCode.get_builtin),
+                0,
+                @intFromEnum(OpCode.constant),
+                0,
+                0,
+                @intFromEnum(OpCode.constant),
+                0,
+                1,
+                @intFromEnum(OpCode.call),
+                2,
+                @intFromEnum(OpCode.pop),
+            },
+            .constants = [_]f32{ 1, 10 },
+        },
+        .{
+            .input = "rnd01()",
+            .instructions = [_]u8{
+                @intFromEnum(OpCode.get_builtin),
+                1,
+                @intFromEnum(OpCode.call),
+                0,
+                @intFromEnum(OpCode.pop),
+            },
+            .constants = [_]f32{0},
+        },
+    };
+
+    inline for (test_cases) |case| {
+        errdefer std.log.warn("{s}", .{case.input});
+        var allocator = testing.allocator;
+        var errors = Errors.init(allocator);
+        defer errors.deinit();
+        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
+            try errors.write(case.input, std.io.getStdErr().writer());
+            return err;
+        };
+        defer bytecode.free(allocator);
+        errdefer bytecode.print(std.debug);
+        for (case.instructions, 0..) |instruction, i| {
+            errdefer std.log.warn("Error on: {}", .{i});
+            try testing.expectEqual(instruction, bytecode.instructions[i]);
+        }
+        for (bytecode.constants, 0..) |constant, i| {
+            try testing.expect(case.constants[i] == constant.number);
+        }
+    }
+}
+
+test "Closures" {
+    var test_cases = .{
+        .{
+            .input = "|a| { return |b| { return a + b } }",
+            .instructions = [_]u8{
+                @intFromEnum(OpCode.closure),
+                0,
+                1,
+                0,
+                @intFromEnum(OpCode.pop),
+            },
+            .constants = [_]f32{0},
+            .functions = [_][]const u8{
+                &[_]u8{
+                    @intFromEnum(OpCode.get_free),  0,
+                    @intFromEnum(OpCode.get_local), 0,
+                    @intFromEnum(OpCode.add),       @intFromEnum(OpCode.return_value),
+                },
+                &[_]u8{
+                    @intFromEnum(OpCode.get_local),    0,
+                    @intFromEnum(OpCode.closure),      0,
+                    0,                                 1,
+                    @intFromEnum(OpCode.return_value),
+                },
+            },
+        },
+        .{
+            .input =
+            \\ |a| {
+            \\     return |b| { 
+            \\        return |c| return a + b + c 
+            \\     }
+            \\ }
+            ,
+            .instructions = [_]u8{
+                @intFromEnum(OpCode.closure),
+                0,
+                2,
+                0,
+                @intFromEnum(OpCode.pop),
+            },
+            .constants = [_]f32{0},
+            .functions = [_][]const u8{
+                &[_]u8{
+                    @intFromEnum(OpCode.get_free),     0,
+                    @intFromEnum(OpCode.get_free),     1,
+                    @intFromEnum(OpCode.add),          @intFromEnum(OpCode.get_local),
+                    0,                                 @intFromEnum(OpCode.add),
+                    @intFromEnum(OpCode.return_value),
+                },
+                &[_]u8{
+                    @intFromEnum(OpCode.get_free),     0,
+                    @intFromEnum(OpCode.get_local),    0,
+                    @intFromEnum(OpCode.closure),      0,
+                    0,                                 2,
+                    @intFromEnum(OpCode.return_value),
+                },
+                &[_]u8{
+                    @intFromEnum(OpCode.get_local),    0,
+                    @intFromEnum(OpCode.closure),      0,
+                    1,                                 1,
+                    @intFromEnum(OpCode.return_value),
+                },
+            },
+        },
+        .{
+            .input =
+            \\ const globalNum = 55
+            \\ || {
+            \\     const a = 66
+            \\     return || {
+            \\        const b = 77 
+            \\        return || {
+            \\            const c = 88 
+            \\            return globalNum + a + b + c 
+            \\        }
+            \\     } 
+            \\ }
+            ,
+            .instructions = [_]u8{
+                @intFromEnum(OpCode.constant),   0,                        0,
+                @intFromEnum(OpCode.set_global), 0,                        0,
+                @intFromEnum(OpCode.closure),    0,                        6,
+                0,                               @intFromEnum(OpCode.pop),
+            },
+            .constants = [_]f32{ 55, 66, 77, 88 },
+            .functions = [_][]const u8{
+                &[_]u8{},
+                &[_]u8{},
+                &[_]u8{},
+                &[_]u8{},
+                &[_]u8{
+                    @intFromEnum(OpCode.constant),  0,                        3,
+                    @intFromEnum(OpCode.set_local), 0,                        @intFromEnum(OpCode.get_global),
+                    0,                              0,                        @intFromEnum(OpCode.get_free),
+                    0,                              @intFromEnum(OpCode.add), @intFromEnum(OpCode.get_free),
+                    1,                              @intFromEnum(OpCode.add), @intFromEnum(OpCode.get_local),
+                    0,                              @intFromEnum(OpCode.add), @intFromEnum(OpCode.return_value),
+                },
+                &[_]u8{
+                    @intFromEnum(OpCode.constant),  0,                                 2,
+                    @intFromEnum(OpCode.set_local), 0,                                 @intFromEnum(OpCode.get_free),
+                    0,                              @intFromEnum(OpCode.get_local),    0,
+                    @intFromEnum(OpCode.closure),   0,                                 4,
+                    2,                              @intFromEnum(OpCode.return_value),
+                },
+                &[_]u8{
+                    @intFromEnum(OpCode.constant),  0,                            1,
+                    @intFromEnum(OpCode.set_local), 0,                            @intFromEnum(OpCode.get_local),
+                    0,                              @intFromEnum(OpCode.closure), 0,
+                    5,                              1,                            @intFromEnum(OpCode.return_value),
+                },
+            },
+        },
+        .{
+            .input =
+            \\ const countDown =|x| return countDown(x - 1)
+            \\ countDown(1)
+            ,
+            .instructions = [_]u8{
+                @intFromEnum(OpCode.closure),
+                0,
+                1,
+                0,
+                @intFromEnum(OpCode.set_global),
+                0,
+                0,
+                @intFromEnum(OpCode.get_global),
+                0,
+                0,
+                @intFromEnum(OpCode.constant),
+                0,
+                2,
+                @intFromEnum(OpCode.call),
+                1,
+                @intFromEnum(OpCode.pop),
+            },
+            .constants = [_]f32{ 1, 0, 1 },
+            .functions = [_][]const u8{
+                &[_]u8{},
+                &[_]u8{
+                    @intFromEnum(OpCode.current_closure),
+                    @intFromEnum(OpCode.get_local),
+                    0,
+                    @intFromEnum(OpCode.constant),
+                    0,
+                    0,
+                    @intFromEnum(OpCode.subtract),
+                    @intFromEnum(OpCode.call),
+                    1,
                     @intFromEnum(OpCode.return_value),
                 },
             },

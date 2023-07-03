@@ -239,12 +239,16 @@ pub const Parser = struct {
         const name = try self.consumeIdentifier();
         try self.expectCurrent(.equal);
         self.next();
+        var expr = try self.expression(.lowest);
+        if (expr.type == .function) {
+            expr.type.function.name = name;
+        }
         return .{
             .token = start_token,
             .type = .{
                 .variable = .{
                     .name = name,
-                    .initializer = try self.expression(.lowest),
+                    .initializer = expr,
                     .is_mutable = is_mutable,
                     .is_extern = is_extern,
                 },
@@ -614,10 +618,8 @@ pub const Parser = struct {
     }
 
     fn ifExpression(self: *Parser) Error!Expression {
-        try self.expectPeek(.left_paren);
         self.next(); // skip if
         const condition = try self.allocate(try self.expression(.lowest));
-        try self.expectPeek(.right_paren);
         self.next();
 
         const true_value = try self.allocate(try self.expression(.lowest));
@@ -637,10 +639,8 @@ pub const Parser = struct {
     }
 
     fn ifStatement(self: *Parser) Error!Statement {
-        try self.expectPeek(.left_paren);
         self.next(); // skip if
         const condition = try self.allocate(try self.expression(.lowest));
-        try self.expectPeek(.right_paren);
         self.next();
 
         const true_body = try self.block();
@@ -773,9 +773,10 @@ pub const Parser = struct {
     }
 
     fn callExpression(self: *Parser, func: Expression) Error!Expression {
+        var start_token = self.current_token;
         self.next();
         return .{
-            .token = self.current_token,
+            .token = start_token,
             .type = .{
                 .call = .{
                     .target = try self.allocate(func),
@@ -814,10 +815,8 @@ pub const Parser = struct {
 
     fn whileStatement(self: *Parser) Error!Statement {
         const start_token = self.current_token;
-        try self.expectPeek(.left_paren);
         self.next();
         const condition = try self.expression(.lowest);
-        try self.expectPeek(.right_paren);
         try self.expectPeek(.left_brace);
         return .{
             .token = start_token,
@@ -832,7 +831,6 @@ pub const Parser = struct {
 
     fn forStatement(self: *Parser) Error!Statement {
         const start_token = self.current_token;
-        try self.expectPeek(.left_paren);
         self.next();
         const iterator = try self.expression(.lowest);
         switch (iterator.type) {
@@ -840,7 +838,6 @@ pub const Parser = struct {
             else => return self.fail("Expected list, set, map, or range in for loop, found {}", iterator.token, .{iterator.token.token_type}),
         }
 
-        try self.expectPeek(.right_paren);
         try self.expectPeek(.pipe);
         self.next();
         const capture = try self.consumeIdentifier();
@@ -1043,7 +1040,7 @@ test "Parse Declaration" {
 test "Parse Function Declaration" {
     var t =
         \\ const sum = |x, y| return x + y
-        \\ const loop = |value, count| {
+        \\ const str = |value, count| {
         \\    var result = "This is a string"
         \\    return result    
         \\ }
@@ -1224,12 +1221,12 @@ test "Parse If" {
     const allocator = testing.allocator;
     const input =
         \\ var value = 0
-        \\ if (true) value = 1
-        \\ else if (5 < 1) value = 2
+        \\ if true value = 1
+        \\ else if 5 < 1 value = 2
         \\ else value = 3
-        \\ const a = if (true) "true" else "false"
+        \\ const a = if true "true" else "false"
         \\
-        \\ if (true) {
+        \\ if true {
         \\     value = 4  
         \\ } else {
         \\    value = 5    
@@ -1283,11 +1280,11 @@ test "Parse Call expression" {
 
 test "Parse For loop" {
     const input =
-        \\ for (list) |item| {
+        \\ for list |item| {
         \\ }
-        \\ for (0..10) |i| {
+        \\ for 0..10 |i| {
         \\ }
-        \\ for (map) |keyValue| {
+        \\ for map |keyValue| {
         \\ }
     ;
     const allocator = testing.allocator;
@@ -1316,7 +1313,7 @@ test "Parse For loop" {
 
 test "Parse While loop" {
     const input =
-        \\ while (x < y) { x }"
+        \\ while x < y { x }"
     ;
     const allocator = testing.allocator;
 

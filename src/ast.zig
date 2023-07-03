@@ -59,6 +59,7 @@ pub const Expression = struct {
             assignments: []const Expression,
         },
         function: struct {
+            name: ?[]const u8 = null,
             parameters: [][]const u8,
             body: []const Statement,
         },
