@@ -84,7 +84,7 @@ pub const Vm = struct {
             .data = .{
                 .closure = .{
                     .data = root_frame,
-                    .free_values = undefined,
+                    .free_values = &[_]Value{},
                 },
             },
         };
@@ -93,7 +93,10 @@ pub const Vm = struct {
     }
 
     pub fn interpretSource(self: *Vm, source: []const u8) !void {
-        var bytecode = try compiler.compileSource(self.allocator, source, &self.errors);
+        var bytecode = compiler.compileSource(self.allocator, source, &self.errors) catch |err| {
+            try self.errors.write(source, std.io.getStdErr().writer());
+            return err;
+        };
         if (self.debug) {
             bytecode.print(std.debug);
         }
@@ -304,6 +307,13 @@ pub const Vm = struct {
                         else => unreachable,
                     }
                 },
+                .loop => {
+                    var value = self.pop();
+                    var loop = value.obj.data.loop;
+                    var frame = try Frame.create(value.obj, 0, self.stack.count + 1);
+                    self.frames.push(frame);
+                    self.stack.count = frame.bp + loop.locals_count;
+                },
                 .call => {
                     const arg_count = self.readInt(OpCode.Size(.call));
                     var value = self.stack.items[self.stack.count - 1 - arg_count];
@@ -336,9 +346,6 @@ pub const Vm = struct {
                     var free_values = try self.allocator.alloc(Value, count);
                     for (0..count) |i| {
                         free_values[i] = self.stack.items[self.stack.count - count + i];
-                        // std.debug.print("FREE VALUE::", .{});
-                        // free_values[i].print(std.debug);
-                        // std.debug.print("\n", .{});
                     }
                     var closure = try self.gc.create(self, .{
                         .closure = .{
@@ -363,7 +370,7 @@ pub const Vm = struct {
                 },
                 .return_void => {
                     var frame = self.frames.pop();
-                    _ = self.pop();
+                    // _ = self.pop();
                     self.stack.count = frame.bp - 1;
                     try self.push(values.Nil);
                 },
@@ -657,7 +664,6 @@ test "Functions" {
         defer vm.deinit();
         try vm.interpretSource(case.input);
         const value = vm.stack.previous();
-        errdefer std.log.warn("{s}:: {any} == {any}", .{ case.input, case.value, value });
         switch (@TypeOf(case.value)) {
             comptime_float => try testing.expect(case.value == value.number),
             else => try testing.expect(value == .nil),
@@ -875,6 +881,52 @@ test "Closures" {
             ,
             .value = 0.0,
         },
+    };
+    inline for (test_cases) |case| {
+        errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
+        var vm = try Vm.init(testing.allocator);
+        // vm.debug = true;
+        defer vm.deinit();
+        try vm.interpretSource(case.input);
+        const value = vm.stack.previous();
+        try testing.expectEqual(value.number, case.value);
+    }
+}
+
+test "Loops" {
+    const test_cases = .{
+        .{ .input = 
+        \\ var x = 0
+        \\ while x < 10 {
+        \\     x = x + 1
+        \\ }
+        \\ x
+        , .value = 10 },
+        .{ .input = 
+        \\ var x = 0
+        \\ while true {
+        \\    if x > 9 break
+        \\    x = x + 1
+        \\ }
+        \\ x
+        , .value = 10 },
+        .{ .input = 
+        \\ var x = 0
+        \\ while true {
+        \\    x = x + 1
+        \\    if x < 10 continue
+        \\    break
+        \\ }
+        \\ x
+        , .value = 10 },
+        // .{ .input =
+        // \\ const list = [1,2,3,4,5]
+        // \\ var sum = 0
+        // \\ for list |item| {
+        // \\     sum = sum + item
+        // \\ }
+        // \\ sum
+        // , .value = 15 },
     };
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});

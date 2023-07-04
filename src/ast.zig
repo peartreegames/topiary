@@ -33,10 +33,6 @@ pub const Expression = struct {
             content: *Expression,
             tags: [][]const u8,
         },
-        assignment: struct {
-            target: *Expression,
-            value: *Expression,
-        },
         indexer: struct {
             target: *Expression,
             index: *Expression,
@@ -150,6 +146,9 @@ pub const Statement = struct {
         },
         expression: Expression,
         @"for": struct {
+            index: *Statement,
+            increment: Expression,
+            condition: Expression,
             iterator: Expression,
             capture: []const u8,
             body: []const Statement,

@@ -27,6 +27,7 @@ pub const Scope = struct {
         function,
         module,
         free,
+        loop,
     };
 
     pub fn create(allocator: std.mem.Allocator, parent: ?*Scope, tag: Tag) !*Scope {

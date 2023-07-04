@@ -1,3 +1,4 @@
+const std = @import("std");
 const Obj = @import("./values.zig").Value.Obj;
 
 pub const Frame = struct {
@@ -6,7 +7,9 @@ pub const Frame = struct {
     bp: usize,
 
     pub fn create(obj: *Obj, ip: usize, bp: usize) !Frame {
-        if (obj.data != .closure) return error.InvalidType;
+        if (obj.data != .closure and obj.data != .loop) {
+            return error.InvalidType;
+        }
         return .{
             .cl = obj,
             .ip = ip,
@@ -15,6 +18,10 @@ pub const Frame = struct {
     }
 
     pub fn instructions(self: *Frame) []const u8 {
-        return self.cl.data.closure.data.function.instructions;
+        return switch (self.cl.data) {
+            .closure => |c| c.data.function.instructions,
+            .loop => |l| l.instructions,
+            else => unreachable,
+        };
     }
 };

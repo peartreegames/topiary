@@ -56,9 +56,17 @@ pub const Value = union(Type) {
                 data: *Data,
                 free_values: []Value,
             },
+            loop: struct {
+                instructions: []const u8,
+                index: usize = 0,
+                locals_count: usize,
+            },
+            structure: StructType,
+            instance: StructType,
         };
         pub const MapType = std.ArrayHashMap(Value, Value, Adapter, true);
         pub const SetType = std.ArrayHashMap(Value, void, Adapter, true);
+        pub const StructType = std.StringHashMap(Value);
 
         pub fn add(self: *Data, value: Value) !void {
             switch (self) {
@@ -96,8 +104,11 @@ pub const Value = union(Type) {
                 .map => obj.data.map.deinit(),
                 .set => obj.data.set.deinit(),
                 .function => |f| allocator.free(f.instructions),
+                .loop => |l| allocator.free(l.instructions),
                 .builtin => {},
                 .closure => |c| allocator.free(c.free_values),
+                .structure => obj.data.structure.deinit(),
+                .instance => obj.data.instance.deinit(),
             }
             allocator.destroy(obj);
         }
@@ -164,6 +175,9 @@ pub const Value = union(Type) {
                     },
                     .function => |f| {
                         ByteCode.printInstructions(writer, f.instructions);
+                    },
+                    .loop => |l| {
+                        ByteCode.printInstructions(writer, l.instructions);
                     },
                     .closure => |c| {
                         ByteCode.printInstructions(writer, c.data.function.instructions);
@@ -270,23 +284,4 @@ pub const Value = union(Type) {
             };
         }
     };
-};
-
-// TODO: Decide if this is needed,
-// if not remove
-pub const String = struct {
-    data: []const u8,
-
-    pub fn create(allocator: std.mem.Allocator, value: []const u8) !*String {
-        const str = try allocator.create(String);
-        str.* = .{
-            .data = try allocator.dupe(u8, value),
-        };
-        return str;
-    }
-
-    pub fn destroy(self: *String, allocator: std.mem.Allocator) void {
-        allocator.free(self.data);
-        allocator.destroy(self);
-    }
 };

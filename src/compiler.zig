@@ -13,6 +13,8 @@ const DebugToken = @import("./debug.zig").DebugToken;
 const builtins = @import("./builtins.zig").builtins;
 
 const testing = std.testing;
+const BREAK_HOLDER = 9000;
+const CONTINUE_HOLDER = 9001;
 
 const CompilerError = error{
     IllegalOperation,
@@ -236,6 +238,101 @@ pub const Compiler = struct {
                 try self.compileExpression(&exp);
                 try self.writeOp(.pop, token);
             },
+            .@"break" => {
+                try self.writeOp(.jump, token);
+                _ = try self.writeInt(u16, BREAK_HOLDER, token);
+            },
+            .@"continue" => {
+                try self.writeOp(.jump, token);
+                _ = try self.writeInt(u16, CONTINUE_HOLDER, token);
+            },
+            .@"while" => |w| {
+                try self.enterScope(.loop);
+
+                const start = self.scopePos();
+                try self.compileExpression(&w.condition);
+                try self.writeOp(.jump_if_false, token);
+                // temp garbage value
+                const pos = try self.writeInt(u16, std.math.maxInt(u16), token);
+
+                try self.compileBlock(w.body);
+                try self.removeLastPop();
+                const locals_count = self.scope.symbols.count();
+
+                try self.writeOp(.jump, token);
+                _ = try self.writeInt(OpCode.Size(.jump), start, token);
+
+                const end = self.scopePos();
+                try self.writeOp(.return_void, token);
+
+                try self.replaceValue(pos, u16, end);
+
+                var inst = try self.exitScope();
+                try replaceJumps(inst.instructions, BREAK_HOLDER, end);
+                try replaceJumps(inst.instructions, CONTINUE_HOLDER, start);
+
+                const obj = try self.allocator.create(Value.Obj);
+
+                // TODO: use debug tokens
+                self.allocator.free(inst.debug_tokens);
+
+                obj.* = .{
+                    .data = .{
+                        .loop = .{
+                            .instructions = inst.instructions,
+                            .locals_count = locals_count,
+                        },
+                    },
+                };
+                const i = try self.addConstant(.{ .obj = obj });
+                try self.writeOp(.constant, token);
+                _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                try self.writeOp(.loop, token);
+            },
+            .@"for" => |f| {
+                try self.enterScope(.loop);
+                try self.compileStatement(f.index.*);
+
+                const start = self.scopePos();
+                try self.compileExpression(&f.condition);
+                try self.compileExpression(&f.iterator);
+                _ = try self.scope.define(f.capture);
+
+                try self.compileBlock(f.body);
+                try self.removeLastPop();
+                const locals_count = self.scope.symbols.count();
+
+                try self.compileExpression(&f.increment);
+                try self.writeOp(.jump, token);
+                _ = try self.writeInt(OpCode.Size(.jump), start, token);
+
+                const end = self.scopePos();
+                try self.writeOp(.return_void, token);
+
+                var inst = try self.exitScope();
+
+                try replaceJumps(inst.instructions, BREAK_HOLDER, end);
+                try replaceJumps(inst.instructions, CONTINUE_HOLDER, start);
+
+                const obj = try self.allocator.create(Value.Obj);
+
+                // TODO: use debug tokens
+                self.allocator.free(inst.debug_tokens);
+
+                obj.* = .{
+                    .data = .{
+                        .loop = .{
+                            .instructions = inst.instructions,
+                            .locals_count = locals_count,
+                        },
+                    },
+                };
+                const i = try self.addConstant(.{ .obj = obj });
+                try self.writeOp(.constant, token);
+                _ = try self.writeInt(OpCode.Size(.constant), i, token);
+
+                try self.writeOp(.loop, token);
+            },
             .variable => |v| {
                 if (self.builtins.symbols.contains(v.name)) return CompilerError.IllegalOperation;
                 var symbol = try self.scope.define(v.name);
@@ -264,8 +361,8 @@ pub const Compiler = struct {
         var scope = self.scope;
         var inst = scope.instructions;
         const last = inst.getLastOrNull();
-        if (last == null) return false;
-        return last.? == @intFromEnum(op);
+        if (last) |l| return l == @intFromEnum(op);
+        return false;
     }
 
     fn removeLastPop(self: *Compiler) !void {
@@ -294,6 +391,7 @@ pub const Compiler = struct {
                 }
                 try self.compileExpression(bin.left);
                 try self.compileExpression(bin.right);
+                var symbol: ?*Symbol = null;
                 const op: OpCode = switch (bin.operator) {
                     .add => .add,
                     .subtract => .subtract,
@@ -305,11 +403,28 @@ pub const Compiler = struct {
                     .greater_than => .greater_than,
                     .@"or" => .@"or",
                     .@"and" => .@"and",
+                    .assign => switch (bin.left.type) {
+                        .identifier => |id| blk: {
+                            symbol = try self.scope.resolve(id);
+                            if (symbol) |s| {
+                                break :blk if (s.tag == .global) .set_global else .set_local;
+                            } else unreachable;
+                        },
+                        .indexer => .set_local,
+                        else => unreachable,
+                    },
                     else => {
                         return error.IllegalOperation;
                     },
                 };
                 try self.writeOp(op, token);
+                if (symbol) |s| {
+                    if (s.tag == .global) {
+                        _ = try self.writeInt(OpCode.Size(.get_global), s.index, token);
+                    } else {
+                        _ = try self.writeInt(OpCode.Size(.get_local), @intCast(OpCode.Size(.get_local), s.index), token);
+                    }
+                }
             },
             .number => |n| {
                 const i = try self.addConstant(.{ .number = n });
@@ -373,7 +488,7 @@ pub const Compiler = struct {
             },
             .identifier => |id| {
                 var symbol = try self.builtins.resolve(id) orelse try self.scope.resolve(id);
-                return self.loadSymbol(symbol, token);
+                try self.loadSymbol(symbol, token);
             },
             .@"if" => |i| {
                 try self.compileExpression(i.condition);
@@ -510,6 +625,20 @@ pub const Compiler = struct {
         var scope = self.scope;
         for (buf, 0..) |v, i| {
             scope.instructions.items[pos + i] = v;
+        }
+    }
+
+    pub fn replaceJumps(instructions: []u8, old_pos: u16, new_pos: u16) !void {
+        var i: usize = 0;
+        var jump = @intFromEnum(OpCode.jump);
+        while (i < instructions.len) : (i += 1) {
+            if (instructions[i] == jump and std.mem.readIntSliceBig(u16, instructions[(i + 1)..]) == old_pos) {
+                var buf: [@sizeOf(u16)]u8 = undefined;
+                std.mem.writeIntBig(u16, buf[0..], new_pos);
+                for (buf, 0..) |v, index| {
+                    instructions[i + index + 1] = v;
+                }
+            }
         }
     }
 

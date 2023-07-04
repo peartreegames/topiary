@@ -299,23 +299,6 @@ pub const Parser = struct {
         };
     }
 
-    fn assignment(self: *Parser, target: Expression) Error!Expression {
-        self.next();
-        if (target.type != .identifier and target.type != .indexer)
-            return self.fail("Expected identifier or index", target.token, .{});
-
-        self.next();
-        return .{
-            .token = self.current_token,
-            .type = .{
-                .assignment = .{
-                    .target = try self.allocate(target),
-                    .value = try self.allocate(try self.expression(.lowest)),
-                },
-            },
-        };
-    }
-
     fn expressionStatement(self: *Parser) Error!Statement {
         return .{
             .token = self.current_token,
@@ -379,7 +362,6 @@ pub const Parser = struct {
             left = switch (self.peek_token.token_type) {
                 .left_paren => try self.callExpression(left),
                 .left_bracket, .dot => try self.indexExpression(left),
-                .equal => try self.assignment(left),
                 .dot_dot => try self.range(left),
                 .plus,
                 .minus,
@@ -394,6 +376,7 @@ pub const Parser = struct {
                 .greater_equal,
                 .@"and",
                 .@"or",
+                .equal,
                 .plus_equal,
                 .minus_equal,
                 .star_equal,
@@ -793,7 +776,7 @@ pub const Parser = struct {
         const index = if (start_token.token_type == .dot) blk: {
             if (!self.currentIs(.identifier))
                 return self.fail("Expected identifier after index '.', found {}", self.current_token, .{self.current_token.token_type});
-            break :blk try self.stringExpression();
+            break :blk try self.identifierExpression();
         } else if (start_token.token_type == .left_bracket) blk: {
             break :blk try self.expression(.lowest);
         } else unreachable;
@@ -832,7 +815,7 @@ pub const Parser = struct {
     fn forStatement(self: *Parser) Error!Statement {
         const start_token = self.current_token;
         self.next();
-        const iterator = try self.expression(.lowest);
+        var iterator = try self.expression(.lowest);
         switch (iterator.type) {
             .range, .identifier => {},
             else => return self.fail("Expected list, set, map, or range in for loop, found {}", iterator.token, .{iterator.token.token_type}),
@@ -843,10 +826,70 @@ pub const Parser = struct {
         const capture = try self.consumeIdentifier();
         try self.expectPeek(.left_brace);
         const body = try self.block();
+
+        var index_variable = Statement{
+            .token = start_token,
+            .type = .{
+                .variable = .{
+                    .name = "__FOR_LOOP_IDX__",
+                    .is_mutable = true,
+                    .initializer = .{
+                        .token = start_token,
+                        .type = .{
+                            .number = 0,
+                        },
+                    },
+                },
+            },
+        };
+
+        var one = Expression{
+            .token = start_token,
+            .type = .{ .number = 1 },
+        };
+
+        var increment = Expression{
+            .token = start_token,
+            .type = .{
+                .binary = .{
+                    .operator = .add,
+                    .left = &index_variable.type.variable.initializer,
+                    .right = &one,
+                },
+            },
+        };
+        var count = Expression{
+            .token = start_token,
+            .type = .{
+                .identifier = "count",
+            },
+        };
+        var indexer = Expression{
+            .token = start_token,
+            .type = .{
+                .indexer = .{
+                    .target = &iterator,
+                    .index = &count,
+                },
+            },
+        };
+        var condition = Expression{
+            .token = start_token,
+            .type = .{
+                .binary = .{
+                    .operator = .less_than,
+                    .left = &index_variable.type.variable.initializer,
+                    .right = &indexer,
+                },
+            },
+        };
         return .{
             .token = start_token,
             .type = .{
                 .@"for" = .{
+                    .index = &index_variable,
+                    .increment = increment,
+                    .condition = condition,
                     .capture = capture,
                     .iterator = iterator,
                     .body = body,
@@ -1024,8 +1067,8 @@ test "Parse Declaration" {
     try testing.expect(tree.root[1].type.variable.initializer.type.number == 1.2);
 
     try testing.expect(tree.root[2].type.@"struct".fields.len == 1);
-    try testing.expectEqualStrings("intField", tree.root[2].type.@"struct".fields[0].type.assignment.target.type.identifier);
-    try testing.expect(tree.root[2].type.@"struct".fields[0].type.assignment.value.*.type.number == 0);
+    try testing.expectEqualStrings("intField", tree.root[2].type.@"struct".fields[0].type.binary.left.type.identifier);
+    try testing.expect(tree.root[2].type.@"struct".fields[0].type.binary.right.*.type.number == 0);
 
     try testing.expect(tree.root[3].type.variable.is_mutable);
     try testing.expectEqualStrings("StructType", tree.root[3].type.variable.initializer.type.@"struct".name);
@@ -1214,7 +1257,7 @@ test "Parse Enum" {
     var varDecl = tree.root[2].type.variable;
     try testing.expectEqualStrings("val", varDecl.name);
     try testing.expectEqualStrings("En", varDecl.initializer.type.indexer.target.type.identifier);
-    try testing.expectEqualStrings("three", varDecl.initializer.type.indexer.index.type.string.value);
+    try testing.expectEqualStrings("three", varDecl.initializer.type.indexer.index.type.identifier);
 }
 
 test "Parse If" {
@@ -1242,9 +1285,9 @@ test "Parse If" {
 
     var if_stmt = tree.root[1].type.@"if";
     try testing.expect(if_stmt.condition.type.boolean);
-    try testing.expect(if_stmt.then_branch[0].type.expression.type.assignment.value.type.number == 1);
-    try testing.expect(if_stmt.else_branch.?[0].type.@"if".then_branch[0].type.expression.type.assignment.value.type.number == 2);
-    try testing.expect(if_stmt.else_branch.?[0].type.@"if".else_branch.?[0].type.expression.type.assignment.value.type.number == 3);
+    try testing.expect(if_stmt.then_branch[0].type.expression.type.binary.right.type.number == 1);
+    try testing.expect(if_stmt.else_branch.?[0].type.@"if".then_branch[0].type.expression.type.binary.right.type.number == 2);
+    try testing.expect(if_stmt.else_branch.?[0].type.@"if".else_branch.?[0].type.expression.type.binary.right.type.number == 3);
 
     const decl = tree.root[2].type.variable;
     try testing.expectEqualStrings("true", decl.initializer.type.@"if".then_value.type.string.value);
@@ -1253,8 +1296,8 @@ test "Parse If" {
     if_stmt = tree.root[3].type.@"if";
 
     try testing.expect(if_stmt.condition.type.boolean);
-    try testing.expect(if_stmt.then_branch[0].type.expression.type.assignment.value.type.number == 4);
-    try testing.expect(if_stmt.else_branch.?[0].type.expression.type.assignment.value.type.number == 5);
+    try testing.expect(if_stmt.then_branch[0].type.expression.type.binary.right.type.number == 4);
+    try testing.expect(if_stmt.else_branch.?[0].type.expression.type.binary.right.type.number == 5);
 }
 
 test "Parse Call expression" {

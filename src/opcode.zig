@@ -44,6 +44,7 @@ pub const OpCode = enum(u8) {
     call,
     closure,
     current_closure,
+    loop,
 
     return_void,
     return_value,
@@ -83,7 +84,8 @@ pub const OpCode = enum(u8) {
             .call => "OP_CALL",
             .closure => "OP_CLOSURE",
             .current_closure => "OP_CURRENT_CLOSURE",
-            .return_void => "OP_RETURN",
+            .loop => "OP_LOOP",
+            .return_void => "OP_RETURN_VOID",
             .return_value => "OP_RETURN_VALUE",
         };
     }

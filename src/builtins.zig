@@ -1,7 +1,8 @@
 const std = @import("std");
-const Value = @import("./values.zig").Value;
+const values = @import("./values.zig");
 const Gc = @import("./gc.zig").Gc;
 
+const Value = values.Value;
 pub const Builtin = *const fn (gc: *Gc, args: []Value) Value;
 
 const Rnd = struct {
@@ -44,6 +45,22 @@ const Rnd01 = struct {
         if (r == null) r = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
         _ = args;
         return .{ .number = r.?.random().float(f32) };
+    }
+};
+
+const Print = struct {
+    const Self = @This();
+    var value: Value = .{
+        .obj = &Self.obj,
+    };
+    var obj: Value.Obj = .{
+        .data = .{
+            .builtin = .{ .backing = Self.builtin, .arity = 1 },
+        },
+    };
+    fn builtin(_: *Gc, args: []Value) Value {
+        args[0].print(std.debug);
+        return values.Nil;
     }
 };
 
