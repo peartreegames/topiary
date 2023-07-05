@@ -55,6 +55,7 @@ pub const Gc = struct {
 
     fn markAll(root_ctx: anytype) void {
         for (root_ctx.roots()) |list| {
+            std.log.warn("{any}", .{@TypeOf(list)});
             for (list) |item| {
                 if (item == .obj) mark(item.obj);
             }

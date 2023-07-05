@@ -82,7 +82,7 @@ pub const Vm = struct {
     }
 
     pub fn roots(self: *Vm) []const []Value {
-        return &([_][]Value{ self.globals.items, self.stack.items });
+        return &([_][]Value{ self.globals.items, self.stack.backing });
     }
 
     fn currentFrame(self: *Vm) *Frame {
@@ -165,7 +165,7 @@ pub const Vm = struct {
                         .number => try self.push(.{ .number = right.number + left.number }),
                         .obj => |o| {
                             switch (o.data) {
-                                .string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.allocator, u8, &.{ left.obj.*.data.string, s }) }),
+                                .string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.allocator, u8, &.{ left.obj.data.string, s }) }),
                                 else => return error.RuntimeError,
                             }
                         },
@@ -329,30 +329,28 @@ pub const Vm = struct {
                 },
                 .loop => {
                     var value = self.pop();
-                    var loop = value.obj.data.loop;
                     var frame = try Frame.create(value.obj, 0, self.stack.count + 1);
+                    var loop = value.obj.data.closure.data.loop;
                     self.frames.push(frame);
                     self.stack.count = frame.bp + loop.locals_count;
                 },
                 .divert => {
                     var value = self.pop();
-                    var bough = value.obj.data.bough;
                     var frame = try Frame.create(value.obj, 0, self.stack.count + 1);
+                    var bough = value.obj.data.closure.data.bough;
                     self.frames.push(frame);
-                    self.stack.count = frame.bp + bough.locals_count;
+                    self.stack.count = frame.bp + bough.locals_count + 1;
                 },
                 .dialogue => {
-                    var dialogue_value = self.pop();
-                    var result = Dialogue{
-                        .content = dialogue_value.obj.data.string,
-                        .speaker = null,
-                        .tags = undefined,
-                    };
                     var has_speaker = self.readInt(u8) == 1;
+                    var speaker: ?[]const u8 = null;
                     if (has_speaker) {
                         var speaker_value = self.pop();
-                        result.speaker = speaker_value.obj.data.string;
+                        speaker = speaker_value.obj.data.string;
                     }
+
+                    var dialogue_value = self.pop();
+
                     var tag_count = self.readInt(u8);
                     var tags = try std.ArrayList([]const u8).initCapacity(self.allocator, tag_count);
                     var i: usize = 0;
@@ -360,7 +358,11 @@ pub const Vm = struct {
                         const tag_value = self.pop();
                         tags.items[tag_count - i] = tag_value.obj.data.string;
                     }
-                    result.tags = try tags.toOwnedSlice();
+                    var result = Dialogue{
+                        .content = dialogue_value.obj.data.string,
+                        .speaker = speaker,
+                        .tags = try tags.toOwnedSlice(),
+                    };
                     self.on_dialogue(result);
                 },
                 .call => {
@@ -454,6 +456,7 @@ pub const Vm = struct {
     }
 
     fn push(self: *Vm, value: Value) !void {
+        if (self.stack.items.len >= stack_size) return error.OutOfMemory;
         self.stack.push(value);
     }
 
@@ -546,9 +549,11 @@ test "Conditionals" {
 }
 test "Variables" {
     const test_cases = .{
-        .{ .input = "var one = 1 one", .value = 1.0, .type = .number },
-        .{ .input = "var one = 1 var two = 2 one + two", .value = 3.0, .type = .number },
-        .{ .input = "var one = 1 var two = one + one one + two", .value = 3.0, .type = .number },
+        .{ .input = "var one = 1 one", .value = 1.0 },
+        .{ .input = "var one = 1 var two = 2 one + two", .value = 3.0 },
+        .{ .input = "var one = 1 var two = one + one one + two", .value = 3.0 },
+        .{ .input = "var two = 1 two += 1", .value = 2.0 },
+        .{ .input = "var one = 1 var two = one + one two += one", .value = 3.0 },
     };
 
     inline for (test_cases) |case| {
@@ -664,7 +669,6 @@ test "Index" {
         try vm.interpretSource(case.input);
         const value = vm.stack.previous();
         errdefer std.log.warn("{s}--{}", .{ case.input, @TypeOf(case.value) });
-        errdefer value.print(std.debug);
         switch (@TypeOf(case.value)) {
             comptime_float => try testing.expect(case.value == value.number),
             else => try testing.expect(value == .nil),
@@ -935,14 +939,14 @@ test "Closures" {
             .input =
             \\ const wrapper = || {
             \\     const countDown = |x| {
-            \\         if x == 0 return 0
+            \\         if x == 0 return 22
             \\         else return countDown(x - 1)
             \\     }
             \\     return countDown(2)
             \\ }
             \\ wrapper()
             ,
-            .value = 0.0,
+            .value = 22.0,
         },
     };
     inline for (test_cases) |case| {
@@ -1003,18 +1007,45 @@ test "Loops" {
 }
 
 test "Boughs" {
-    const test_cases = .{.{ .input = 
-    \\ === START {
-    \\    :speaker: "Text goes here"       
-    \\    :speaker: "More text here"
-    \\ } 
-    \\ => START    
-    }};
+    const test_cases = .{
+        .{ .input = 
+        \\ === START {
+        \\    :speaker: "Text goes here"       
+        \\    :speaker: "More text here"
+        \\ } 
+        \\ => START
+        },
+        .{ .input = 
+        \\ === START {
+        \\    const before = "This is added before"
+        \\    const after = "and this is added afterwards"
+        \\    :speaker_one: "{before} and then more text here"
+        \\    :speaker_two: "Text goes here {after}"
+        \\ }
+        \\ => START
+        },
+        .{ .input = 
+        \\ const repeat = |str, count| {
+        \\     var result = ""
+        \\     while count > 0 {
+        \\          result = result + str 
+        \\          count -= 1
+        \\     }
+        \\     return result
+        \\ }
+        \\ === START {
+        \\    :speaker_one: "Hello, {repeat("Yo ", 5)}!"
+        \\    :speaker_two: "Uh.. hello?"
+        \\ }
+        \\ => START
+        },
+    };
 
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        vm.debug = true;
+        std.debug.print("\n======\n", .{});
         defer vm.deinit();
         try vm.interpretSource(case.input);
     }

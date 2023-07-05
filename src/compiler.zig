@@ -40,21 +40,14 @@ pub const ByteCode = struct {
     }
 
     pub fn print(code: *ByteCode, writer: anytype) void {
-        var i: usize = 0;
         writer.print("\n==BYTECODE==\n", .{});
-        const instructions = code.instructions;
-        const constants = code.constants;
-        const tokens = code.tokens;
+        printInstructions(writer, code.instructions, code.constants);
+    }
+
+    pub fn printInstructions(writer: anytype, instructions: []const u8, constants: []Value) void {
+        var i: usize = 0;
         while (i < instructions.len) {
             writer.print("{d:0>4} ", .{i});
-            const token = DebugToken.get(tokens, i);
-            if (token) |t| {
-                if (i > 0 and t.line == DebugToken.get(tokens, i - 1).?.line) {
-                    writer.print("[{s}] ", .{"  | "});
-                } else {
-                    writer.print("[{d:0>4}] ", .{t.line});
-                }
-            }
             const op = @enumFromInt(OpCode, instructions[i]);
             writer.print("{s: <16} ", .{op.toString()});
             i += 1;
@@ -74,7 +67,8 @@ pub const ByteCode = struct {
                     writer.print("{d: >8} ", .{index});
                     i += 2;
                     var value = constants[index];
-                    value.print(writer);
+                    writer.print("  = ", .{});
+                    value.print(writer, constants);
                 },
                 .dialogue => {
                     var has_speaker = instructions[i] == 1;
@@ -87,57 +81,10 @@ pub const ByteCode = struct {
                     var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
                     i += 2;
                     writer.print("{d: >8}", .{index});
-                    var count = std.mem.readIntSliceBig(u8, instructions[i..(i + 1)]);
                     i += 1;
-                    writer.print("{d: >4}", .{count});
+                    writer.print("  = ", .{});
                     var value = constants[index];
-                    value.print(writer);
-                },
-                else => {},
-            }
-            writer.print("\n", .{});
-        }
-    }
-
-    pub fn printInstructions(writer: anytype, instructions: []const u8) void {
-        var i: usize = 0;
-        writer.print("\n", .{});
-        while (i < instructions.len) {
-            writer.print("        ", .{});
-            writer.print("{d:0>4} ", .{i});
-            const op = @enumFromInt(OpCode, instructions[i]);
-            writer.print("{s: <16} ", .{op.toString()});
-            i += 1;
-            switch (op) {
-                .jump, .jump_if_false, .set_global, .get_global, .list, .map, .set => {
-                    var dest = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
-                    writer.print("{d: >8}", .{dest});
-                    i += 2;
-                },
-                .get_local, .set_local, .get_free, .call => {
-                    var dest = std.mem.readIntSliceBig(u8, instructions[i..(i + 1)]);
-                    writer.print("{d: >8}", .{dest});
-                    i += 1;
-                },
-                .string, .closure => {
-                    var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
-                    i += 2;
-                    writer.print("{d: >8}", .{index});
-                    var count = std.mem.readIntSliceBig(u8, instructions[i..(i + 1)]);
-                    i += 1;
-                    writer.print("{d: >4}", .{count});
-                },
-                .dialogue => {
-                    var has_speaker = instructions[i] == 1;
-                    var tag_count = instructions[i + 1];
-                    i += 2;
-                    writer.print("{: >8}", .{has_speaker});
-                    writer.print(" {d}", .{tag_count});
-                },
-                .constant => {
-                    var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
-                    writer.print("{d: >8} ", .{index});
-                    i += 2;
+                    value.print(writer, constants);
                 },
                 else => {},
             }
@@ -264,7 +211,7 @@ pub const Compiler = struct {
                 _ = try self.writeInt(u16, CONTINUE_HOLDER, token);
             },
             .@"while" => |w| {
-                try self.enterScope(.loop);
+                try self.enterScope(.closure);
 
                 const start = self.scopePos();
                 try self.compileExpression(&w.condition);
@@ -275,6 +222,8 @@ pub const Compiler = struct {
                 try self.compileBlock(w.body);
                 try self.removeLastPop();
                 const locals_count = self.scope.symbols.count();
+                const free_symbols = try self.scope.free_symbols.toOwnedSlice();
+                defer self.allocator.free(free_symbols);
 
                 try self.writeOp(.jump, token);
                 _ = try self.writeInt(OpCode.Size(.jump), start, token);
@@ -285,6 +234,9 @@ pub const Compiler = struct {
                 try self.replaceValue(pos, u16, end);
 
                 var inst = try self.exitScope();
+                for (free_symbols) |s| {
+                    try self.loadSymbol(s, token);
+                }
                 try replaceJumps(inst.instructions, BREAK_HOLDER, end);
                 try replaceJumps(inst.instructions, CONTINUE_HOLDER, start);
 
@@ -302,12 +254,14 @@ pub const Compiler = struct {
                     },
                 };
                 const i = try self.addConstant(.{ .obj = obj });
-                try self.writeOp(.constant, token);
+                try self.writeOp(.closure, token);
                 _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                _ = try self.writeInt(u8, @intCast(u8, free_symbols.len), token);
+
                 try self.writeOp(.loop, token);
             },
             .@"for" => |f| {
-                try self.enterScope(.loop);
+                try self.enterScope(.closure);
                 try self.compileStatement(f.index.*);
 
                 const start = self.scopePos();
@@ -366,13 +320,18 @@ pub const Compiler = struct {
             .bough => |b| {
                 var symbol = try self.scope.define(b.name);
 
-                try self.enterScope(.bough);
+                try self.enterScope(.closure);
                 try self.compileBlock(b.body);
                 try self.removeLastPop();
                 const locals_count = self.scope.symbols.count();
+                const free_symbols = try self.scope.free_symbols.toOwnedSlice();
+                defer self.allocator.free(free_symbols);
                 try self.writeOp(.return_void, token);
 
                 var inst = try self.exitScope();
+                for (free_symbols) |s| {
+                    try self.loadSymbol(s, token);
+                }
                 const obj = try self.allocator.create(Value.Obj);
 
                 // TODO: use debug tokens
@@ -387,8 +346,9 @@ pub const Compiler = struct {
                     },
                 };
                 const i = try self.addConstant(.{ .obj = obj });
-                try self.writeOp(.constant, token);
+                try self.writeOp(.closure, token);
                 _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                _ = try self.writeInt(u8, @intCast(u8, free_symbols.len), token);
                 if (symbol.tag == .global) {
                     try self.writeOp(.set_global, token);
                     _ = try self.writeInt(OpCode.Size(.set_global), symbol.index, token);
@@ -452,10 +412,10 @@ pub const Compiler = struct {
                 try self.compileExpression(bin.right);
                 var symbol: ?*Symbol = null;
                 const op: OpCode = switch (bin.operator) {
-                    .add => .add,
-                    .subtract => .subtract,
-                    .multiply => .multiply,
-                    .divide => .divide,
+                    .add, .assign_add => .add,
+                    .subtract, .assign_subtract => .subtract,
+                    .multiply, .assign_multiply => .multiply,
+                    .divide, .assign_divide => .divide,
                     .modulus => .modulus,
                     .equal => .equal,
                     .not_equal => .not_equal,
@@ -482,6 +442,15 @@ pub const Compiler = struct {
                         _ = try self.writeInt(OpCode.Size(.get_global), s.index, token);
                     } else {
                         _ = try self.writeInt(OpCode.Size(.get_local), @intCast(OpCode.Size(.get_local), s.index), token);
+                    }
+
+                    // check for assignments
+                    if (std.mem.eql(u8, @tagName(bin.operator)[0..7], "assign_")) {
+                        if (s.tag == .global) {
+                            _ = try self.writeInt(OpCode.Size(.set_global), s.index, token);
+                        } else {
+                            _ = try self.writeInt(OpCode.Size(.set_local), @intCast(OpCode.Size(.get_local), s.index), token);
+                        }
                     }
                 }
             },
@@ -618,6 +587,7 @@ pub const Compiler = struct {
                 _ = try self.writeInt(size, @intCast(size, c.arguments.len), token);
             },
             .dialogue => |d| {
+                try self.compileExpression(d.content);
                 if (d.speaker) |speaker| {
                     if (self.speakers.get(speaker)) |position| {
                         try self.writeOp(.get_global, token);
@@ -626,16 +596,16 @@ pub const Compiler = struct {
                         const obj = try self.allocator.create(Value.Obj);
                         obj.* = .{ .data = .{ .string = try self.allocator.dupe(u8, speaker) } };
                         const i = try self.addConstant(.{ .obj = obj });
+                        try self.speakers.put(speaker, i);
+
                         try self.writeOp(.constant, token);
                         _ = try self.writeInt(OpCode.Size(.constant), i, token);
-                        try self.speakers.putNoClobber(speaker, i);
                         try self.writeOp(.set_global, token);
                         _ = try self.writeInt(OpCode.Size(.constant), i, token);
                         try self.writeOp(.get_global, token);
                         _ = try self.writeInt(OpCode.Size(.constant), i, token);
                     }
                 }
-                try self.compileExpression(d.content);
                 try self.writeOp(.dialogue, d.content.token);
                 var has_speaker_value = if (d.speaker == null) @as(u8, 0) else @as(u8, 1);
                 _ = try self.writeInt(u8, has_speaker_value, token);

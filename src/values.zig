@@ -58,11 +58,10 @@ pub const Value = union(Type) {
             },
             loop: struct {
                 instructions: []const u8,
-                index: usize = 0,
                 locals_count: usize,
             },
-            structure: StructType,
-            instance: StructType,
+            // structure: StructType,
+            // instance: StructType,
             bough: struct {
                 instructions: []const u8,
                 locals_count: usize,
@@ -70,7 +69,7 @@ pub const Value = union(Type) {
         };
         pub const MapType = std.ArrayHashMap(Value, Value, Adapter, true);
         pub const SetType = std.ArrayHashMap(Value, void, Adapter, true);
-        pub const StructType = std.StringHashMap(Value);
+        // pub const StructType = std.StringHashMap(Value);
 
         pub fn add(self: *Data, value: Value) !void {
             switch (self) {
@@ -112,8 +111,8 @@ pub const Value = union(Type) {
                 .bough => |b| allocator.free(b.instructions),
                 .builtin => {},
                 .closure => |c| allocator.free(c.free_values),
-                .structure => obj.data.structure.deinit(),
-                .instance => obj.data.instance.deinit(),
+                // .structure => obj.data.structure.deinit(),
+                // .instance => obj.data.instance.deinit(),
             }
             allocator.destroy(obj);
         }
@@ -139,7 +138,7 @@ pub const Value = union(Type) {
         };
     }
 
-    pub fn print(self: Value, writer: anytype) void {
+    pub fn print(self: Value, writer: anytype, constants: []Value) void {
         switch (self) {
             .number => |n| writer.print("{d}", .{n}),
             .bool => |b| writer.print("{}", .{b}),
@@ -150,7 +149,7 @@ pub const Value = union(Type) {
                     .list => |l| {
                         writer.print("[", .{});
                         for (l.items, 0..) |item, i| {
-                            item.print(writer);
+                            item.print(writer, constants);
                             if (i != l.items.len - 1)
                                 writer.print(", ", .{});
                         }
@@ -160,9 +159,9 @@ pub const Value = union(Type) {
                         writer.print("{{", .{});
                         var keys = m.keys();
                         for (keys, 0..) |k, i| {
-                            k.print(writer);
+                            k.print(writer, constants);
                             writer.print(":", .{});
-                            m.get(k).?.print(writer);
+                            m.get(k).?.print(writer, constants);
                             if (i != keys.len - 1)
                                 writer.print(", ", .{});
                         }
@@ -172,23 +171,31 @@ pub const Value = union(Type) {
                         var keys = s.keys();
                         writer.print("{{", .{});
                         for (keys, 0..) |k, i| {
-                            k.print(writer);
+                            k.print(writer, constants);
                             if (i != keys.len - 1)
                                 writer.print(", ", .{});
                         }
                         writer.print("}}", .{});
                     },
                     .function => |f| {
-                        ByteCode.printInstructions(writer, f.instructions);
+                        writer.print("\n---\n", .{});
+                        ByteCode.printInstructions(writer, f.instructions, constants);
+                        writer.print("---", .{});
                     },
                     .loop => |l| {
-                        ByteCode.printInstructions(writer, l.instructions);
+                        writer.print("\n---\n", .{});
+                        ByteCode.printInstructions(writer, l.instructions, constants);
+                        writer.print("---", .{});
                     },
                     .bough => |b| {
-                        ByteCode.printInstructions(writer, b.instructions);
+                        writer.print("\n---\n", .{});
+                        ByteCode.printInstructions(writer, b.instructions, constants);
+                        writer.print("---", .{});
                     },
                     .closure => |c| {
-                        ByteCode.printInstructions(writer, c.data.function.instructions);
+                        writer.print("\n---\n", .{});
+                        ByteCode.printInstructions(writer, c.data.function.instructions, constants);
+                        writer.print("---", .{});
                     },
                     else => {},
                 }
