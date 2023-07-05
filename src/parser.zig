@@ -134,7 +134,7 @@ pub const Parser = struct {
             .@"enum" => try self.enumDeclaration(),
             .@"extern", .@"var", .@"const" => try self.varDeclaration(),
             .bough => try self.boughStatement(),
-            .jump => try self.jumpStatement(),
+            .divert => try self.divertStatement(),
             .tilde => try self.choiceStatement(),
             .fork => try self.forkStatement(),
             .@"for" => try self.forStatement(),
@@ -652,7 +652,7 @@ pub const Parser = struct {
         };
     }
 
-    fn jumpStatement(self: *Parser) Error!Statement {
+    fn divertStatement(self: *Parser) Error!Statement {
         const start_token = self.current_token;
         // TODO: Perhaps this should just be an expression and indexers used
         var list = std.ArrayList([]const u8).init(self.allocator);
@@ -668,7 +668,7 @@ pub const Parser = struct {
         return .{
             .token = start_token,
             .type = .{
-                .jump = try list.toOwnedSlice(),
+                .divert = try list.toOwnedSlice(),
             },
         };
     }
@@ -1416,7 +1416,7 @@ test "Parse No Speaker" {
     try testing.expectEqualStrings("Text goes here", line.content.type.string.value);
 }
 
-test "Parse Jump" {
+test "Parse divert" {
     const allocator = testing.allocator;
     const input =
         \\  === BOUGH {}
@@ -1429,8 +1429,8 @@ test "Parse Jump" {
         return err;
     };
     defer tree.deinit();
-    const jump = tree.root[1].type.jump;
-    try testing.expectEqualStrings("BOUGH", jump[0]);
+    const divert = tree.root[1].type.divert;
+    try testing.expectEqualStrings("BOUGH", divert[0]);
 }
 
 test "Parse Forks" {
@@ -1465,7 +1465,7 @@ test "Parse Forks" {
 
     choice = fork.body[1].type.choice;
     try testing.expectEqualStrings("choice 2", choice.text.type.string.value);
-    try testing.expect(choice.body[0].type == .jump);
+    try testing.expect(choice.body[0].type == .divert);
 }
 
 test "Parse Inline Code" {

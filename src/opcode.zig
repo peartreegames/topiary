@@ -45,9 +45,12 @@ pub const OpCode = enum(u8) {
     closure,
     current_closure,
     loop,
+    divert,
+    dialogue,
 
     return_void,
     return_value,
+    wait,
 
     pub fn toString(self: OpCode) []const u8 {
         return switch (self) {
@@ -85,8 +88,11 @@ pub const OpCode = enum(u8) {
             .closure => "OP_CLOSURE",
             .current_closure => "OP_CURRENT_CLOSURE",
             .loop => "OP_LOOP",
+            .divert => "OP_DIVERT",
+            .dialogue => "OP_DIALOGUE",
             .return_void => "OP_RETURN_VOID",
             .return_value => "OP_RETURN_VALUE",
+            .wait => "OP_WAIT",
         };
     }
 

@@ -83,7 +83,7 @@ pub const Lexer = struct {
             } else if (self.peekChar() == '=') {
                 return self.readAndCreateToken(.equal_equal, 2);
             } else if (self.peekChar() == '>') {
-                return self.readAndCreateToken(.jump, 2);
+                return self.readAndCreateToken(.divert, 2);
             } else .equal,
             '<' => if (self.peekChar() == '=') {
                 return self.readAndCreateToken(.less_equal, 2);

@@ -63,6 +63,10 @@ pub const Value = union(Type) {
             },
             structure: StructType,
             instance: StructType,
+            bough: struct {
+                instructions: []const u8,
+                locals_count: usize,
+            },
         };
         pub const MapType = std.ArrayHashMap(Value, Value, Adapter, true);
         pub const SetType = std.ArrayHashMap(Value, void, Adapter, true);
@@ -105,6 +109,7 @@ pub const Value = union(Type) {
                 .set => obj.data.set.deinit(),
                 .function => |f| allocator.free(f.instructions),
                 .loop => |l| allocator.free(l.instructions),
+                .bough => |b| allocator.free(b.instructions),
                 .builtin => {},
                 .closure => |c| allocator.free(c.free_values),
                 .structure => obj.data.structure.deinit(),
@@ -178,6 +183,9 @@ pub const Value = union(Type) {
                     },
                     .loop => |l| {
                         ByteCode.printInstructions(writer, l.instructions);
+                    },
+                    .bough => |b| {
+                        ByteCode.printInstructions(writer, b.instructions);
                     },
                     .closure => |c| {
                         ByteCode.printInstructions(writer, c.data.function.instructions);

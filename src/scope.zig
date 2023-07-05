@@ -25,7 +25,7 @@ pub const Scope = struct {
         builtin,
         closure,
         function,
-        module,
+        bough,
         free,
         loop,
     };

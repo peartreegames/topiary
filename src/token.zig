@@ -77,7 +77,7 @@ pub const TokenType = enum {
 
     bough,
     fork,
-    jump,
+    divert,
 
     comment,
     eof,
@@ -174,7 +174,7 @@ pub fn toString(token_type: TokenType) []const u8 {
 
         .bough => "bough",
         .fork => "fork",
-        .jump => "=>",
+        .divert => "=>",
 
         .comment => "[comment]",
         .eof => "[eof]",

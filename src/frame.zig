@@ -7,7 +7,7 @@ pub const Frame = struct {
     bp: usize,
 
     pub fn create(obj: *Obj, ip: usize, bp: usize) !Frame {
-        if (obj.data != .closure and obj.data != .loop) {
+        if (obj.data != .closure and obj.data != .loop and obj.data != .bough) {
             return error.InvalidType;
         }
         return .{
@@ -21,6 +21,7 @@ pub const Frame = struct {
         return switch (self.cl.data) {
             .closure => |c| c.data.function.instructions,
             .loop => |l| l.instructions,
+            .bough => |b| b.instructions,
             else => unreachable,
         };
     }

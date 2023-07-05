@@ -29,6 +29,17 @@ const InterpretResult = union(enum) {
     Paused,
 };
 
+const Dialogue = struct {
+    speaker: ?[]const u8,
+    content: []const u8,
+    tags: [][]const u8,
+};
+
+const Choice = struct {
+    content: []const u8,
+    count: usize,
+};
+
 pub const Vm = struct {
     allocator: std.mem.Allocator,
     frames: Stack(Frame),
@@ -41,7 +52,14 @@ pub const Vm = struct {
     ip: usize = 0,
     debug: bool = false,
 
-    pub fn init(allocator: std.mem.Allocator) !Vm {
+    on_dialogue: OnDialogue,
+    on_choices: OnChoices,
+    pub const OnDialogue = *const fn (dialogue: Dialogue) void;
+    pub const OnChoices = *const fn (choices: []Choice) void;
+
+    pub fn init(allocator: std.mem.Allocator, runner: anytype) !Vm {
+        if (!std.meta.trait.hasFunctions(runner, .{ "on_dialogue", "on_choices" }))
+            return error.RuntimeError;
         return .{
             .allocator = allocator,
             .errors = Errors.init(allocator),
@@ -49,6 +67,8 @@ pub const Vm = struct {
             .globals = try std.ArrayList(Value).initCapacity(allocator, 1024),
             .gc = Gc.init(allocator),
             .stack = try Stack(Value).init(allocator, stack_size),
+            .on_dialogue = runner.on_dialogue,
+            .on_choices = runner.on_choices,
         };
     }
 
@@ -314,6 +334,35 @@ pub const Vm = struct {
                     self.frames.push(frame);
                     self.stack.count = frame.bp + loop.locals_count;
                 },
+                .divert => {
+                    var value = self.pop();
+                    var bough = value.obj.data.bough;
+                    var frame = try Frame.create(value.obj, 0, self.stack.count + 1);
+                    self.frames.push(frame);
+                    self.stack.count = frame.bp + bough.locals_count;
+                },
+                .dialogue => {
+                    var dialogue_value = self.pop();
+                    var result = Dialogue{
+                        .content = dialogue_value.obj.data.string,
+                        .speaker = null,
+                        .tags = undefined,
+                    };
+                    var has_speaker = self.readInt(u8) == 1;
+                    if (has_speaker) {
+                        var speaker_value = self.pop();
+                        result.speaker = speaker_value.obj.data.string;
+                    }
+                    var tag_count = self.readInt(u8);
+                    var tags = try std.ArrayList([]const u8).initCapacity(self.allocator, tag_count);
+                    var i: usize = 0;
+                    while (i < tag_count) : (i += 1) {
+                        const tag_value = self.pop();
+                        tags.items[tag_count - i] = tag_value.obj.data.string;
+                    }
+                    result.tags = try tags.toOwnedSlice();
+                    self.on_dialogue(result);
+                },
                 .call => {
                     const arg_count = self.readInt(OpCode.Size(.call));
                     var value = self.stack.items[self.stack.count - 1 - arg_count];
@@ -374,6 +423,7 @@ pub const Vm = struct {
                     self.stack.count = frame.bp - 1;
                     try self.push(values.Nil);
                 },
+                .wait => {},
             }
         }
     }
@@ -426,6 +476,19 @@ pub const Vm = struct {
     }
 };
 
+const TestRunner = struct {
+    pub fn on_dialogue(dialogue: Dialogue) void {
+        if (dialogue.speaker) |speaker| {
+            std.debug.print("{s}: ", .{speaker});
+        }
+        std.debug.print("{s}\n", .{dialogue.content});
+    }
+
+    pub fn on_choices(choices: []Choice) void {
+        _ = choices;
+    }
+};
+
 test "Basics" {
     const test_cases = .{
         .{ .input = "1", .value = 1.0, .type = f32 },
@@ -448,7 +511,7 @@ test "Basics" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator);
+        var vm = try Vm.init(testing.allocator, TestRunner);
         defer vm.deinit();
         try vm.interpretSource(case.input);
         switch (case.type) {
@@ -471,7 +534,7 @@ test "Conditionals" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator);
+        var vm = try Vm.init(testing.allocator, TestRunner);
         defer vm.deinit();
         try vm.interpretSource(case.input);
         switch (case.type) {
@@ -489,7 +552,7 @@ test "Variables" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator);
+        var vm = try Vm.init(testing.allocator, TestRunner);
         defer vm.deinit();
         try vm.interpretSource(case.input);
         try testing.expect(case.value == vm.stack.previous().number);
@@ -508,7 +571,7 @@ test "Strings" {
 
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
-        var vm = try Vm.init(testing.allocator);
+        var vm = try Vm.init(testing.allocator, TestRunner);
         // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
@@ -524,7 +587,7 @@ test "Lists" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator);
+        var vm = try Vm.init(testing.allocator, TestRunner);
         // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
@@ -542,7 +605,7 @@ test "Maps" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator);
+        var vm = try Vm.init(testing.allocator, TestRunner);
         // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
@@ -566,7 +629,7 @@ test "Sets" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator);
+        var vm = try Vm.init(testing.allocator, TestRunner);
         // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
@@ -595,7 +658,7 @@ test "Index" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator);
+        var vm = try Vm.init(testing.allocator, TestRunner);
         // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
@@ -659,7 +722,7 @@ test "Functions" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator);
+        var vm = try Vm.init(testing.allocator, TestRunner);
         // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
@@ -728,7 +791,7 @@ test "Locals" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator);
+        var vm = try Vm.init(testing.allocator, TestRunner);
         // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
@@ -790,7 +853,7 @@ test "Function Arguments" {
     };
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
-        var vm = try Vm.init(testing.allocator);
+        var vm = try Vm.init(testing.allocator, TestRunner);
         // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
@@ -812,7 +875,7 @@ test "Builtin Functions" {
     } };
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
-        var vm = try Vm.init(testing.allocator);
+        var vm = try Vm.init(testing.allocator, TestRunner);
         // vm.debug = true;
         defer vm.deinit();
         vm.interpretSource(case.input) catch |err| {
@@ -884,7 +947,7 @@ test "Closures" {
     };
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
-        var vm = try Vm.init(testing.allocator);
+        var vm = try Vm.init(testing.allocator, TestRunner);
         // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
@@ -930,11 +993,29 @@ test "Loops" {
     };
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
-        var vm = try Vm.init(testing.allocator);
-        vm.debug = true;
+        var vm = try Vm.init(testing.allocator, TestRunner);
+        // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
         const value = vm.stack.previous();
         try testing.expectEqual(value.number, case.value);
+    }
+}
+
+test "Boughs" {
+    const test_cases = .{.{ .input = 
+    \\ === START {
+    \\    :speaker: "Text goes here"       
+    \\    :speaker: "More text here"
+    \\ } 
+    \\ => START    
+    }};
+
+    inline for (test_cases) |case| {
+        errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
+        var vm = try Vm.init(testing.allocator, TestRunner);
+        // vm.debug = true;
+        defer vm.deinit();
+        try vm.interpretSource(case.input);
     }
 }

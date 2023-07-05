@@ -76,6 +76,13 @@ pub const ByteCode = struct {
                     var value = constants[index];
                     value.print(writer);
                 },
+                .dialogue => {
+                    var has_speaker = instructions[i] == 1;
+                    var tag_count = instructions[i + 1];
+                    i += 2;
+                    writer.print("{: >8}", .{has_speaker});
+                    writer.print("{d: >4}", .{tag_count});
+                },
                 .string, .closure => {
                     var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
                     i += 2;
@@ -120,6 +127,13 @@ pub const ByteCode = struct {
                     i += 1;
                     writer.print("{d: >4}", .{count});
                 },
+                .dialogue => {
+                    var has_speaker = instructions[i] == 1;
+                    var tag_count = instructions[i + 1];
+                    i += 2;
+                    writer.print("{: >8}", .{has_speaker});
+                    writer.print(" {d}", .{tag_count});
+                },
                 .constant => {
                     var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
                     writer.print("{d: >8} ", .{index});
@@ -151,6 +165,7 @@ pub const Compiler = struct {
     constants: std.ArrayList(Value),
     errors: *Errors,
     scope: *Scope,
+    speakers: std.StringHashMap(OpCode.Size(.constant)),
 
     pub fn init(allocator: std.mem.Allocator, root_scope: *Scope, errors: *Errors) Compiler {
         return .{
@@ -164,6 +179,7 @@ pub const Compiler = struct {
                 .debug_tokens = undefined,
             },
             .constants = std.ArrayList(Value).init(allocator),
+            .speakers = std.StringHashMap(OpCode.Size(.constant)).init(allocator),
             .errors = errors,
             .scope = root_scope,
         };
@@ -174,6 +190,7 @@ pub const Compiler = struct {
         for (self.builtins.symbols.values()) |s| {
             self.allocator.destroy(s);
         }
+        self.speakers.deinit();
         self.builtins.symbols.deinit();
     }
 
@@ -344,6 +361,48 @@ pub const Compiler = struct {
                     try self.writeOp(.set_local, token);
                     const size = OpCode.Size(.set_local);
                     _ = try self.writeInt(size, @intCast(size, symbol.index), token);
+                }
+            },
+            .bough => |b| {
+                var symbol = try self.scope.define(b.name);
+
+                try self.enterScope(.bough);
+                try self.compileBlock(b.body);
+                try self.removeLastPop();
+                const locals_count = self.scope.symbols.count();
+                try self.writeOp(.return_void, token);
+
+                var inst = try self.exitScope();
+                const obj = try self.allocator.create(Value.Obj);
+
+                // TODO: use debug tokens
+                self.allocator.free(inst.debug_tokens);
+
+                obj.* = .{
+                    .data = .{
+                        .bough = .{
+                            .instructions = inst.instructions,
+                            .locals_count = locals_count,
+                        },
+                    },
+                };
+                const i = try self.addConstant(.{ .obj = obj });
+                try self.writeOp(.constant, token);
+                _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                if (symbol.tag == .global) {
+                    try self.writeOp(.set_global, token);
+                    _ = try self.writeInt(OpCode.Size(.set_global), symbol.index, token);
+                } else {
+                    try self.writeOp(.set_local, token);
+                    const size = OpCode.Size(.set_local);
+                    _ = try self.writeInt(size, @intCast(size, symbol.index), token);
+                }
+            },
+            .divert => |g| {
+                for (g) |id| {
+                    var symbol = try self.scope.resolve(id);
+                    try self.loadSymbol(symbol, token);
+                    try self.writeOp(.divert, token);
                 }
             },
             .return_expression => |r| {
@@ -557,6 +616,30 @@ pub const Compiler = struct {
                 const size = OpCode.Size(.call);
                 std.debug.assert(c.arguments.len < std.math.maxInt(size));
                 _ = try self.writeInt(size, @intCast(size, c.arguments.len), token);
+            },
+            .dialogue => |d| {
+                if (d.speaker) |speaker| {
+                    if (self.speakers.get(speaker)) |position| {
+                        try self.writeOp(.get_global, token);
+                        _ = try self.writeInt(OpCode.Size(.constant), position, token);
+                    } else {
+                        const obj = try self.allocator.create(Value.Obj);
+                        obj.* = .{ .data = .{ .string = try self.allocator.dupe(u8, speaker) } };
+                        const i = try self.addConstant(.{ .obj = obj });
+                        try self.writeOp(.constant, token);
+                        _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                        try self.speakers.putNoClobber(speaker, i);
+                        try self.writeOp(.set_global, token);
+                        _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                        try self.writeOp(.get_global, token);
+                        _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                    }
+                }
+                try self.compileExpression(d.content);
+                try self.writeOp(.dialogue, d.content.token);
+                var has_speaker_value = if (d.speaker == null) @as(u8, 0) else @as(u8, 1);
+                _ = try self.writeInt(u8, has_speaker_value, token);
+                _ = try self.writeInt(u8, @intCast(u8, d.tags.len), token);
             },
             else => {},
         }

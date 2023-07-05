@@ -166,7 +166,7 @@ pub const Statement = struct {
             path: []const u8,
             contents: []const Statement,
         },
-        jump: [][]const u8,
+        divert: [][]const u8,
         return_expression: Expression,
         return_void: void,
         @"struct": struct {
