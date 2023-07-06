@@ -328,17 +328,14 @@ pub const Vm = struct {
                     }
                 },
                 .loop => {
-                    var value = self.pop();
-                    var frame = try Frame.create(value.obj, 0, self.stack.count + 1);
-                    var loop = value.obj.data.closure.data.loop;
-                    self.frames.push(frame);
-                    self.stack.count = frame.bp + loop.locals_count;
+                    // var locals_count = self.readInt(u8);
+                    // self.stack.count = self.stack.count + locals_count + 1;
                 },
                 .divert => {
-                    var value = self.pop();
-                    var frame = try Frame.create(value.obj, 0, self.stack.count + 1);
-                    var bough = value.obj.data.closure.data.bough;
+                    var value = self.stack.peek();
+                    var frame = try Frame.create(value.obj, 0, self.stack.count);
                     self.frames.push(frame);
+                    var bough = value.obj.data.closure.data.bough;
                     self.stack.count = frame.bp + bough.locals_count + 1;
                 },
                 .dialogue => {
@@ -456,6 +453,7 @@ pub const Vm = struct {
     }
 
     fn push(self: *Vm, value: Value) !void {
+        errdefer value.print(std.debug, self.bytecode.constants);
         if (self.stack.items.len >= stack_size) return error.OutOfMemory;
         self.stack.push(value);
     }
@@ -552,15 +550,15 @@ test "Variables" {
         .{ .input = "var one = 1 one", .value = 1.0 },
         .{ .input = "var one = 1 var two = 2 one + two", .value = 3.0 },
         .{ .input = "var one = 1 var two = one + one one + two", .value = 3.0 },
-        .{ .input = "var two = 1 two += 1", .value = 2.0 },
-        .{ .input = "var one = 1 var two = one + one two += one", .value = 3.0 },
     };
 
     inline for (test_cases) |case| {
         var vm = try Vm.init(testing.allocator, TestRunner);
         defer vm.deinit();
         try vm.interpretSource(case.input);
-        try testing.expect(case.value == vm.stack.previous().number);
+        var value = vm.stack.previous().number;
+        errdefer std.log.warn("\n{s}\n ==== {}", .{ case.input, value });
+        try testing.expect(case.value == value);
     }
 }
 
@@ -1029,7 +1027,8 @@ test "Boughs" {
         \\     var result = ""
         \\     while count > 0 {
         \\          result = result + str 
-        \\          count -= 1
+        \\          count = count - 1
+        \\          print(count)
         \\     }
         \\     return result
         \\ }

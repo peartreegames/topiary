@@ -59,7 +59,8 @@ const Print = struct {
         },
     };
     fn builtin(_: *Gc, args: []Value) Value {
-        args[0].print(std.debug);
+        args[0].print(std.debug, null);
+        std.debug.print("\n", .{});
         return values.Nil;
     }
 };
@@ -69,13 +70,13 @@ const Definition = struct {
     value: *Value,
 };
 
-pub const builtins = [_]Definition{
-    .{
-        .name = "rnd",
-        .value = &Rnd.value,
-    },
-    .{
-        .name = "rnd01",
-        .value = &Rnd01.value,
-    },
-};
+pub const builtins = [_]Definition{ .{
+    .name = "rnd",
+    .value = &Rnd.value,
+}, .{
+    .name = "rnd01",
+    .value = &Rnd01.value,
+}, .{
+    .name = "print",
+    .value = &Print.value,
+} };

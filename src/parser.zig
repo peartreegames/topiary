@@ -37,7 +37,8 @@ fn findPrecedence(token_type: TokenType) Precedence {
         .dot_dot => .range,
         .@"or" => .@"or",
         .@"and" => .@"and",
-        .equal, .plus_equal, .minus_equal, .slash_equal, .star_equal => .assign,
+        // .equal, .plus_equal, .minus_equal, .slash_equal, .star_equal => .assign,
+        .equal => .assign,
         .equal_equal, .bang_equal => .equals,
         .less, .greater, .less_equal, .greater_equal => .less_greater,
         .plus, .minus => .sum,
@@ -377,10 +378,6 @@ pub const Parser = struct {
                 .@"and",
                 .@"or",
                 .equal,
-                .plus_equal,
-                .minus_equal,
-                .star_equal,
-                .slash_equal,
                 => blk: {
                     self.next();
                     const start_token = self.current_token;

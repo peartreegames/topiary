@@ -251,10 +251,6 @@ pub const BinaryOp = enum {
     equal,
     not_equal,
     assign,
-    assign_add,
-    assign_subtract,
-    assign_multiply,
-    assign_divide,
     @"and",
     @"or",
     pub fn fromToken(tok: Token) BinaryOp {
@@ -273,10 +269,10 @@ pub const BinaryOp = enum {
             .bang_equal => .not_equal,
             .@"and" => .@"and",
             .@"or" => .@"or",
-            .plus_equal => .assign_add,
-            .minus_equal => .assign_subtract,
-            .star_equal => .assign_multiply,
-            .slash_equal => .assign_divide,
+            // .plus_equal => .add,
+            // .minus_equal => .subtract,
+            // .star_equal => .multiply,
+            // .slash_equal => .divide,
             else => unreachable,
         };
     }

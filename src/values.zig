@@ -56,10 +56,6 @@ pub const Value = union(Type) {
                 data: *Data,
                 free_values: []Value,
             },
-            loop: struct {
-                instructions: []const u8,
-                locals_count: usize,
-            },
             // structure: StructType,
             // instance: StructType,
             bough: struct {
@@ -107,7 +103,6 @@ pub const Value = union(Type) {
                 .map => obj.data.map.deinit(),
                 .set => obj.data.set.deinit(),
                 .function => |f| allocator.free(f.instructions),
-                .loop => |l| allocator.free(l.instructions),
                 .bough => |b| allocator.free(b.instructions),
                 .builtin => {},
                 .closure => |c| allocator.free(c.free_values),
@@ -138,7 +133,7 @@ pub const Value = union(Type) {
         };
     }
 
-    pub fn print(self: Value, writer: anytype, constants: []Value) void {
+    pub fn print(self: Value, writer: anytype, constants: ?[]Value) void {
         switch (self) {
             .number => |n| writer.print("{d}", .{n}),
             .bool => |b| writer.print("{}", .{b}),
@@ -180,11 +175,6 @@ pub const Value = union(Type) {
                     .function => |f| {
                         writer.print("\n---\n", .{});
                         ByteCode.printInstructions(writer, f.instructions, constants);
-                        writer.print("---", .{});
-                    },
-                    .loop => |l| {
-                        writer.print("\n---\n", .{});
-                        ByteCode.printInstructions(writer, l.instructions, constants);
                         writer.print("---", .{});
                     },
                     .bough => |b| {

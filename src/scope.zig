@@ -15,10 +15,8 @@ pub const Scope = struct {
     tag: Tag,
 
     count: u16 = 0,
-    debug_tokens: DebugToken.List,
     symbols: std.StringArrayHashMap(*Symbol),
-    free_symbols: std.ArrayList(*Symbol) = undefined,
-    instructions: std.ArrayList(u8),
+    free_symbols: std.ArrayList(*Symbol),
 
     pub const Tag = union(enum(u4)) {
         global,
@@ -26,6 +24,7 @@ pub const Scope = struct {
         closure,
         function,
         free,
+        loop,
     };
 
     pub fn create(allocator: std.mem.Allocator, parent: ?*Scope, tag: Tag) !*Scope {
@@ -36,15 +35,11 @@ pub const Scope = struct {
             .symbols = std.StringArrayHashMap(*Symbol).init(allocator),
             .free_symbols = std.ArrayList(*Symbol).init(allocator),
             .tag = tag,
-            .instructions = std.ArrayList(u8).init(allocator),
-            .debug_tokens = DebugToken.List.init(allocator),
         };
         return scope;
     }
 
     pub fn destroy(self: *Scope) void {
-        self.instructions.deinit();
-        self.debug_tokens.deinit();
         for (self.symbols.values()) |s| {
             self.allocator.destroy(s);
         }
@@ -98,7 +93,7 @@ pub const Scope = struct {
             symbol = try p.resolve(name);
             if (symbol == null) return null;
             if (symbol) |s| {
-                if (s.tag == .global) return s;
+                if (s.tag == .global or self.tag != .closure) return s;
                 var free = try self.defineFree(s);
                 return free;
             }
