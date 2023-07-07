@@ -34,6 +34,7 @@ pub const OpCode = enum(u8) {
 
     get_builtin,
     get_free,
+    set_free,
 
     string,
     list,
@@ -44,13 +45,12 @@ pub const OpCode = enum(u8) {
     call,
     closure,
     current_closure,
-    loop,
-    divert,
     dialogue,
+    fork,
+    choice,
 
     return_void,
     return_value,
-    wait,
 
     pub fn toString(self: OpCode) []const u8 {
         return switch (self) {
@@ -79,6 +79,7 @@ pub const OpCode = enum(u8) {
             .set_local => "OP_SET_LOCAL",
             .get_builtin => "OP_GET_BUILTIN",
             .get_free => "OP_GET_FREE",
+            .set_free => "OP_SET_FREE",
             .list => "OP_LIST",
             .string => "OP_STRING",
             .map => "OP_MAP",
@@ -87,12 +88,11 @@ pub const OpCode = enum(u8) {
             .call => "OP_CALL",
             .closure => "OP_CLOSURE",
             .current_closure => "OP_CURRENT_CLOSURE",
-            .loop => "OP_LOOP",
-            .divert => "OP_DIVERT",
             .dialogue => "OP_DIALOGUE",
+            .fork => "OP_FORK",
+            .choice => "OP_CHOICE",
             .return_void => "OP_RETURN_VOID",
             .return_value => "OP_RETURN_VALUE",
-            .wait => "OP_WAIT",
         };
     }
 
@@ -101,9 +101,9 @@ pub const OpCode = enum(u8) {
         return switch (self) {
             .constant => u16,
             .jump, .jump_if_false => u16,
-            .set_global, .get_global => u16,
+            .set_global, .get_global, .choice => u16,
             .list, .map, .set => u16,
-            .get_local, .set_local, .get_builtin, .get_free, .call => u8,
+            .get_local, .set_local, .get_builtin, .get_free, .set_free, .call => u8,
             .string, .closure => u24, // u16 for constant location, u8 for expressions count
             else => void,
         };

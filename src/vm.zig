@@ -1,6 +1,6 @@
 const std = @import("std");
 const compiler = @import("./compiler.zig");
-const ByteCode = @import("./compiler.zig").ByteCode;
+const ByteCode = @import("./bytecode.zig").ByteCode;
 const Errors = @import("./error.zig").Errors;
 const parser = @import("./parser.zig");
 const OpCode = @import("./opcode.zig").OpCode;
@@ -10,6 +10,7 @@ const Gc = @import("./gc.zig").Gc;
 const Token = @import("./token.zig").Token;
 const Frame = @import("./frame.zig").Frame;
 const builtins = @import("./builtins.zig").builtins;
+const Rnd = @import("./builtins.zig").Rnd;
 const DebugToken = @import("./debug.zig").DebugToken;
 
 const testing = std.testing;
@@ -18,10 +19,12 @@ const frame_size = 1023;
 const globals_size = 65535;
 const Value = values.Value;
 const adapter = values.adapter;
+const input_buf: [2]u8 = undefined;
 
 const InterpretError = error{
     CompileError,
     RuntimeError,
+    InvalidChoice,
 };
 
 const InterpretResult = union(enum) {
@@ -38,6 +41,7 @@ const Dialogue = struct {
 const Choice = struct {
     content: []const u8,
     count: usize,
+    ip: u16,
 };
 
 pub const Vm = struct {
@@ -54,8 +58,12 @@ pub const Vm = struct {
 
     on_dialogue: OnDialogue,
     on_choices: OnChoices,
-    pub const OnDialogue = *const fn (dialogue: Dialogue) void;
-    pub const OnChoices = *const fn (choices: []Choice) void;
+    choices_list: std.ArrayList(Choice),
+    current_choices: []Choice = undefined,
+    is_waiting: bool = false,
+
+    pub const OnDialogue = *const fn (vm: *Vm, dialogue: Dialogue) void;
+    pub const OnChoices = *const fn (vm: *Vm, choices: []Choice) void;
 
     pub fn init(allocator: std.mem.Allocator, runner: anytype) !Vm {
         if (!std.meta.trait.hasFunctions(runner, .{ "on_dialogue", "on_choices" }))
@@ -69,16 +77,18 @@ pub const Vm = struct {
             .stack = try Stack(Value).init(allocator, stack_size),
             .on_dialogue = runner.on_dialogue,
             .on_choices = runner.on_choices,
+            .choices_list = std.ArrayList(Choice).init(allocator),
         };
     }
 
     pub fn deinit(self: *Vm) void {
+        self.choices_list.deinit();
         self.stack.deinit();
         self.globals.deinit();
-        self.bytecode.free(self.allocator);
         self.frames.deinit();
         self.errors.deinit();
         self.gc.deinit();
+        self.bytecode.free(self.allocator);
     }
 
     pub fn roots(self: *Vm) []const []Value {
@@ -89,17 +99,34 @@ pub const Vm = struct {
         return self.frames.peek();
     }
 
+    pub fn selectContinue(self: *Vm) void {
+        self.is_waiting = false;
+    }
+
+    pub fn selectChoice(self: *Vm, index: usize) InterpretError!void {
+        if (index < 0 or index >= self.current_choices.len) {
+            std.log.warn("CHOICE:{}", .{index});
+            return InterpretError.InvalidChoice;
+        }
+        var choice = self.current_choices[index];
+        self.currentFrame().ip = choice.ip;
+        self.is_waiting = false;
+        self.allocator.free(self.current_choices);
+    }
+
     pub fn interpret(self: *Vm, bytecode: ByteCode) !void {
         self.bytecode = bytecode;
         var root_frame = try self.allocator.create(Value.Obj.Data);
         var root_closure = try self.allocator.create(Value.Obj);
         defer self.allocator.destroy(root_frame);
         defer self.allocator.destroy(root_closure);
-        root_frame.* = .{ .function = .{
-            .instructions = bytecode.instructions,
-            .locals_count = 0,
-            .arity = 0,
-        } };
+        root_frame.* = .{
+            .function = .{
+                .instructions = bytecode.instructions,
+                .locals_count = 0,
+                .arity = 0,
+            },
+        };
         root_closure.* = .{
             .data = .{
                 .closure = .{
@@ -146,6 +173,7 @@ pub const Vm = struct {
 
     fn run(self: *Vm) !void {
         while (self.ip < self.currentFrame().instructions().len) : (self.ip = self.currentFrame().ip) {
+            if (self.is_waiting) continue;
             const instruction = self.readByte();
             const op = @enumFromInt(OpCode, instruction);
             switch (op) {
@@ -204,6 +232,7 @@ pub const Vm = struct {
                 },
                 .jump => {
                     var dest = self.readInt(OpCode.Size(.jump));
+                    if (dest > self.currentFrame().instructions().len) break;
                     self.currentFrame().ip = dest;
                 },
                 .jump_if_false => {
@@ -242,6 +271,11 @@ pub const Vm = struct {
                     const index = self.readInt(OpCode.Size(.get_free));
                     var obj = self.currentFrame().cl;
                     try self.push(obj.data.closure.free_values[index]);
+                },
+                .set_free => {
+                    const index = self.readInt(OpCode.Size(.get_free));
+                    var obj = self.currentFrame().cl;
+                    obj.data.closure.free_values[index] = self.pop();
                 },
                 .string => {
                     var index = self.readInt(u16);
@@ -327,18 +361,8 @@ pub const Vm = struct {
                         else => unreachable,
                     }
                 },
-                .loop => {
-                    // var locals_count = self.readInt(u8);
-                    // self.stack.count = self.stack.count + locals_count + 1;
-                },
-                .divert => {
-                    var value = self.stack.peek();
-                    var frame = try Frame.create(value.obj, 0, self.stack.count);
-                    self.frames.push(frame);
-                    var bough = value.obj.data.closure.data.bough;
-                    self.stack.count = frame.bp + bough.locals_count + 1;
-                },
                 .dialogue => {
+                    self.is_waiting = true;
                     var has_speaker = self.readInt(u8) == 1;
                     var speaker: ?[]const u8 = null;
                     if (has_speaker) {
@@ -360,7 +384,8 @@ pub const Vm = struct {
                         .speaker = speaker,
                         .tags = try tags.toOwnedSlice(),
                     };
-                    self.on_dialogue(result);
+                    try self.push(values.Nil);
+                    self.on_dialogue(self, result);
                 },
                 .call => {
                     const arg_count = self.readInt(OpCode.Size(.call));
@@ -422,7 +447,20 @@ pub const Vm = struct {
                     self.stack.count = frame.bp - 1;
                     try self.push(values.Nil);
                 },
-                .wait => {},
+                .fork => {
+                    self.is_waiting = true;
+                    self.current_choices = try self.choices_list.toOwnedSlice();
+                    self.on_choices(self, self.current_choices);
+                    self.choices_list.clearRetainingCapacity();
+                },
+                .choice => {
+                    const ip = self.readInt(u16);
+                    try self.choices_list.append(.{
+                        .content = self.pop().obj.data.string,
+                        .count = 0,
+                        .ip = ip,
+                    });
+                },
             }
         }
     }
@@ -478,15 +516,25 @@ pub const Vm = struct {
 };
 
 const TestRunner = struct {
-    pub fn on_dialogue(dialogue: Dialogue) void {
+    pub fn on_dialogue(vm: *Vm, dialogue: Dialogue) void {
         if (dialogue.speaker) |speaker| {
             std.debug.print("{s}: ", .{speaker});
         }
         std.debug.print("{s}\n", .{dialogue.content});
+        vm.selectContinue();
     }
 
-    pub fn on_choices(choices: []Choice) void {
-        _ = choices;
+    pub fn on_choices(vm: *Vm, choices: []Choice) void {
+        std.debug.print("---CHOICE---\n", .{});
+        for (choices, 0..) |choice, i| {
+            std.debug.print("[{d}] {s}\n", .{ i, choice.content });
+        }
+
+        var rnd = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
+        const index = rnd.random().intRangeAtMost(usize, 0, choices.len - 1);
+        vm.selectChoice(index) catch |err| {
+            std.debug.print("Error: {}", .{err});
+        };
     }
 };
 
@@ -550,6 +598,10 @@ test "Variables" {
         .{ .input = "var one = 1 one", .value = 1.0 },
         .{ .input = "var one = 1 var two = 2 one + two", .value = 3.0 },
         .{ .input = "var one = 1 var two = one + one one + two", .value = 3.0 },
+        .{ .input = 
+        \\ var five = 1
+        \\ five = 5
+        , .value = 5.0 },
     };
 
     inline for (test_cases) |case| {
@@ -1008,9 +1060,9 @@ test "Boughs" {
     const test_cases = .{
         .{ .input = 
         \\ === START {
-        \\    :speaker: "Text goes here"       
+        \\    :speaker: "Text goes here"
         \\    :speaker: "More text here"
-        \\ } 
+        \\ }
         \\ => START
         },
         .{ .input = 
@@ -1027,7 +1079,7 @@ test "Boughs" {
         \\     var result = ""
         \\     while count > 0 {
         \\          result = result + str 
-        \\          count = count - 1
+        \\          count -= 1
         \\          print(count)
         \\     }
         \\     return result
@@ -1038,12 +1090,68 @@ test "Boughs" {
         \\ }
         \\ => START
         },
+        .{ .input = 
+        \\ === START {
+        \\    if true :speaker: "True text goes here" 
+        \\    :speaker: "More text here"
+        \\    if false :speaker: "False text doesn't appear"
+        \\    :speaker: "Final text here"
+        \\ }
+        \\ => START
+        },
     };
 
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator, TestRunner);
-        vm.debug = true;
+        // vm.debug = true;
+        defer vm.deinit();
+        std.debug.print("\n======\n", .{});
+        try vm.interpretSource(case.input);
+    }
+}
+
+test "Forks" {
+    const test_cases = .{
+        .{
+            .input =
+            \\ === START {
+            \\     :speaker: "Question"
+            \\    fork {
+            \\        ~ "Answer one" {
+            \\            :speaker: "You chose one"
+            \\        }
+            \\        ~ "Answer two" {      
+            \\            :speaker: "You chose two"
+            \\        }
+            \\    }
+            \\ }
+            \\ => START
+            ,
+        },
+        .{
+            .input =
+            \\ === START {
+            \\     :speaker: "Question"
+            \\    fork NAMED {
+            \\        ~ "Answer one" {
+            \\            :speaker: "You chose one"
+            \\        }
+            \\        ~ "Answer two" {      
+            \\            :speaker: "You chose two"
+            \\            => NAMED
+            \\        }
+            \\    }
+            \\ }
+            \\ => START
+            ,
+        },
+    };
+
+    inline for (test_cases) |case| {
+        errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
+        var vm = try Vm.init(testing.allocator, TestRunner);
+        // vm.debug = true;
         std.debug.print("\n======\n", .{});
         defer vm.deinit();
         try vm.interpretSource(case.input);

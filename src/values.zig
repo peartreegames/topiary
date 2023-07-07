@@ -1,8 +1,9 @@
 const std = @import("std");
 const ast = @import("./ast.zig");
 const Gc = @import("./gc.zig").Gc;
-const ByteCode = @import("./compiler.zig").ByteCode;
+const ByteCode = @import("./bytecode.zig").ByteCode;
 const Builtin = @import("./builtins.zig").Builtin;
+const OpCode = @import("./opcode.zig").OpCode;
 const Allocator = std.mem.Allocator;
 
 pub const True = Value{ .bool = true };

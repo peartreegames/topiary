@@ -5,7 +5,7 @@ const Gc = @import("./gc.zig").Gc;
 const Value = values.Value;
 pub const Builtin = *const fn (gc: *Gc, args: []Value) Value;
 
-const Rnd = struct {
+pub const Rnd = struct {
     const Self = @This();
     var r: ?std.rand.DefaultPrng = null;
     var value: Value = .{

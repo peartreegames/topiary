@@ -37,8 +37,7 @@ fn findPrecedence(token_type: TokenType) Precedence {
         .dot_dot => .range,
         .@"or" => .@"or",
         .@"and" => .@"and",
-        // .equal, .plus_equal, .minus_equal, .slash_equal, .star_equal => .assign,
-        .equal => .assign,
+        .equal, .plus_equal, .minus_equal, .slash_equal, .star_equal => .assign,
         .equal_equal, .bang_equal => .equals,
         .less, .greater, .less_equal, .greater_equal => .less_greater,
         .plus, .minus => .sum,
@@ -359,6 +358,8 @@ pub const Parser = struct {
             else => return self.fail("Unexpected token in expression: {}", self.current_token, .{self.current_token.token_type}),
         };
 
+        const can_not_assign = self.peek_token.token_type == .equal and left.type != .identifier;
+        if (can_not_assign) return self.fail("Cannot assign to {}", self.current_token, .{left.token.token_type});
         while (prec.val() < findPrecedence(self.peek_token.token_type).val()) {
             left = switch (self.peek_token.token_type) {
                 .left_paren => try self.callExpression(left),
@@ -378,6 +379,11 @@ pub const Parser = struct {
                 .@"and",
                 .@"or",
                 .equal,
+                .plus_equal,
+                .minus_equal,
+                .slash_equal,
+                .star_equal,
+                .percent_equal,
                 => blk: {
                     self.next();
                     const start_token = self.current_token;

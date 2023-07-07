@@ -11,90 +11,21 @@ const Scope = @import("./scope.zig").Scope;
 const Symbol = @import("./scope.zig").Symbol;
 const DebugToken = @import("./debug.zig").DebugToken;
 const builtins = @import("./builtins.zig").builtins;
+const ByteCode = @import("./bytecode.zig").ByteCode;
 
 const testing = std.testing;
 const BREAK_HOLDER = 9000;
 const CONTINUE_HOLDER = 9001;
+const CHOICE_HOLDER = 9002;
+const FORK_HOLDER = 9003;
+const DIVERT_HOLDER = 9004;
+const JUMP_HOLDER = 9999;
 
 const CompilerError = error{
     IllegalOperation,
     OutOfMemory,
     OutOfScope,
     SymbolNotFound,
-};
-
-pub const ByteCode = struct {
-    instructions: []u8,
-    constants: []Value,
-    tokens: []DebugToken,
-
-    pub fn free(self: *ByteCode, allocator: std.mem.Allocator) void {
-        allocator.free(self.instructions);
-        for (self.constants) |item| {
-            if (item == .obj) {
-                Value.Obj.destroy(allocator, item.obj);
-            }
-        }
-        allocator.free(self.constants);
-        allocator.free(self.tokens);
-    }
-
-    pub fn print(code: *ByteCode, writer: anytype) void {
-        writer.print("\n==BYTECODE==\n", .{});
-        printInstructions(writer, code.instructions, code.constants);
-    }
-
-    pub fn printInstructions(writer: anytype, instructions: []const u8, constants: ?[]Value) void {
-        var i: usize = 0;
-        while (i < instructions.len) {
-            writer.print("{d:0>4} ", .{i});
-            const op = @enumFromInt(OpCode, instructions[i]);
-            writer.print("{s: <16} ", .{op.toString()});
-            i += 1;
-            switch (op) {
-                .jump, .jump_if_false, .set_global, .get_global, .list, .map, .set => {
-                    var dest = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
-                    writer.print("{d: >8}", .{dest});
-                    i += 2;
-                },
-                .get_local, .set_local, .get_free, .call, .loop => {
-                    var dest = std.mem.readIntSliceBig(u8, instructions[i..(i + 1)]);
-                    writer.print("{d: >8}", .{dest});
-                    i += 1;
-                },
-                .constant => {
-                    var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
-                    writer.print("{d: >8} ", .{index});
-                    i += 2;
-                    if (constants) |c| {
-                        var value = c[index];
-                        writer.print("  = ", .{});
-                        value.print(writer, c);
-                    }
-                },
-                .dialogue => {
-                    var has_speaker = instructions[i] == 1;
-                    var tag_count = instructions[i + 1];
-                    i += 2;
-                    writer.print("{: >8}", .{has_speaker});
-                    writer.print("{d: >4}", .{tag_count});
-                },
-                .string, .closure => {
-                    var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
-                    i += 2;
-                    writer.print("{d: >8}", .{index});
-                    i += 1;
-                    writer.print("  = ", .{});
-                    if (constants) |c| {
-                        var value = c[index];
-                        value.print(writer, c);
-                    }
-                },
-                else => {},
-            }
-            writer.print("\n", .{});
-        }
-    }
 };
 
 pub fn compileSource(allocator: std.mem.Allocator, source: []const u8, errors: *Errors) !ByteCode {
@@ -112,6 +43,11 @@ pub fn compileSource(allocator: std.mem.Allocator, source: []const u8, errors: *
     return try compiler.bytecode();
 }
 
+const JumpEntry = struct {
+    path: []const u8,
+    ip: OpCode.Size(.jump),
+};
+
 pub const Compiler = struct {
     allocator: std.mem.Allocator,
     builtins: Scope,
@@ -120,6 +56,10 @@ pub const Compiler = struct {
     scope: *Scope,
     speakers: std.StringHashMap(OpCode.Size(.constant)),
     chunk: *Chunk,
+
+    jump_table: std.StringHashMap(OpCode.Size(.jump)),
+    jump_log: std.ArrayList(JumpEntry),
+    named_scope_stack: std.ArrayList([]const u8),
 
     pub const Chunk = struct {
         instructions: std.ArrayList(u8),
@@ -160,6 +100,9 @@ pub const Compiler = struct {
             .errors = errors,
             .chunk = root_chunk,
             .scope = root_scope,
+            .jump_table = std.StringHashMap(OpCode.Size(.jump)).init(allocator),
+            .jump_log = std.ArrayList(JumpEntry).init(allocator),
+            .named_scope_stack = std.ArrayList([]const u8).init(allocator),
         };
     }
 
@@ -168,6 +111,20 @@ pub const Compiler = struct {
         for (self.builtins.symbols.values()) |s| {
             self.allocator.destroy(s);
         }
+        var keys = self.jump_table.keyIterator();
+        while (keys.next()) |ptr| {
+            self.allocator.free(ptr.*);
+        }
+        self.jump_table.deinit();
+        for (self.jump_log.items) |entry| {
+            self.allocator.free(entry.path);
+        }
+        self.jump_log.deinit();
+        for (self.named_scope_stack.items) |name| {
+            self.allocator.free(name);
+        }
+        self.named_scope_stack.clearAndFree();
+        self.named_scope_stack.deinit();
         self.speakers.deinit();
         self.builtins.symbols.deinit();
     }
@@ -187,6 +144,7 @@ pub const Compiler = struct {
         for (tree.root) |stmt| {
             try self.compileStatement(stmt);
         }
+        try self.replaceDiverts();
     }
 
     fn enterChunk(self: *Compiler) !void {
@@ -226,12 +184,12 @@ pub const Compiler = struct {
             .@"if" => |i| {
                 try self.compileExpression(i.condition);
                 try self.writeOp(.jump_if_false, token);
-                const falsePos = try self.writeInt(u16, std.math.maxInt(u16), token);
+                const falsePos = try self.writeInt(u16, JUMP_HOLDER, token);
                 try self.compileBlock(i.then_branch);
                 try self.removeLastPop();
 
                 try self.writeOp(.jump, token);
-                const jumpPos = try self.writeInt(u16, std.math.maxInt(u16), token);
+                const jumpPos = try self.writeInt(u16, JUMP_HOLDER, token);
                 try self.replaceValue(falsePos, u16, self.instructionPos());
 
                 if (i.else_branch == null) {
@@ -257,13 +215,12 @@ pub const Compiler = struct {
                 _ = try self.writeInt(OpCode.Size(.jump), CONTINUE_HOLDER, token);
             },
             .@"while" => |w| {
-                try self.enterScope(.loop);
+                try self.enterScope(if (self.scope.tag == .global) .global else .local);
 
                 const start = self.instructionPos();
                 try self.compileExpression(&w.condition);
                 try self.writeOp(.jump_if_false, token);
-                // temp garbage value
-                const temp_start = try self.writeInt(OpCode.Size(.jump_if_false), std.math.maxInt(u16), token);
+                const temp_start = try self.writeInt(OpCode.Size(.jump_if_false), JUMP_HOLDER, token);
 
                 try self.compileBlock(w.body);
                 try self.removeLastPop();
@@ -276,8 +233,7 @@ pub const Compiler = struct {
 
                 try replaceJumps(self.chunk.instructions.items[start..], BREAK_HOLDER, end);
                 try replaceJumps(self.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
-                const scope = try self.exitScope();
-                _ = try self.scope.free_symbols.appendSlice(scope.free_symbols);
+                _ = try self.exitScope();
             },
             .@"for" => |f| {
                 _ = f;
@@ -337,54 +293,104 @@ pub const Compiler = struct {
                     _ = try self.writeInt(size, @intCast(size, symbol.index), token);
                 }
             },
-            .bough => |b| {
-                var symbol = try self.currentScope().define(b.name);
+            .fork => |f| {
+                const start_pos = self.instructionPos();
+                if (f.name) |name| {
+                    try self.named_scope_stack.append(name);
+                    const full_name = try std.mem.concat(self.allocator, u8, self.named_scope_stack.items);
+                    try self.jump_table.putNoClobber(full_name, self.instructionPos());
+                }
+                try self.enterScope(.local);
+                try self.compileBlock(f.body);
+                _ = try self.exitScope();
+                if (f.name != null) {
+                    _ = self.named_scope_stack.pop();
+                }
 
-                try self.enterScope(.closure);
-                try self.enterChunk();
+                try self.writeOp(.fork, token);
+                const end_pos = self.instructionPos();
+                try replaceJumps(self.chunk.instructions.items[start_pos..], FORK_HOLDER, end_pos);
+            },
+            .choice => |c| {
+                try self.compileExpression(&c.text);
+                try self.writeOp(.choice, token);
+                const start_pos = try self.writeInt(OpCode.Size(.jump), CHOICE_HOLDER, token);
+
+                try self.writeOp(.jump, token);
+                const jump_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
+                try self.replaceValue(start_pos, OpCode.Size(.jump), self.instructionPos());
+
+                try self.enterScope(.local);
+                try self.compileBlock(c.body);
+                _ = try self.exitScope();
+                try self.writeOp(.jump, token);
+                _ = try self.writeInt(OpCode.Size(.jump), FORK_HOLDER, token);
+
+                try self.replaceValue(jump_pos, OpCode.Size(.jump), self.instructionPos());
+            },
+            .bough => |b| {
+                try self.writeOp(.jump, token);
+                const start_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
+
+                try self.named_scope_stack.append(b.name);
+                const full_name = try std.mem.concat(self.allocator, u8, self.named_scope_stack.items);
+                try self.jump_table.putNoClobber(full_name, self.instructionPos());
+                // var symbol = try self.currentScope().define(b.name);
+
+                try self.enterScope(if (self.scope.tag == .global) .global else .local);
+                // try self.enterChunk();
 
                 try self.compileBlock(b.body);
                 try self.removeLastPop();
-                try self.writeOp(.return_void, token);
+                try self.writeOp(.jump, token);
+                const jump_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
+                // try self.writeOp(.return_void, token);
 
-                var chunk = try self.exitChunk();
+                // var chunk = try self.exitChunk();
                 var scope = try self.exitScope();
                 defer self.allocator.free(scope.free_symbols);
-                for (scope.free_symbols) |s| {
-                    try self.loadSymbol(s, token);
-                }
-                const obj = try self.allocator.create(Value.Obj);
 
-                // TODO: use debug tokens
-                self.allocator.free(chunk.tokens);
+                const end = self.instructionPos();
 
-                obj.* = .{
-                    .data = .{
-                        .bough = .{
-                            .instructions = chunk.instructions,
-                            .locals_count = scope.locals_count,
-                        },
-                    },
-                };
-                const i = try self.addConstant(.{ .obj = obj });
-                try self.writeOp(.closure, token);
-                _ = try self.writeInt(OpCode.Size(.constant), i, token);
-                _ = try self.writeInt(u8, @intCast(u8, scope.free_symbols.len), token);
-                if (symbol.tag == .global) {
-                    try self.writeOp(.set_global, token);
-                    _ = try self.writeInt(OpCode.Size(.set_global), symbol.index, token);
-                } else {
-                    try self.writeOp(.set_local, token);
-                    const size = OpCode.Size(.set_local);
-                    _ = try self.writeInt(size, @intCast(size, symbol.index), token);
-                }
+                try self.replaceValue(start_pos, OpCode.Size(.jump), end);
+                try self.replaceValue(jump_pos, OpCode.Size(.jump), end + @sizeOf(OpCode.Size(.jump)) + 1);
+                _ = self.named_scope_stack.pop();
+                // for (scope.free_symbols) |s| {
+                //     try self.loadSymbol(s, token);
+                // }
+                // const obj = try self.allocator.create(Value.Obj);
+
+                // // TODO: use debug tokens
+                // self.allocator.free(chunk.tokens);
+
+                // obj.* = .{
+                //     .data = .{
+                //         .bough = .{
+                //             .instructions = chunk.instructions,
+                //             .locals_count = scope.locals_count,
+                //         },
+                //     },
+                // };
+                // const i = try self.addConstant(.{ .obj = obj });
+
+                // try self.writeOp(.closure, token);
+                // _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                // _ = try self.writeInt(u8, @intCast(u8, scope.free_symbols.len), token);
+                // if (symbol.tag == .global) {
+                //     try self.writeOp(.set_global, token);
+                //     _ = try self.writeInt(OpCode.Size(.set_global), symbol.index, token);
+                // } else {
+                //     try self.writeOp(.set_local, token);
+                //     const size = OpCode.Size(.set_local);
+                //     _ = try self.writeInt(size, @intCast(size, symbol.index), token);
+                // }
             },
-            .divert => |g| {
-                for (g) |id| {
-                    var symbol = try self.scope.resolve(id);
-                    try self.loadSymbol(symbol, token);
-                    try self.writeOp(.divert, token);
-                }
+            .divert => |d| {
+                const full_path_pos = try self.getFullDivertPath(d);
+
+                try self.writeOp(.jump, token);
+                try self.jump_log.append(.{ .path = full_path_pos, .ip = self.instructionPos() });
+                _ = try self.writeInt(OpCode.Size(.jump), DIVERT_HOLDER, token);
             },
             .return_expression => |r| {
                 try self.compileExpression(&r);
@@ -394,6 +400,29 @@ pub const Compiler = struct {
                 try self.writeOp(.return_void, token);
             },
             else => {},
+        }
+    }
+
+    fn getFullDivertPath(self: *Compiler, path: [][]const u8) ![]const u8 {
+        var result = std.ArrayList([]const u8).init(self.allocator);
+        defer result.deinit();
+        for (self.named_scope_stack.items) |scope| {
+            if (std.mem.eql(u8, scope, path[0])) break;
+            try result.append(scope);
+        }
+        try result.appendSlice(path);
+        return std.mem.concat(self.allocator, u8, result.items);
+    }
+
+    fn replaceDiverts(self: *Compiler) !void {
+        for (self.jump_log.items) |entry| {
+            const dest = self.jump_table.get(entry.path);
+            if (dest) |d| {
+                try self.replaceValue(entry.ip, OpCode.Size(.jump), d);
+            } else {
+                std.log.warn("Could not find divert: {s}", .{entry.path});
+                return error.SymbolNotFound;
+            }
         }
     }
 
@@ -429,42 +458,55 @@ pub const Compiler = struct {
                 }
                 try self.compileExpression(bin.left);
                 try self.compileExpression(bin.right);
+                if (bin.operator == .assign) {
+                    switch (bin.left.type) {
+                        .identifier => |id| {
+                            var symbol = try self.scope.resolve(id);
+                            try self.setSymbol(symbol, token);
+                            try self.loadSymbol(symbol, token);
+                            return;
+                        },
+                        .indexer => {},
+                        else => unreachable,
+                    }
+                }
+
                 const op: OpCode = switch (bin.operator) {
                     .add => .add,
                     .subtract => .subtract,
                     .multiply => .multiply,
                     .divide => .divide,
                     .modulus => .modulus,
+                    .assign_add => .add,
+                    .assign_subtract => .subtract,
+                    .assign_multiply => .multiply,
+                    .assign_divide => .divide,
+                    .assign_modulus => .modulus,
                     .equal => .equal,
                     .not_equal => .not_equal,
                     .greater_than => .greater_than,
                     .@"or" => .@"or",
                     .@"and" => .@"and",
-                    .assign => switch (bin.left.type) {
-                        .identifier => |id| blk: {
-                            var symbol = try self.scope.resolve(id);
-                            if (symbol) |s| {
-                                break :blk if (s.tag == .global) .set_global else .set_local;
-                            } else unreachable;
-                        },
-                        .indexer => .set_local,
-                        else => unreachable,
-                    },
                     else => {
                         return error.IllegalOperation;
                     },
                 };
                 try self.writeOp(op, token);
 
-                if (bin.operator == .assign) {
-                    var symbol = try self.scope.resolve(bin.left.type.identifier);
-                    if (symbol) |s| {
-                        if (s.tag == .global) {
-                            _ = try self.writeInt(OpCode.Size(.get_global), s.index, token);
-                        } else {
-                            _ = try self.writeInt(OpCode.Size(.get_local), @intCast(OpCode.Size(.get_local), s.index), token);
+                switch (bin.operator) {
+                    .assign_add, .assign_subtract, .assign_multiply, .assign_divide, .assign_modulus => {
+                        switch (bin.left.type) {
+                            .identifier => |id| {
+                                var symbol = try self.scope.resolve(id);
+                                try self.setSymbol(symbol, token);
+                                try self.loadSymbol(symbol, token);
+                                return;
+                            },
+                            .indexer => {},
+                            else => unreachable,
                         }
-                    }
+                    },
+                    else => {},
                 }
             },
             .number => |n| {
@@ -535,11 +577,11 @@ pub const Compiler = struct {
                 try self.compileExpression(i.condition);
                 try self.writeOp(.jump_if_false, token);
                 // temp garbage value
-                const pos = try self.writeInt(u16, std.math.maxInt(u16), token);
+                const pos = try self.writeInt(u16, JUMP_HOLDER, token);
                 try self.compileExpression(i.then_value);
 
                 try self.writeOp(.jump, token);
-                const nextPos = try self.writeInt(u16, std.math.maxInt(u16), token);
+                const nextPos = try self.writeInt(u16, JUMP_HOLDER, token);
                 try self.replaceValue(pos, u16, self.instructionPos());
 
                 try self.compileExpression(i.else_value);
@@ -562,6 +604,8 @@ pub const Compiler = struct {
                 }
 
                 var chunk = try self.exitChunk();
+                // TODO: use debug tokens
+                self.allocator.free(chunk.tokens);
                 const scope = try self.exitScope();
                 defer self.allocator.free(scope.free_symbols);
                 for (scope.free_symbols) |s| {
@@ -569,9 +613,6 @@ pub const Compiler = struct {
                 }
 
                 const obj = try self.allocator.create(Value.Obj);
-
-                // TODO: use debug tokens
-                self.allocator.free(chunk.tokens);
 
                 obj.* = .{
                     .data = .{
@@ -626,6 +667,28 @@ pub const Compiler = struct {
             },
             else => {},
         }
+    }
+
+    fn setSymbol(self: *Compiler, symbol: ?*Symbol, token: Token) !void {
+        if (symbol) |ptr| {
+            switch (ptr.tag) {
+                .global => {
+                    try self.writeOp(.set_global, token);
+                    _ = try self.writeInt(OpCode.Size(.set_global), ptr.index, token);
+                },
+                .free => {
+                    try self.writeOp(.set_free, token);
+                    const size = OpCode.Size(.set_free);
+                    _ = try self.writeInt(size, @intCast(size, ptr.index), token);
+                },
+                .builtin, .function => return CompilerError.IllegalOperation,
+                else => {
+                    try self.writeOp(.set_local, token);
+                    const size = OpCode.Size(.set_local);
+                    _ = try self.writeInt(size, @intCast(size, ptr.index), token);
+                },
+            }
+        } else return CompilerError.SymbolNotFound;
     }
 
     fn loadSymbol(self: *Compiler, symbol: ?*Symbol, token: Token) !void {
@@ -1270,7 +1333,7 @@ test "Locals" {
             .input =
             \\ || {
             \\     const num = 5
-            \\     return num       
+            \\     return num 
             \\ }
             ,
             .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 1, 0, @intFromEnum(OpCode.pop) },
@@ -1285,7 +1348,7 @@ test "Locals" {
             \\ || {
             \\    const a = 5
             \\    const b = 7
-            \\    return a + b       
+            \\    return a + b
             \\ }
             ,
             .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 2, 0, @intFromEnum(OpCode.pop) },
@@ -1469,7 +1532,7 @@ test "Closures" {
             \\        const b = 77 
             \\        return || {
             \\            const c = 88 
-            \\            return globalNum + a + b + c 
+            \\            return globalNum + a + b + c
             \\        }
             \\     } 
             \\ }

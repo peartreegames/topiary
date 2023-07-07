@@ -24,7 +24,7 @@ pub const Scope = struct {
         closure,
         function,
         free,
-        loop,
+        local,
     };
 
     pub fn create(allocator: std.mem.Allocator, parent: ?*Scope, tag: Tag) !*Scope {
@@ -93,7 +93,7 @@ pub const Scope = struct {
             symbol = try p.resolve(name);
             if (symbol == null) return null;
             if (symbol) |s| {
-                if (s.tag == .global or self.tag != .closure) return s;
+                if (s.tag == .global or self.tag == .local) return s;
                 var free = try self.defineFree(s);
                 return free;
             }

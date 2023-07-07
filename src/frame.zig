@@ -7,7 +7,7 @@ pub const Frame = struct {
     bp: usize,
 
     pub fn create(obj: *Obj, ip: usize, bp: usize) !Frame {
-        if (obj.data != .closure) {
+        if (obj.data != .closure and obj.data != .bough) {
             return error.InvalidType;
         }
         return .{
@@ -18,10 +18,6 @@ pub const Frame = struct {
     }
 
     pub fn instructions(self: *Frame) []const u8 {
-        return switch (self.cl.data.closure.data.*) {
-            .function => |f| f.instructions,
-            .bough => |b| b.instructions,
-            else => unreachable,
-        };
+        return self.cl.data.closure.data.function.instructions;
     }
 };

@@ -49,17 +49,13 @@ pub const Lexer = struct {
             '.' => if (self.peekChar() == '.') {
                 return self.readAndCreateToken(.dot_dot, 2);
             } else .dot,
-            '-' =>
-            // if (self.peekChar() == '=') {
-            //     return self.readAndCreateToken(.minus_equal, 2);
-            // } else
-            .minus,
+            '-' => if (self.peekChar() == '=') {
+                return self.readAndCreateToken(.minus_equal, 2);
+            } else .minus,
             '~' => .tilde,
-            '+' =>
-            // if (self.peekChar() == '=') {
-            //     return self.readAndCreateToken(.plus_equal, 2);
-            // } else
-            .plus,
+            '+' => if (self.peekChar() == '=') {
+                return self.readAndCreateToken(.plus_equal, 2);
+            } else .plus,
             ':' => .colon,
             '#' => {
                 var start = self.position + 1;
@@ -73,16 +69,12 @@ pub const Lexer = struct {
                 self.readChar();
                 return self.createToken(.hash, start);
             },
-            '*' =>
-            // if (self.peekChar() == '=') {
-            //     return self.readAndCreateToken(.star_equal, 2);
-            // } else
-            .star,
-            '%' =>
-            // if (self.peekChar() == '=') {
-            //     return self.readAndCreateToken(.percent_equal, 2);
-            // } else
-            .percent,
+            '*' => if (self.peekChar() == '=') {
+                return self.readAndCreateToken(.star_equal, 2);
+            } else .star,
+            '%' => if (self.peekChar() == '=') {
+                return self.readAndCreateToken(.percent_equal, 2);
+            } else .percent,
             '!' => if (self.peekChar() == '=') {
                 return self.readAndCreateToken(.bang_equal, 2);
             } else .bang,
@@ -99,11 +91,9 @@ pub const Lexer = struct {
             '>' => if (self.peekChar() == '=') {
                 return self.readAndCreateToken(.greater_equal, 2);
             } else .greater,
-            '/' =>
-            // if (self.peekChar() == '=') {
-            //     return self.readAndCreateToken(.slash_equal, 2);
-            // } else
-            if (self.peekChar() == '/') {
+            '/' => if (self.peekChar() == '=') {
+                return self.readAndCreateToken(.slash_equal, 2);
+            } else if (self.peekChar() == '/') {
                 var start = self.position;
                 self.readLine();
                 return .{ .token_type = .comment, .start = start + 2, .end = self.position, .line = self.line, .column = self.column };
