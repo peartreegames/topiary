@@ -12,6 +12,7 @@ const Symbol = @import("./scope.zig").Symbol;
 const DebugToken = @import("./debug.zig").DebugToken;
 const builtins = @import("./builtins.zig").builtins;
 const ByteCode = @import("./bytecode.zig").ByteCode;
+const JumpTree = @import("./jump-tree.zig").JumpTree;
 
 const testing = std.testing;
 const BREAK_HOLDER = 9000;
@@ -43,11 +44,6 @@ pub fn compileSource(allocator: std.mem.Allocator, source: []const u8, errors: *
     return try compiler.bytecode();
 }
 
-const JumpEntry = struct {
-    path: []const u8,
-    ip: OpCode.Size(.jump),
-};
-
 pub const Compiler = struct {
     allocator: std.mem.Allocator,
     builtins: Scope,
@@ -57,9 +53,9 @@ pub const Compiler = struct {
     speakers: std.StringHashMap(OpCode.Size(.constant)),
     chunk: *Chunk,
 
-    jump_table: std.StringHashMap(OpCode.Size(.jump)),
-    jump_log: std.ArrayList(JumpEntry),
-    named_scope_stack: std.ArrayList([]const u8),
+    jump_tree: JumpTree,
+    jump_node: *JumpTree.Node,
+    divert_log: std.ArrayList(JumpTree.Entry),
 
     pub const Chunk = struct {
         instructions: std.ArrayList(u8),
@@ -100,31 +96,19 @@ pub const Compiler = struct {
             .errors = errors,
             .chunk = root_chunk,
             .scope = root_scope,
-            .jump_table = std.StringHashMap(OpCode.Size(.jump)).init(allocator),
-            .jump_log = std.ArrayList(JumpEntry).init(allocator),
-            .named_scope_stack = std.ArrayList([]const u8).init(allocator),
+            .jump_tree = JumpTree.init(allocator),
+            .jump_node = undefined,
+            .divert_log = std.ArrayList(JumpTree.Entry).init(allocator),
         };
     }
 
     pub fn deinit(self: *Compiler) void {
+        self.jump_tree.deinit();
         self.constants.deinit();
         for (self.builtins.symbols.values()) |s| {
             self.allocator.destroy(s);
         }
-        var keys = self.jump_table.keyIterator();
-        while (keys.next()) |ptr| {
-            self.allocator.free(ptr.*);
-        }
-        self.jump_table.deinit();
-        for (self.jump_log.items) |entry| {
-            self.allocator.free(entry.path);
-        }
-        self.jump_log.deinit();
-        for (self.named_scope_stack.items) |name| {
-            self.allocator.free(name);
-        }
-        self.named_scope_stack.clearAndFree();
-        self.named_scope_stack.deinit();
+        self.divert_log.deinit();
         self.speakers.deinit();
         self.builtins.symbols.deinit();
     }
@@ -141,9 +125,17 @@ pub const Compiler = struct {
         inline for (builtins) |builtin| {
             _ = try self.builtins.define(builtin.name);
         }
+
+        self.jump_tree.root = try JumpTree.Node.create(self.allocator, "root", null);
+        self.jump_node = self.jump_tree.root;
+        for (tree.root) |stmt| {
+            try self.precompileScopes(stmt, self.jump_tree.root);
+        }
+
         for (tree.root) |stmt| {
             try self.compileStatement(stmt);
         }
+
         try self.replaceDiverts();
     }
 
@@ -176,6 +168,23 @@ pub const Compiler = struct {
         self.scope = old_scope.parent orelse return CompilerError.OutOfScope;
         old_scope.destroy();
         return result;
+    }
+
+    pub fn precompileScopes(self: *Compiler, stmt: ast.Statement, node: *JumpTree.Node) CompilerError!void {
+        switch (stmt.type) {
+            .bough => |b| {
+                var bough_node = try JumpTree.Node.create(self.allocator, b.name, node);
+                for (b.body) |s| try self.precompileScopes(s, bough_node);
+                try node.children.append(bough_node);
+            },
+            .fork => |f| {
+                if (f.name) |name| {
+                    var fork_node = try JumpTree.Node.create(self.allocator, name, node);
+                    try node.children.append(fork_node);
+                }
+            },
+            else => {},
+        }
     }
 
     pub fn compileStatement(self: *Compiler, stmt: ast.Statement) CompilerError!void {
@@ -296,15 +305,15 @@ pub const Compiler = struct {
             .fork => |f| {
                 const start_pos = self.instructionPos();
                 if (f.name) |name| {
-                    try self.named_scope_stack.append(name);
-                    const full_name = try std.mem.concat(self.allocator, u8, self.named_scope_stack.items);
-                    try self.jump_table.putNoClobber(full_name, self.instructionPos());
+                    self.jump_node = try self.jump_node.getChild(name);
+                    self.jump_node.*.ip = self.instructionPos();
                 }
                 try self.enterScope(.local);
                 try self.compileBlock(f.body);
+                // try self.writeOp(.fin, token);
                 _ = try self.exitScope();
                 if (f.name != null) {
-                    _ = self.named_scope_stack.pop();
+                    self.jump_node = self.jump_node.parent.?;
                 }
 
                 try self.writeOp(.fork, token);
@@ -322,6 +331,8 @@ pub const Compiler = struct {
 
                 try self.enterScope(.local);
                 try self.compileBlock(c.body);
+                try self.removeLastPop();
+                try self.writeOp(.fin, token);
                 _ = try self.exitScope();
                 try self.writeOp(.jump, token);
                 _ = try self.writeInt(OpCode.Size(.jump), FORK_HOLDER, token);
@@ -329,12 +340,12 @@ pub const Compiler = struct {
                 try self.replaceValue(jump_pos, OpCode.Size(.jump), self.instructionPos());
             },
             .bough => |b| {
+                // skip over bough when running through instructions
                 try self.writeOp(.jump, token);
                 const start_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
 
-                try self.named_scope_stack.append(b.name);
-                const full_name = try std.mem.concat(self.allocator, u8, self.named_scope_stack.items);
-                try self.jump_table.putNoClobber(full_name, self.instructionPos());
+                self.jump_node = try self.jump_node.getChild(b.name);
+                self.jump_node.*.ip = self.instructionPos();
                 // var symbol = try self.currentScope().define(b.name);
 
                 try self.enterScope(if (self.scope.tag == .global) .global else .local);
@@ -342,19 +353,18 @@ pub const Compiler = struct {
 
                 try self.compileBlock(b.body);
                 try self.removeLastPop();
-                try self.writeOp(.jump, token);
-                const jump_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
+                try self.writeOp(.fin, token);
                 // try self.writeOp(.return_void, token);
 
                 // var chunk = try self.exitChunk();
                 var scope = try self.exitScope();
+                self.jump_node = self.jump_node.parent.?;
                 defer self.allocator.free(scope.free_symbols);
 
                 const end = self.instructionPos();
 
                 try self.replaceValue(start_pos, OpCode.Size(.jump), end);
-                try self.replaceValue(jump_pos, OpCode.Size(.jump), end + @sizeOf(OpCode.Size(.jump)) + 1);
-                _ = self.named_scope_stack.pop();
+                // try self.replaceValue(jump_pos, OpCode.Size(.jump), end + @sizeOf(OpCode.Size(.jump)) + 1);
                 // for (scope.free_symbols) |s| {
                 //     try self.loadSymbol(s, token);
                 // }
@@ -386,10 +396,9 @@ pub const Compiler = struct {
                 // }
             },
             .divert => |d| {
-                const full_path_pos = try self.getFullDivertPath(d);
-
+                var node = try self.getDivertNode(d);
                 try self.writeOp(.jump, token);
-                try self.jump_log.append(.{ .path = full_path_pos, .ip = self.instructionPos() });
+                try self.divert_log.append(.{ .node = node, .jump_ip = self.instructionPos() });
                 _ = try self.writeInt(OpCode.Size(.jump), DIVERT_HOLDER, token);
             },
             .return_expression => |r| {
@@ -403,26 +412,28 @@ pub const Compiler = struct {
         }
     }
 
-    fn getFullDivertPath(self: *Compiler, path: [][]const u8) ![]const u8 {
-        var result = std.ArrayList([]const u8).init(self.allocator);
-        defer result.deinit();
-        for (self.named_scope_stack.items) |scope| {
-            if (std.mem.eql(u8, scope, path[0])) break;
-            try result.append(scope);
+    fn getDivertNode(self: *Compiler, path: [][]const u8) !*JumpTree.Node {
+        var node = self.jump_node;
+        // traverse up the tree to find the start of the path
+        while (!std.mem.eql(u8, node.name, "root")) : (node = node.parent.?) {
+            if (std.mem.eql(u8, node.name, path[0])) {
+                node = node.parent.?;
+                break;
+            }
+            if (node.contains(path[0])) break;
         }
-        try result.appendSlice(path);
-        return std.mem.concat(self.allocator, u8, result.items);
+
+        // traverse back down to get the leaf node
+        for (path) |name| {
+            node = try node.getChild(name);
+        }
+        return node;
     }
 
     fn replaceDiverts(self: *Compiler) !void {
-        for (self.jump_log.items) |entry| {
-            const dest = self.jump_table.get(entry.path);
-            if (dest) |d| {
-                try self.replaceValue(entry.ip, OpCode.Size(.jump), d);
-            } else {
-                std.log.warn("Could not find divert: {s}", .{entry.path});
-                return error.SymbolNotFound;
-            }
+        for (self.divert_log.items) |entry| {
+            const dest = entry.node.ip;
+            try self.replaceValue(entry.jump_ip, OpCode.Size(.jump), dest);
         }
     }
 

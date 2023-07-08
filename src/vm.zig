@@ -461,6 +461,7 @@ pub const Vm = struct {
                         .ip = ip,
                     });
                 },
+                .fin => break,
             }
         }
     }
@@ -1099,6 +1100,33 @@ test "Boughs" {
         \\ }
         \\ => START
         },
+        .{ .input = 
+        \\ === START {
+        \\    :speaker: "Text goes here"
+        \\    === INNER {
+        \\        :speaker: "Inner text here"
+        \\    }
+        \\    :speaker: "More goes here"
+        \\    => INNER
+        \\    :speaker: "Final goes here" // should not be printed
+        \\ }
+        \\ => START
+        },
+        .{ .input = 
+        \\ === START {
+        \\    :speaker: "Text goes here"
+        \\    === OUTER {
+        \\        :speaker: "Outer text here doesn't happen"
+        \\        === INNER {
+        \\            :speaker: "Inner and final text here"
+        \\        }
+        \\    }
+        \\    :speaker: "More goes here"
+        \\    => OUTER.INNER
+        \\    :speaker: "Text doesn't appear here" // should not be printed
+        \\ }
+        \\ => START
+        },
     };
 
     inline for (test_cases) |case| {
@@ -1133,17 +1161,22 @@ test "Forks" {
             .input =
             \\ === START {
             \\     :speaker: "Question"
+            \\    var count = 0
             \\    fork NAMED {
             \\        ~ "Answer one" {
             \\            :speaker: "You chose one"
-            \\        }
-            \\        ~ "Answer two" {      
-            \\            :speaker: "You chose two"
-            \\            => NAMED
+            \\            if count < 5 {
+            \\                count += 1
+            \\                => NAMED
+            \\            }
+            \\            => DONE
             \\        }
             \\    }
             \\ }
             \\ => START
+            \\ === DONE {
+            \\     :speaker: "Done"
+            \\ }
             ,
         },
     };
@@ -1151,7 +1184,7 @@ test "Forks" {
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        vm.debug = true;
         std.debug.print("\n======\n", .{});
         defer vm.deinit();
         try vm.interpretSource(case.input);

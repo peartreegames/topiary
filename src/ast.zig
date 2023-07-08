@@ -8,7 +8,6 @@ pub const Tree = struct {
     allocator: Allocator,
 
     root: []const Statement,
-    // imports: ?[]const *Tree,
 
     pub fn deinit(self: *const Tree) void {
         self.arena.promote(self.allocator).deinit();

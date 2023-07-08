@@ -51,6 +51,7 @@ pub const OpCode = enum(u8) {
 
     return_void,
     return_value,
+    fin,
 
     pub fn toString(self: OpCode) []const u8 {
         return switch (self) {
@@ -93,6 +94,7 @@ pub const OpCode = enum(u8) {
             .choice => "OP_CHOICE",
             .return_void => "OP_RETURN_VOID",
             .return_value => "OP_RETURN_VALUE",
+            .fin => "OP_FIN",
         };
     }
 
