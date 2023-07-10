@@ -135,6 +135,7 @@ pub const Parser = struct {
             .@"extern", .@"var", .@"const" => try self.varDeclaration(),
             .bough => try self.boughStatement(),
             .divert => try self.divertStatement(),
+            .colon => try self.dialogueStatement(),
             .tilde => try self.choiceStatement(),
             .fork => try self.forkStatement(),
             .@"for" => try self.forStatement(),
@@ -319,7 +320,6 @@ pub const Parser = struct {
     fn expression(self: *Parser, prec: Precedence) Error!Expression {
         var start = self.current_token;
         var left: Expression = switch (self.current_token.token_type) {
-            .colon => try self.dialogueExpression(),
             .identifier => try self.identifierExpression(),
             .number => blk: {
                 const string_number = self.source[self.current_token.start..self.current_token.end];
@@ -727,7 +727,7 @@ pub const Parser = struct {
         };
     }
 
-    fn dialogueExpression(self: *Parser) Error!Expression {
+    fn dialogueStatement(self: *Parser) Error!Statement {
         const start_token = self.current_token;
         self.next();
         var speaker: ?[]const u8 = null;
@@ -1436,7 +1436,7 @@ test "Parse Bough" {
     const bough = tree.root[0].type.bough;
     try testing.expectEqualStrings(bough.name, "BOUGH");
 
-    const line = bough.body[0].type.expression.type.dialogue;
+    const line = bough.body[0].type.dialogue;
     try testing.expectEqualStrings("Speaker", line.speaker.?);
     try testing.expectEqualStrings("Text goes here", line.content.type.string.value);
     try testing.expectEqualStrings("tagline", line.tags[0]);
@@ -1458,7 +1458,7 @@ test "Parse No Speaker" {
         return err;
     };
     defer tree.deinit();
-    const line = tree.root[0].type.bough.body[0].type.expression.type.dialogue;
+    const line = tree.root[0].type.bough.body[0].type.dialogue;
     try testing.expect(line.speaker == null);
     try testing.expectEqualStrings("Text goes here", line.content.type.string.value);
 }
@@ -1506,7 +1506,7 @@ test "Parse Forks" {
 
     var choice = fork.body[0].type.choice;
     try testing.expectEqualStrings("choice 1", choice.text.type.string.value);
-    var line = choice.body[0].type.expression.type.dialogue;
+    var line = choice.body[0].type.dialogue;
     try testing.expectEqualStrings("Other", line.speaker.?);
     try testing.expectEqualStrings("Response", line.content.type.string.value);
 
@@ -1529,7 +1529,7 @@ test "Parse Inline Code" {
         return err;
     };
     defer tree.deinit();
-    const dialogue = tree.root[0].type.bough.body[0].type.expression.type.dialogue;
+    const dialogue = tree.root[0].type.bough.body[0].type.dialogue;
     const string = dialogue.content.type.string;
     try testing.expectEqualStrings("sayHello", string.expressions[0].type.call.target.type.identifier);
     try testing.expectEqualStrings("{}, how are you?", string.value);

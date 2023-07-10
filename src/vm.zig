@@ -48,7 +48,7 @@ const Choice = struct {
 pub const Vm = struct {
     allocator: std.mem.Allocator,
     frames: Stack(Frame),
-    errors: Errors,
+    err: Errors,
     gc: Gc,
     globals: std.ArrayList(Value),
     stack: Stack(Value),
@@ -75,7 +75,7 @@ pub const Vm = struct {
             return error.RuntimeError;
         return .{
             .allocator = allocator,
-            .errors = Errors.init(allocator),
+            .err = Errors.init(allocator),
             .frames = try Stack(Frame).init(allocator, frame_size),
             .globals = try std.ArrayList(Value).initCapacity(allocator, 1024),
             .gc = Gc.init(allocator),
@@ -91,7 +91,7 @@ pub const Vm = struct {
         self.stack.deinit();
         self.globals.deinit();
         self.frames.deinit();
-        self.errors.deinit();
+        self.err.deinit();
         self.gc.deinit();
         self.bytecode.free(self.allocator);
     }
@@ -145,8 +145,8 @@ pub const Vm = struct {
     }
 
     pub fn interpretSource(self: *Vm, source: []const u8) !void {
-        var bytecode = compiler.compileSource(self.allocator, source, &self.errors) catch |err| {
-            try self.errors.write(source, std.io.getStdErr().writer());
+        var bytecode = compiler.compileSource(self.allocator, source, &self.err) catch |err| {
+            try self.err.write(source, std.io.getStdErr().writer());
             return err;
         };
         if (self.debug) {
@@ -157,7 +157,7 @@ pub const Vm = struct {
     }
 
     fn fail(self: *Vm, comptime msg: []const u8, token: Token, args: anytype) !void {
-        try self.errors.add(msg, token, .err, args);
+        try self.err.add(msg, token, .err, args);
         return Error.RuntimeError;
     }
 
@@ -980,20 +980,23 @@ test "Function Arguments" {
 }
 
 test "Builtin Functions" {
-    const test_cases = .{ .{
-        .input = "rnd(1, 10)",
-        .type = f32,
-    }, .{
-        .input = "rnd01()",
-        .type = f32,
-    } };
+    const test_cases = .{
+        .{
+            .input = "rnd(1, 10)",
+            .type = f32,
+        },
+        .{
+            .input = "rnd01()",
+            .type = f32,
+        },
+    };
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator, TestRunner);
         // vm.debug = true;
         defer vm.deinit();
         vm.interpretSource(case.input) catch |err| {
-            try vm.errors.write(case.input, std.io.getStdErr().writer());
+            try vm.err.write(case.input, std.io.getStdErr().writer());
             return err;
         };
         const value = vm.stack.previous();

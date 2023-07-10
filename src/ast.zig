@@ -27,11 +27,6 @@ pub const Expression = struct {
     type: ExpressionValue,
 
     pub const ExpressionValue = union(enum) {
-        dialogue: struct {
-            speaker: ?[]const u8,
-            content: *Expression,
-            tags: [][]const u8,
-        },
         indexer: struct {
             target: *Expression,
             index: *Expression,
@@ -138,6 +133,11 @@ pub const Statement = struct {
         choice: struct {
             text: Expression,
             body: []const Statement,
+        },
+        dialogue: struct {
+            speaker: ?[]const u8,
+            content: *Expression,
+            tags: [][]const u8,
         },
         @"enum": struct {
             name: []const u8,

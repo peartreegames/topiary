@@ -407,17 +407,13 @@ pub const Compiler = struct {
 
                 self.jump_node = try self.jump_node.getChild(b.name);
                 self.jump_node.*.ip = self.instructionPos();
-                // var symbol = try self.currentScope().define(b.name);
 
                 try self.enterScope(if (self.scope.tag == .global) .global else .local);
-                // try self.enterChunk();
 
                 try self.compileBlock(b.body);
                 try self.removeLast(.pop);
                 try self.writeOp(.fin, token);
-                // try self.writeOp(.return_void, token);
 
-                // var chunk = try self.exitChunk();
                 var scope = try self.exitScope();
                 self.jump_node = self.jump_node.parent.?;
                 defer self.allocator.free(scope.free_symbols);
@@ -425,36 +421,16 @@ pub const Compiler = struct {
                 const end = self.instructionPos();
 
                 try self.replaceValue(start_pos, OpCode.Size(.jump), end);
-                // try self.replaceValue(jump_pos, OpCode.Size(.jump), end + @sizeOf(OpCode.Size(.jump)) + 1);
-                // for (scope.free_symbols) |s| {
-                //     try self.loadSymbol(s, token);
-                // }
-                // const obj = try self.allocator.create(Value.Obj);
-
-                // // TODO: use debug tokens
-                // self.allocator.free(chunk.tokens);
-
-                // obj.* = .{
-                //     .data = .{
-                //         .bough = .{
-                //             .instructions = chunk.instructions,
-                //             .locals_count = scope.locals_count,
-                //         },
-                //     },
-                // };
-                // const i = try self.addConstant(.{ .obj = obj });
-
-                // try self.writeOp(.closure, token);
-                // _ = try self.writeInt(OpCode.Size(.constant), i, token);
-                // _ = try self.writeInt(u8, @intCast(u8, scope.free_symbols.len), token);
-                // if (symbol.tag == .global) {
-                //     try self.writeOp(.set_global, token);
-                //     _ = try self.writeInt(OpCode.Size(.set_global), symbol.index, token);
-                // } else {
-                //     try self.writeOp(.set_local, token);
-                //     const size = OpCode.Size(.set_local);
-                //     _ = try self.writeInt(size, @intCast(size, symbol.index), token);
-                // }
+            },
+            .dialogue => |d| {
+                try self.compileExpression(d.content);
+                if (d.speaker) |speaker| {
+                    try self.getOrSetIdentifierConstant(speaker, token);
+                }
+                try self.writeOp(.dialogue, d.content.token);
+                var has_speaker_value = if (d.speaker == null) @as(u8, 0) else @as(u8, 1);
+                _ = try self.writeInt(u8, has_speaker_value, token);
+                _ = try self.writeInt(u8, @intCast(u8, d.tags.len), token);
             },
             .divert => |d| {
                 var node = try self.getDivertNode(d);
@@ -734,16 +710,6 @@ pub const Compiler = struct {
                 const size = OpCode.Size(.call);
                 std.debug.assert(c.arguments.len < std.math.maxInt(size));
                 _ = try self.writeInt(size, @intCast(size, c.arguments.len), token);
-            },
-            .dialogue => |d| {
-                try self.compileExpression(d.content);
-                if (d.speaker) |speaker| {
-                    try self.getOrSetIdentifierConstant(speaker, token);
-                }
-                try self.writeOp(.dialogue, d.content.token);
-                var has_speaker_value = if (d.speaker == null) @as(u8, 0) else @as(u8, 1);
-                _ = try self.writeInt(u8, has_speaker_value, token);
-                _ = try self.writeInt(u8, @intCast(u8, d.tags.len), token);
             },
             else => {},
         }

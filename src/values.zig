@@ -285,18 +285,17 @@ pub const Value = union(Type) {
                             }
                             return true;
                         },
+                        // .map => |m| {
+                        //     const map_b = b.map;
+                        //     if (m.items().len != map_b.items().len) return false;
+                        //     for (a.items(), 0..) |entry, i| {
+                        //         if (entry.hash != map_b.items()[i].hash) return false;
+                        //     }
+                        //     return true;
+                        // },
                         else => return false,
                     };
                 },
-                // .map => |m| {
-                //     const map_b = b.map;
-
-                //     if (m.items().len != map_b.items().len) return false;
-                //     for (a.items(), 0..) |entry, i| {
-                //         if (entry.hash != map_b.items()[i].hash) return false;
-                //     }
-                //     return true;
-                // },
                 .range => |r| {
                     const range_b = b.range;
                     return r.start == range_b.start and r.end == range_b.end;
