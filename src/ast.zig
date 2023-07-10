@@ -48,10 +48,10 @@ pub const Expression = struct {
             value: []const u8,
             expressions: []const Expression,
         },
-        @"enum": []const Expression, // []identifier
-        @"struct": struct {
+        class: struct {
             name: []const u8,
-            assignments: []const Expression,
+            field_names: [][]const u8,
+            fields: []const Expression,
         },
         function: struct {
             name: ?[]const u8 = null,
@@ -168,8 +168,9 @@ pub const Statement = struct {
         divert: [][]const u8,
         return_expression: Expression,
         return_void: void,
-        @"struct": struct {
+        class: struct {
             name: []const u8,
+            field_names: [][]const u8,
             fields: []const Expression,
         },
         variable: struct {

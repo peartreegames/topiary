@@ -37,7 +37,7 @@ pub const ByteCode = struct {
                     writer.print("{d: >8}", .{dest});
                     i += 2;
                 },
-                .get_local, .set_local, .get_free, .set_free, .call => {
+                .get_local, .set_local, .get_free, .set_free, .call, .class, .instance, .get_builtin => {
                     var dest = std.mem.readIntSliceBig(u8, instructions[i..(i + 1)]);
                     writer.print("{d: >8}", .{dest});
                     i += 1;

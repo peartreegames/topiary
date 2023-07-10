@@ -32,6 +32,8 @@ pub const OpCode = enum(u8) {
     get_local,
     set_local,
 
+    set_property,
+
     get_builtin,
     get_free,
     set_free,
@@ -40,6 +42,8 @@ pub const OpCode = enum(u8) {
     list,
     map,
     set,
+    class,
+    instance,
 
     index,
     call,
@@ -78,6 +82,7 @@ pub const OpCode = enum(u8) {
             .set_global => "OP_SET_GLOBAL",
             .get_local => "OP_GET_LOCAL",
             .set_local => "OP_SET_LOCAL",
+            .set_property => "OP_SET_PROPERTY",
             .get_builtin => "OP_GET_BUILTIN",
             .get_free => "OP_GET_FREE",
             .set_free => "OP_SET_FREE",
@@ -85,6 +90,8 @@ pub const OpCode = enum(u8) {
             .string => "OP_STRING",
             .map => "OP_MAP",
             .set => "OP_SET",
+            .class => "OP_CLASS",
+            .instance => "OP_INSTANCE",
             .index => "OP_INDEX",
             .call => "OP_CALL",
             .closure => "OP_CLOSURE",
@@ -105,7 +112,7 @@ pub const OpCode = enum(u8) {
             .jump, .jump_if_false => u16,
             .set_global, .get_global, .choice => u16,
             .list, .map, .set => u16,
-            .get_local, .set_local, .get_builtin, .get_free, .set_free, .call => u8,
+            .get_local, .set_local, .get_builtin, .get_free, .set_free, .call, .class, .instance => u8,
             .string, .closure => u24, // u16 for constant location, u8 for expressions count
             else => void,
         };

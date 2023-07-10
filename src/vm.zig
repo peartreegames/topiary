@@ -9,6 +9,7 @@ const Stack = @import("./stack.zig").Stack;
 const Gc = @import("./gc.zig").Gc;
 const Token = @import("./token.zig").Token;
 const Frame = @import("./frame.zig").Frame;
+const Class = @import("./class.zig").Class;
 const builtins = @import("./builtins.zig").builtins;
 const Rnd = @import("./builtins.zig").Rnd;
 const DebugToken = @import("./debug.zig").DebugToken;
@@ -262,6 +263,16 @@ pub const Vm = struct {
                     var frame = self.currentFrame();
                     try self.push(self.stack.items[frame.bp + index]);
                 },
+                .set_property => {
+                    var new_value = self.pop();
+                    var field_name_value = self.pop();
+                    var instance_value = self.pop();
+
+                    var field_name = field_name_value.obj.data.string;
+                    var instance = instance_value.obj.data.instance;
+                    if (!instance.fields.contains(field_name)) return error.RuntimeError;
+                    try instance.fields.put(field_name, new_value);
+                },
                 .get_builtin => {
                     const index = self.readInt(OpCode.Size(.get_builtin));
                     var value = builtins[index].value;
@@ -313,7 +324,7 @@ pub const Vm = struct {
                     try self.pushAlloc(.{ .string = try self.allocator.dupe(u8, fbs.getWritten()) });
                 },
                 .list => {
-                    var count = self.readInt(u16);
+                    var count = self.readInt(OpCode.Size(.list));
                     var list = try std.ArrayList(Value).initCapacity(self.allocator, count);
                     while (count > 0) : (count -= 1) {
                         try list.append(self.pop());
@@ -322,7 +333,7 @@ pub const Vm = struct {
                     try self.pushAlloc(.{ .list = list });
                 },
                 .map => {
-                    var count = self.readInt(u16);
+                    var count = self.readInt(OpCode.Size(.map));
                     var map = Value.Obj.MapType.initContext(self.allocator, adapter);
                     while (count > 0) : (count -= 1) {
                         const value = self.pop();
@@ -333,13 +344,52 @@ pub const Vm = struct {
                     try self.pushAlloc(.{ .map = map });
                 },
                 .set => {
-                    var count = self.readInt(u16);
+                    var count = self.readInt(OpCode.Size(.set));
                     var set = Value.Obj.SetType.initContext(self.allocator, adapter);
                     while (count > 0) : (count -= 1) {
                         try set.put(self.pop(), {});
                     }
                     set.sort(adapter);
                     try self.pushAlloc(.{ .set = set });
+                },
+                .class => {
+                    var value = self.pop();
+                    var count = self.readInt(OpCode.Size(.class));
+                    var fields = std.ArrayList(Class.Field).init(self.allocator);
+                    errdefer fields.deinit();
+                    while (count > 0) : (count -= 1) {
+                        var name = self.pop();
+                        var str_name = name.obj.data.string;
+                        var field = self.pop();
+                        try fields.append(.{
+                            .name = str_name,
+                            .value = field,
+                        });
+                    }
+
+                    std.mem.reverse(Class.Field, fields.items);
+                    var class = try Class.init(self.allocator, value.obj.data.string, try fields.toOwnedSlice());
+                    try self.pushAlloc(.{ .class = class });
+                },
+                .instance => {
+                    var value = self.pop();
+                    var class = value.obj.data.class;
+
+                    var count = self.readInt(OpCode.Size(.class));
+                    var fields = std.ArrayList(Class.Field).init(self.allocator);
+                    defer fields.deinit();
+                    while (count > 0) : (count -= 1) {
+                        var name = self.pop();
+                        var str_name = name.obj.data.string;
+                        var field = self.pop();
+                        try fields.append(.{
+                            .name = str_name,
+                            .value = field,
+                        });
+                    }
+                    std.mem.reverse(Class.Field, fields.items);
+                    var instance = try class.createInstance(try fields.toOwnedSlice());
+                    try self.pushAlloc(.{ .instance = instance });
                 },
                 .index => {
                     const index = self.pop();
@@ -357,6 +407,11 @@ pub const Vm = struct {
                             if (m.get(index)) |v| {
                                 try self.push(v);
                             } else try self.push(values.Nil);
+                        },
+                        .instance => |i| {
+                            if (i.fields.get(index.obj.data.string)) |field| {
+                                try self.push(field);
+                            } else return error.RuntimeError;
                         },
                         else => unreachable,
                     }
@@ -1057,6 +1112,46 @@ test "Loops" {
     }
 }
 
+test "Classes" {
+    const input =
+        \\ class Test {
+        \\    value = 0        
+        \\ }
+    ;
+    errdefer std.log.warn("\n======\n{s}\n======\n", .{input});
+    var vm = try Vm.init(testing.allocator, TestRunner);
+    // vm.debug = true;
+    std.debug.print("\n======\n", .{});
+    defer vm.deinit();
+    try vm.interpretSource(input);
+    var value = vm.stack.previous();
+    try testing.expect(value.obj.data == .class);
+    try testing.expectEqualStrings("Test", value.obj.data.class.name);
+}
+
+test "Instance" {
+    const input =
+        \\ class Test {
+        \\    value = 0        
+        \\ }
+        \\ const test = new Test{}
+        \\ print(test)
+        \\ print(test.value)
+        \\ test.value = 5
+        \\ print(test.value)
+    ;
+    errdefer std.log.warn("\n======\n{s}\n======\n", .{input});
+    var vm = try Vm.init(testing.allocator, TestRunner);
+    vm.debug = true;
+    std.debug.print("\n======\n", .{});
+    try vm.interpretSource(input);
+    defer vm.deinit();
+    // var value = vm.stack.previous();
+    // _ = value;
+    // try testing.expect(value.obj.data == .instance);
+    // try testing.expect(value.obj.data.instance.fields.get("value").?.number == 0);
+}
+
 test "Boughs" {
     const test_cases = .{
         .{ .input = 
@@ -1184,7 +1279,7 @@ test "Forks" {
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator, TestRunner);
-        vm.debug = true;
+        // vm.debug = true;
         std.debug.print("\n======\n", .{});
         defer vm.deinit();
         try vm.interpretSource(case.input);

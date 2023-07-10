@@ -130,7 +130,7 @@ pub const Parser = struct {
 
     fn statement(self: *Parser) Error!Statement {
         return switch (self.current_token.token_type) {
-            .@"struct" => try self.structDeclaration(),
+            .class => try self.classDeclaration(),
             .@"enum" => try self.enumDeclaration(),
             .@"extern", .@"var", .@"const" => try self.varDeclaration(),
             .bough => try self.boughStatement(),
@@ -160,26 +160,33 @@ pub const Parser = struct {
         };
     }
 
-    fn structDeclaration(self: *Parser) Error!Statement {
+    fn classDeclaration(self: *Parser) Error!Statement {
         var start = self.current_token;
         self.next();
         var name = try self.consumeIdentifier();
         try self.expectCurrent(.left_brace);
         self.next();
 
+        var field_names = std.ArrayList([]const u8).init(self.allocator);
         var fields = std.ArrayList(Expression).init(self.allocator);
+        errdefer field_names.deinit();
         errdefer fields.deinit();
         while (!self.currentIs(.right_brace)) {
+            try field_names.append(try self.consumeIdentifier());
+            try self.expectCurrent(.equal);
+            self.next();
             try fields.append(try self.expression(.lowest));
             self.next();
             if (self.currentIs(.comma)) self.next();
         }
         try self.expectCurrent(.right_brace);
+        if (field_names.items.len != fields.items.len) return self.fail("Missing field assignment value", self.current_token, .{});
         return .{
             .token = start,
             .type = .{
-                .@"struct" = .{
+                .class = .{
                     .name = name,
+                    .field_names = try field_names.toOwnedSlice(),
                     .fields = try fields.toOwnedSlice(),
                 },
             },
@@ -195,7 +202,8 @@ pub const Parser = struct {
         var values = std.ArrayList([]const u8).init(self.allocator);
         errdefer values.deinit();
         while (!self.currentIs(.right_brace)) {
-            try values.append(try self.consumeIdentifier());
+            try values.append(try self.getStringValue());
+            self.next();
             if (self.currentIs(.comma)) self.next();
         }
         return .{
@@ -352,7 +360,7 @@ pub const Parser = struct {
             },
             .left_brace => try self.mapSetExpression(),
             .left_bracket => try self.listExpression(),
-            .new => try self.structExpression(),
+            .new => try self.classExpression(),
             .pipe => try self.functionExpression(),
             .nil => .{ .token = self.current_token, .type = .nil },
             else => return self.fail("Unexpected token in expression: {}", self.current_token, .{self.current_token.token_type}),
@@ -445,24 +453,35 @@ pub const Parser = struct {
         return try list.toOwnedSlice();
     }
 
-    fn structExpression(self: *Parser) Error!Expression {
+    fn classExpression(self: *Parser) Error!Expression {
         var start = self.current_token;
         self.next();
         const name = try self.consumeIdentifier();
         try self.expectCurrent(.left_brace);
         self.next();
-        var assignments = std.ArrayList(Expression).init(self.allocator);
+
+        var field_names = std.ArrayList([]const u8).init(self.allocator);
+        var fields = std.ArrayList(Expression).init(self.allocator);
+        errdefer field_names.deinit();
+        errdefer fields.deinit();
         while (!self.currentIs(.right_brace)) {
-            try assignments.append(try self.expression(.lowest));
+            try field_names.append(try self.consumeIdentifier());
+            try self.expectCurrent(.equal);
+            self.next();
+            try fields.append(try self.expression(.lowest));
+            self.next();
             if (self.currentIs(.comma)) self.next();
-            if (self.peekIs(.right_brace)) self.next();
         }
+        try self.expectCurrent(.right_brace);
+        if (field_names.items.len != fields.items.len) return self.fail("Missing field assignment value", self.current_token, .{});
+
         return .{
             .token = start,
             .type = .{
-                .@"struct" = .{
+                .class = .{
                     .name = name,
-                    .assignments = try assignments.toOwnedSlice(),
+                    .field_names = try field_names.toOwnedSlice(),
+                    .fields = try fields.toOwnedSlice(),
                 },
             },
         };
@@ -1046,10 +1065,10 @@ test "Parse Declaration" {
     var t =
         \\ const intValue = 5
         \\ var mutableValue = 1.2
-        \\ struct StructType {
+        \\ class ClassType {
         \\     intField = 0
         \\ }
-        \\ var structValue = new StructType{}
+        \\ var classValue = new ClassType{}
         \\ enum EnumType {
         \\     one,
         \\     two,
@@ -1069,13 +1088,13 @@ test "Parse Declaration" {
     try testing.expect(tree.root[1].type.variable.is_mutable);
     try testing.expect(tree.root[1].type.variable.initializer.type.number == 1.2);
 
-    try testing.expect(tree.root[2].type.@"struct".fields.len == 1);
-    try testing.expectEqualStrings("intField", tree.root[2].type.@"struct".fields[0].type.binary.left.type.identifier);
-    try testing.expect(tree.root[2].type.@"struct".fields[0].type.binary.right.*.type.number == 0);
+    try testing.expect(tree.root[2].type.class.fields.len == 1);
+    try testing.expectEqualStrings("intField", tree.root[2].type.class.field_names[0]);
+    try testing.expect(tree.root[2].type.class.fields[0].type.number == 0);
 
     try testing.expect(tree.root[3].type.variable.is_mutable);
-    try testing.expectEqualStrings("StructType", tree.root[3].type.variable.initializer.type.@"struct".name);
-    try testing.expect(tree.root[3].type.variable.initializer.type.@"struct".assignments.len == 0);
+    try testing.expectEqualStrings("ClassType", tree.root[3].type.variable.initializer.type.class.name);
+    try testing.expect(tree.root[3].type.variable.initializer.type.class.fields.len == 0);
 
     try testing.expectEqualStrings("EnumType", tree.root[4].type.@"enum".name);
     try testing.expect(tree.root[4].type.@"enum".values.len == 2);
@@ -1129,6 +1148,31 @@ test "Parse Function Arguments" {
     try testing.expect(bin.left.type.call.arguments.len == 2);
     try testing.expect(bin.left.type.call.arguments[0].type.number == 1);
     try testing.expect(bin.left.type.call.arguments[1].type.number == 2);
+}
+
+test "Parse Enums" {
+    var t =
+        \\ enum Test {
+        \\    one,
+        \\    two  
+        \\ }
+        \\ var value = Test.one
+    ;
+    var allocator = testing.allocator;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, t, &errors) catch |err| {
+        try errors.write(t, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+    try testing.expect(tree.root.len == 2);
+    const e = tree.root[0].type.@"enum";
+    try testing.expectEqualStrings("Test", e.name);
+    try testing.expectEqualStrings("one", e.values[0]);
+    try testing.expectEqualStrings("two", e.values[1]);
+
+    try testing.expect(tree.root[1].type.variable.initializer.type == .indexer);
 }
 
 test "Parse Iterable Types" {

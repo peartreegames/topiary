@@ -4,6 +4,8 @@ const Gc = @import("./gc.zig").Gc;
 const ByteCode = @import("./bytecode.zig").ByteCode;
 const Builtin = @import("./builtins.zig").Builtin;
 const OpCode = @import("./opcode.zig").OpCode;
+const Enum = @import("./enum.zig").Enum;
+const Class = @import("./class.zig").Class;
 const Allocator = std.mem.Allocator;
 
 pub const True = Value{ .bool = true };
@@ -40,7 +42,7 @@ pub const Value = union(Type) {
 
         pub const Data = union(enum(u4)) {
             string: []const u8,
-            @"enum": []const u8,
+            @"enum": Enum,
             list: std.ArrayList(Value),
             map: MapType,
             set: SetType,
@@ -57,8 +59,8 @@ pub const Value = union(Type) {
                 data: *Data,
                 free_values: []Value,
             },
-            // structure: StructType,
-            // instance: StructType,
+            class: Class,
+            instance: Class.Instance,
             bough: struct {
                 instructions: []const u8,
                 locals_count: usize,
@@ -66,7 +68,6 @@ pub const Value = union(Type) {
         };
         pub const MapType = std.ArrayHashMap(Value, Value, Adapter, true);
         pub const SetType = std.ArrayHashMap(Value, void, Adapter, true);
-        // pub const StructType = std.StringHashMap(Value);
 
         pub fn add(self: *Data, value: Value) !void {
             switch (self) {
@@ -99,7 +100,7 @@ pub const Value = union(Type) {
         pub fn destroy(allocator: std.mem.Allocator, obj: *Obj) void {
             switch (obj.data) {
                 .string => |s| allocator.free(s),
-                .@"enum" => |e| allocator.free(e),
+                .@"enum" => {},
                 .list => |l| l.deinit(),
                 .map => obj.data.map.deinit(),
                 .set => obj.data.set.deinit(),
@@ -107,8 +108,8 @@ pub const Value = union(Type) {
                 .bough => |b| allocator.free(b.instructions),
                 .builtin => {},
                 .closure => |c| allocator.free(c.free_values),
-                // .structure => obj.data.structure.deinit(),
-                // .instance => obj.data.instance.deinit(),
+                .class => |c| c.deinit(),
+                .instance => obj.data.instance.fields.deinit(),
             }
             allocator.destroy(obj);
         }
@@ -187,6 +188,20 @@ pub const Value = union(Type) {
                         writer.print("\n---\n", .{});
                         ByteCode.printInstructions(writer, c.data.function.instructions, constants);
                         writer.print("---", .{});
+                    },
+                    .class => |c| {
+                        writer.print("{s}", .{c.name});
+                    },
+                    .instance => |i| {
+                        writer.print("{s}.instance", .{i.class.name});
+                        writer.print(" {{\n", .{});
+                        var it = i.fields.keyIterator();
+                        while (it.next()) |key| {
+                            writer.print("    {s}: ", .{key.*});
+                            i.fields.get(key.*).?.print(writer, constants);
+                            writer.print("\n", .{});
+                        }
+                        writer.print("}}", .{});
                     },
                     else => {},
                 }
