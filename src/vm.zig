@@ -66,6 +66,10 @@ pub const Vm = struct {
     pub const OnDialogue = *const fn (vm: *Vm, dialogue: Dialogue) void;
     pub const OnChoices = *const fn (vm: *Vm, choices: []Choice) void;
 
+    pub const Error = error{
+        RuntimeError,
+    } || compiler.Compiler.Error;
+
     pub fn init(allocator: std.mem.Allocator, runner: anytype) !Vm {
         if (!std.meta.trait.hasFunctions(runner, .{ "on_dialogue", "on_choices" }))
             return error.RuntimeError;
@@ -154,8 +158,7 @@ pub const Vm = struct {
 
     fn fail(self: *Vm, comptime msg: []const u8, token: Token, args: anytype) !void {
         try self.errors.add(msg, token, .err, args);
-
-        return error.RuntimeError;
+        return Error.RuntimeError;
     }
 
     fn readByte(self: *Vm) u8 {
@@ -617,6 +620,7 @@ test "Basics" {
 
     inline for (test_cases) |case| {
         var vm = try Vm.init(testing.allocator, TestRunner);
+        vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
         switch (case.type) {

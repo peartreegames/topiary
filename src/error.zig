@@ -4,10 +4,10 @@ const Token = tok.Token;
 
 pub const Error = struct {
     fmt: []const u8,
-    error_type: ErrorType,
+    severity: Severity,
     token: Token,
 
-    const ErrorType = enum {
+    const Severity = enum {
         info,
         warn,
         err,
@@ -22,13 +22,13 @@ pub const Errors = struct {
         return .{ .list = std.ArrayListUnmanaged(Error){}, .allocator = allocator };
     }
 
-    pub fn add(self: *Errors, comptime fmt: []const u8, token: Token, error_type: Error.ErrorType, args: anytype) !void {
+    pub fn add(self: *Errors, comptime fmt: []const u8, token: Token, severity: Error.Severity, args: anytype) !void {
         const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
         errdefer self.allocator.free(msg);
 
         return self.list.append(self.allocator, .{
             .fmt = msg,
-            .error_type = error_type,
+            .severity = severity,
             .token = token,
         });
     }
@@ -43,7 +43,7 @@ pub const Errors = struct {
     pub fn write(self: *Errors, source: []const u8, writer: anytype) !void {
         while (self.list.popOrNull()) |err| {
             defer self.allocator.free(err.fmt);
-            const color_prefix = switch (err.error_type) {
+            const color_prefix = switch (err.severity) {
                 .err => "\x1b[0;31m",
                 .info => "\x1b[0;37m",
                 .warn => "\x1b[0;36m",

@@ -23,13 +23,6 @@ const FORK_HOLDER = 9003;
 const DIVERT_HOLDER = 9004;
 const JUMP_HOLDER = 9999;
 
-const CompilerError = error{
-    IllegalOperation,
-    OutOfMemory,
-    OutOfScope,
-    SymbolNotFound,
-};
-
 pub fn compileSource(allocator: std.mem.Allocator, source: []const u8, errors: *Errors) !ByteCode {
     const tree = try parser.parse(allocator, source, errors);
     defer tree.deinit();
@@ -49,7 +42,7 @@ pub const Compiler = struct {
     allocator: std.mem.Allocator,
     builtins: Scope,
     constants: std.ArrayList(Value),
-    errors: *Errors,
+    err: *Errors,
     scope: *Scope,
     identifier_cache: std.StringHashMap(OpCode.Size(.constant)),
     chunk: *Chunk,
@@ -82,6 +75,13 @@ pub const Compiler = struct {
         }
     };
 
+    pub const Error = error{
+        CompilerError,
+        IllegalOperation,
+        OutOfScope,
+        SymbolNotFound,
+    } || parser.Parser.Error;
+
     pub fn init(allocator: std.mem.Allocator, root_scope: *Scope, root_chunk: *Chunk, errors: *Errors) Compiler {
         return .{
             .allocator = allocator,
@@ -94,7 +94,7 @@ pub const Compiler = struct {
             },
             .constants = std.ArrayList(Value).init(allocator),
             .identifier_cache = std.StringHashMap(OpCode.Size(.constant)).init(allocator),
-            .errors = errors,
+            .err = errors,
             .chunk = root_chunk,
             .scope = root_scope,
             .jump_tree = JumpTree.init(allocator),
@@ -114,6 +114,16 @@ pub const Compiler = struct {
         self.builtins.symbols.deinit();
     }
 
+    fn fail(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype) Error {
+        try self.err.add(msg, token, .err, args);
+        return Error.CompilerError;
+    }
+
+    fn failError(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype, err: Error) Error {
+        try self.err.add(msg, token, .err, args);
+        return err;
+    }
+
     pub fn bytecode(self: *Compiler) !ByteCode {
         return .{
             .instructions = try self.chunk.instructions.toOwnedSlice(),
@@ -122,7 +132,7 @@ pub const Compiler = struct {
         };
     }
 
-    pub fn compile(self: *Compiler, tree: ast.Tree) CompilerError!void {
+    pub fn compile(self: *Compiler, tree: ast.Tree) Error!void {
         inline for (builtins) |builtin| {
             _ = try self.builtins.define(builtin.name);
         }
@@ -150,7 +160,7 @@ pub const Compiler = struct {
             .instructions = try old_chunk.instructions.toOwnedSlice(),
             .tokens = try old_chunk.tokens.toOwnedSlice(),
         };
-        self.chunk = old_chunk.parent orelse return CompilerError.OutOfScope;
+        self.chunk = old_chunk.parent orelse return Error.OutOfScope;
         old_chunk.destroy();
         return result;
     }
@@ -166,12 +176,12 @@ pub const Compiler = struct {
             .free_symbols = try old_scope.free_symbols.toOwnedSlice(),
         };
 
-        self.scope = old_scope.parent orelse return CompilerError.OutOfScope;
+        self.scope = old_scope.parent orelse return Error.OutOfScope;
         old_scope.destroy();
         return result;
     }
 
-    pub fn precompileScopes(self: *Compiler, stmt: ast.Statement, node: *JumpTree.Node) CompilerError!void {
+    pub fn precompileScopes(self: *Compiler, stmt: ast.Statement, node: *JumpTree.Node) Error!void {
         switch (stmt.type) {
             .bough => |b| {
                 var bough_node = try JumpTree.Node.create(self.allocator, b.name, node);
@@ -188,7 +198,7 @@ pub const Compiler = struct {
         }
     }
 
-    pub fn compileStatement(self: *Compiler, stmt: ast.Statement) CompilerError!void {
+    pub fn compileStatement(self: *Compiler, stmt: ast.Statement) Error!void {
         var token = stmt.token;
         switch (stmt.type) {
             .@"if" => |i| {
@@ -340,7 +350,8 @@ pub const Compiler = struct {
                 // try self.writeOp(.loop, token);
             },
             .variable => |v| {
-                if (self.builtins.symbols.contains(v.name)) return CompilerError.IllegalOperation;
+                if (self.builtins.symbols.contains(v.name))
+                    return self.failError("{s} is a builtin function and cannot be used as a variable name", token, .{v.name}, Error.IllegalOperation);
                 var symbol = try self.scope.define(v.name);
                 try self.compileExpression(&v.initializer);
                 if (symbol.tag == .global) {
@@ -501,13 +512,13 @@ pub const Compiler = struct {
         }
     }
 
-    pub fn compileBlock(self: *Compiler, stmts: []const ast.Statement) CompilerError!void {
+    pub fn compileBlock(self: *Compiler, stmts: []const ast.Statement) Error!void {
         for (stmts) |stmt| {
             try self.compileStatement(stmt);
         }
     }
 
-    pub fn compileExpression(self: *Compiler, expr: *const ast.Expression) CompilerError!void {
+    pub fn compileExpression(self: *Compiler, expr: *const ast.Expression) Error!void {
         var token = expr.token;
         switch (expr.type) {
             .binary => |bin| {
@@ -537,6 +548,8 @@ pub const Compiler = struct {
                         else => unreachable,
                     }
                 }
+                try self.compileExpression(bin.left);
+                try self.compileExpression(bin.right);
 
                 const op: OpCode = switch (bin.operator) {
                     .add => .add,
@@ -555,7 +568,7 @@ pub const Compiler = struct {
                     .@"or" => .@"or",
                     .@"and" => .@"and",
                     else => {
-                        return error.IllegalOperation;
+                        return self.failError("Unknown operation {s}", token, .{bin.operator.toString()}, Error.IllegalOperation);
                     },
                 };
                 try self.writeOp(op, token);
@@ -748,14 +761,14 @@ pub const Compiler = struct {
                     const size = OpCode.Size(.set_free);
                     _ = try self.writeInt(size, @intCast(size, ptr.index), token);
                 },
-                .builtin, .function => return CompilerError.IllegalOperation,
+                .builtin, .function => return self.failError("Cannot set {s}", token, .{ptr.name}, Error.IllegalOperation),
                 else => {
                     try self.writeOp(.set_local, token);
                     const size = OpCode.Size(.set_local);
                     _ = try self.writeInt(size, @intCast(size, ptr.index), token);
                 },
             }
-        } else return CompilerError.SymbolNotFound;
+        } else return self.failError("Unknown symbol", token, .{}, Error.SymbolNotFound);
     }
 
     fn loadSymbol(self: *Compiler, symbol: ?*Symbol, token: Token) !void {
@@ -784,8 +797,7 @@ pub const Compiler = struct {
                     _ = try self.writeInt(size, @intCast(size, ptr.index), token);
                 },
             }
-        }
-        // else return CompilerError.SymbolNotFound;
+        } else return self.failError("Unknown symbol", token, .{}, Error.SymbolNotFound);
     }
 
     fn instructionPos(self: *Compiler) u16 {
