@@ -49,6 +49,7 @@ pub const Expression = struct {
             fields: []const Expression,
         },
         function: struct {
+            is_method: bool = false,
             name: ?[]const u8 = null,
             parameters: [][]const u8,
             body: []const Statement,

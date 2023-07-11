@@ -50,6 +50,7 @@ pub const Value = union(Type) {
                 arity: u8,
                 instructions: []const u8,
                 locals_count: usize,
+                is_method: bool = false,
             },
             builtin: struct {
                 arity: u8,

@@ -515,9 +515,9 @@ pub const Compiler = struct {
                             return;
                         },
                         .indexer => {
+                            try self.compileExpression(bin.right);
                             try self.compileExpression(bin.left);
                             try self.removeLast(.index);
-                            try self.compileExpression(bin.right);
                             try self.writeOp(.set_property, token);
                             return;
                         },
@@ -559,7 +559,10 @@ pub const Compiler = struct {
                                 return;
                             },
                             .indexer => {
+                                try self.compileExpression(bin.left);
+                                try self.removeLast(.index);
                                 try self.writeOp(.set_property, token);
+                                try self.compileExpression(bin.left);
                                 return;
                             },
                             else => unreachable,
@@ -638,15 +641,15 @@ pub const Compiler = struct {
                 try self.compileExpression(i.condition);
                 try self.writeOp(.jump_if_false, token);
                 // temp garbage value
-                const pos = try self.writeInt(u16, JUMP_HOLDER, token);
+                const pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
                 try self.compileExpression(i.then_value);
 
                 try self.writeOp(.jump, token);
-                const nextPos = try self.writeInt(u16, JUMP_HOLDER, token);
-                try self.replaceValue(pos, u16, self.instructionPos());
+                const nextPos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
+                try self.replaceValue(pos, OpCode.Size(.jump), self.instructionPos());
 
                 try self.compileExpression(i.else_value);
-                try self.replaceValue(nextPos, u16, self.instructionPos());
+                try self.replaceValue(nextPos, OpCode.Size(.jump), self.instructionPos());
             },
             .function => |f| {
                 try self.enterScope(.closure);
@@ -655,6 +658,14 @@ pub const Compiler = struct {
                 if (f.name) |name| {
                     _ = try self.scope.defineFunction(name);
                 }
+
+                var length = f.parameters.len;
+
+                if (f.is_method) {
+                    length += 1;
+                    _ = try self.scope.define("self");
+                }
+
                 for (f.parameters) |param| {
                     _ = try self.scope.define(param);
                 }
@@ -678,9 +689,10 @@ pub const Compiler = struct {
                 obj.* = .{
                     .data = .{
                         .function = .{
+                            .is_method = f.is_method,
                             .instructions = chunk.instructions,
                             .locals_count = scope.locals_count,
-                            .arity = @intCast(u8, f.parameters.len),
+                            .arity = @intCast(u8, length),
                         },
                     },
                 };
@@ -705,11 +717,12 @@ pub const Compiler = struct {
                 for (c.arguments) |*arg| {
                     try self.compileExpression(arg);
                 }
-
                 try self.writeOp(.call, token);
                 const size = OpCode.Size(.call);
                 std.debug.assert(c.arguments.len < std.math.maxInt(size));
-                _ = try self.writeInt(size, @intCast(size, c.arguments.len), token);
+                var length = c.arguments.len;
+                if (c.target.type == .indexer) length += 1;
+                _ = try self.writeInt(size, @intCast(size, length), token);
             },
             else => {},
         }
@@ -1740,7 +1753,7 @@ test "Classes" {
             return err;
         };
         defer bytecode.free(allocator);
-        bytecode.print(std.debug);
+        errdefer bytecode.print(std.debug);
         for (case.instructions, 0..) |instruction, i| {
             errdefer std.log.warn("Error on: {}", .{i});
             try testing.expectEqual(instruction, bytecode.instructions[i]);

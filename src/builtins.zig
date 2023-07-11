@@ -1,6 +1,7 @@
 const std = @import("std");
 const values = @import("./values.zig");
 const Gc = @import("./gc.zig").Gc;
+const OpCode = @import("./opcode.zig").OpCode;
 
 const Value = values.Value;
 pub const Builtin = *const fn (gc: *Gc, args: []Value) Value;
@@ -80,3 +81,25 @@ pub const builtins = [_]Definition{ .{
     .name = "print",
     .value = &Print.value,
 } };
+
+pub const Count = struct {
+    const Self = @This();
+    pub var value: Value = .{
+        .obj = &Self.obj,
+    };
+    var obj: Value.Obj = .{
+        .data = .{
+            .builtin = .{ .backing = Self.builtin, .arity = 1 },
+        },
+    };
+    fn builtin(_: *Gc, args: []Value) Value {
+        var data = args[0].obj.data;
+        var count = switch (data) {
+            .list => |l| l.items.len,
+            .map => |m| m.count(),
+            .set => |s| s.count(),
+            else => 0,
+        };
+        return .{ .number = @floatFromInt(f32, count) };
+    }
+};

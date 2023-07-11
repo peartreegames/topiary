@@ -10,7 +10,7 @@ const Gc = @import("./gc.zig").Gc;
 const Token = @import("./token.zig").Token;
 const Frame = @import("./frame.zig").Frame;
 const Class = @import("./class.zig").Class;
-const builtins = @import("./builtins.zig").builtins;
+const builtins = @import("./builtins.zig");
 const Rnd = @import("./builtins.zig").Rnd;
 const DebugToken = @import("./debug.zig").DebugToken;
 
@@ -110,7 +110,6 @@ pub const Vm = struct {
 
     pub fn selectChoice(self: *Vm, index: usize) InterpretError!void {
         if (index < 0 or index >= self.current_choices.len) {
-            std.log.warn("CHOICE:{}", .{index});
             return InterpretError.InvalidChoice;
         }
         var choice = self.current_choices[index];
@@ -267,10 +266,9 @@ pub const Vm = struct {
                     try self.push(self.stack.items[frame.bp + index]);
                 },
                 .set_property => {
-                    var new_value = self.pop();
                     var field_name_value = self.pop();
                     var instance_value = self.pop();
-
+                    var new_value = self.pop();
                     var field_name = field_name_value.obj.data.string;
                     var instance = instance_value.obj.data.instance;
                     if (!instance.fields.contains(field_name)) return error.RuntimeError;
@@ -278,7 +276,7 @@ pub const Vm = struct {
                 },
                 .get_builtin => {
                     const index = self.readInt(OpCode.Size(.get_builtin));
-                    var value = builtins[index].value;
+                    var value = builtins.builtins[index].value;
                     try self.push(value.*);
                 },
                 .get_free => {
@@ -362,11 +360,11 @@ pub const Vm = struct {
                     errdefer fields.deinit();
                     while (count > 0) : (count -= 1) {
                         var name = self.pop();
-                        var str_name = name.obj.data.string;
-                        var field = self.pop();
+                        var field_name = name.obj.data.string;
+                        var field_value = self.pop();
                         try fields.append(.{
-                            .name = str_name,
-                            .value = field,
+                            .name = field_name,
+                            .value = field_value,
                         });
                     }
 
@@ -400,11 +398,18 @@ pub const Vm = struct {
                     if (target != .obj) return error.RuntimeError;
                     switch (target.obj.data) {
                         .list => |l| {
-                            if (index != .number) return error.RuntimeError;
-                            const i = @intFromFloat(u32, index.number);
-                            if (i < 0 or i >= l.items.len) {
-                                try self.push(values.Nil);
-                            } else try self.push(l.items[i]);
+                            if (index == .obj and index.obj.data == .string) {
+                                var name = index.obj.data.string;
+                                if (std.mem.eql(u8, name, "count")) {
+                                    try self.push(builtins.Count.value);
+                                    try self.push(target);
+                                }
+                            } else if (index == .number) {
+                                const i = @intFromFloat(u32, index.number);
+                                if (i < 0 or i >= l.items.len) {
+                                    try self.push(values.Nil);
+                                } else try self.push(l.items[i]);
+                            } else return error.RuntimeError;
                         },
                         .map => |m| {
                             if (m.get(index)) |v| {
@@ -414,6 +419,9 @@ pub const Vm = struct {
                         .instance => |i| {
                             if (i.fields.get(index.obj.data.string)) |field| {
                                 try self.push(field);
+                                if (field == .obj and field.obj.data == .closure) {
+                                    try self.push(target);
+                                }
                             } else return error.RuntimeError;
                         },
                         else => unreachable,
@@ -452,7 +460,13 @@ pub const Vm = struct {
                     switch (value.obj.data) {
                         .closure => |c| {
                             const f = c.data.function;
-                            if (f.arity != arg_count) return error.RuntimeError;
+                            if (f.arity != arg_count) {
+                                return self.fail(
+                                    "Function expected {} arguments, but found {}",
+                                    DebugToken.get(self.bytecode.tokens, self.ip) orelse undefined,
+                                    .{ f.arity, arg_count },
+                                );
+                            }
                             var frame = try Frame.create(value.obj, 0, self.stack.count - arg_count);
                             self.frames.push(frame);
                             self.stack.count = frame.bp + f.locals_count;
@@ -467,7 +481,9 @@ pub const Vm = struct {
                             var result = b.backing(&self.gc, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
                             try self.push(result);
                         },
-                        else => return error.RuntimeError,
+                        else => {
+                            return error.RuntimeError;
+                        },
                     }
                 },
                 .closure => {
@@ -484,8 +500,10 @@ pub const Vm = struct {
                             .free_values = free_values,
                         },
                     });
-
-                    self.stack.count = self.stack.count - count + 1;
+                    var reset_count = self.stack.count - count + 1;
+                    // account for "self" in methods
+                    if (value.obj.data.function.is_method) reset_count -= 1;
+                    self.stack.count = reset_count;
                     try self.push(closure);
                 },
                 .current_closure => {
@@ -584,7 +602,6 @@ const TestRunner = struct {
     }
 
     pub fn on_choices(vm: *Vm, choices: []Choice) void {
-        std.debug.print("---CHOICE---\n", .{});
         for (choices, 0..) |choice, i| {
             std.debug.print("[{d}] {s}\n", .{ i, choice.content });
         }
@@ -620,7 +637,7 @@ test "Basics" {
 
     inline for (test_cases) |case| {
         var vm = try Vm.init(testing.allocator, TestRunner);
-        vm.debug = true;
+        // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
         switch (case.type) {
@@ -770,15 +787,15 @@ test "Index" {
         .{ .input = "({1: 1, 2: 2})[2]", .value = 2.0 },
         .{ .input = "({1: 1})[2]", .value = null },
         .{ .input = "({:})[0]", .value = null },
+        .{ .input = "[1,1,1].count()", .value = 3.0 },
     };
 
     inline for (test_cases) |case| {
         var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
         const value = vm.stack.previous();
-        errdefer std.log.warn("{s}--{}", .{ case.input, @TypeOf(case.value) });
         switch (@TypeOf(case.value)) {
             comptime_float => try testing.expect(case.value == value.number),
             else => try testing.expect(value == .nil),
@@ -1139,24 +1156,26 @@ test "Classes" {
 test "Instance" {
     const input =
         \\ class Test {
-        \\    value = 0        
+        \\    value = 0,
+        \\    fn = || return "func",
+        \\    incr = |i| self.value += i
         \\ }
         \\ const test = new Test{}
         \\ print(test)
         \\ print(test.value)
         \\ test.value = 5
+        \\ test.value += 1
+        \\ print(test.value)
+        \\ print(test.fn())
+        \\ test.incr(1)
         \\ print(test.value)
     ;
     errdefer std.log.warn("\n======\n{s}\n======\n", .{input});
     var vm = try Vm.init(testing.allocator, TestRunner);
-    vm.debug = true;
+    // vm.debug = true;
     std.debug.print("\n======\n", .{});
     try vm.interpretSource(input);
     defer vm.deinit();
-    // var value = vm.stack.previous();
-    // _ = value;
-    // try testing.expect(value.obj.data == .instance);
-    // try testing.expect(value.obj.data.instance.fields.get("value").?.number == 0);
 }
 
 test "Boughs" {

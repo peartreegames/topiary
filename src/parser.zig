@@ -176,7 +176,9 @@ pub const Parser = struct {
             try field_names.append(try self.consumeIdentifier());
             try self.expectCurrent(.equal);
             self.next();
-            try fields.append(try self.expression(.lowest));
+            var field = try self.expression(.lowest);
+            if (field.type == .function) field.type.function.is_method = true;
+            try fields.append(field);
             self.next();
             if (self.currentIs(.comma)) self.next();
         }
@@ -468,7 +470,9 @@ pub const Parser = struct {
             try field_names.append(try self.consumeIdentifier());
             try self.expectCurrent(.equal);
             self.next();
-            try fields.append(try self.expression(.lowest));
+            var field = try self.expression(.lowest);
+            if (field.type == .function) field.type.function.is_method = true;
+            try fields.append(field);
             self.next();
             if (self.currentIs(.comma)) self.next();
         }
