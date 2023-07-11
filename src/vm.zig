@@ -22,12 +22,6 @@ const Value = values.Value;
 const adapter = values.adapter;
 const input_buf: [2]u8 = undefined;
 
-const InterpretError = error{
-    CompileError,
-    RuntimeError,
-    InvalidChoice,
-};
-
 const InterpretResult = union(enum) {
     Completed,
     Paused,
@@ -53,7 +47,7 @@ pub const Vm = struct {
     globals: std.ArrayList(Value),
     stack: Stack(Value),
 
-    bytecode: ByteCode = undefined,
+    bytecode: ?ByteCode = null,
     ip: usize = 0,
     debug: bool = false,
 
@@ -68,6 +62,7 @@ pub const Vm = struct {
 
     pub const Error = error{
         RuntimeError,
+        InvalidChoice,
     } || compiler.Compiler.Error;
 
     pub fn init(allocator: std.mem.Allocator, runner: anytype) !Vm {
@@ -93,7 +88,7 @@ pub const Vm = struct {
         self.frames.deinit();
         self.err.deinit();
         self.gc.deinit();
-        self.bytecode.free(self.allocator);
+        if (self.bytecode != null) self.bytecode.?.free(self.allocator);
     }
 
     pub fn roots(self: *Vm) []const []Value {
@@ -108,9 +103,9 @@ pub const Vm = struct {
         self.is_waiting = false;
     }
 
-    pub fn selectChoice(self: *Vm, index: usize) InterpretError!void {
+    pub fn selectChoice(self: *Vm, index: usize) Error!void {
         if (index < 0 or index >= self.current_choices.len) {
-            return InterpretError.InvalidChoice;
+            return Error.InvalidChoice;
         }
         var choice = self.current_choices[index];
         self.currentFrame().ip = choice.ip;
@@ -145,7 +140,7 @@ pub const Vm = struct {
 
     pub fn interpretSource(self: *Vm, source: []const u8) !void {
         var bytecode = compiler.compileSource(self.allocator, source, &self.err) catch |err| {
-            try self.err.write(source, std.io.getStdErr().writer());
+            self.err.write(source, std.io.getStdErr().writer()) catch {};
             return err;
         };
         if (self.debug) {
@@ -182,7 +177,7 @@ pub const Vm = struct {
             switch (op) {
                 .constant => {
                     var index = self.readInt(u16);
-                    var value = self.bytecode.constants[index];
+                    var value = self.bytecode.?.constants[index];
                     try self.push(value);
                 },
                 .pop => _ = self.pop(),
@@ -291,7 +286,7 @@ pub const Vm = struct {
                 },
                 .string => {
                     var index = self.readInt(u16);
-                    var value = self.bytecode.constants[index];
+                    var value = self.bytecode.?.constants[index];
                     var count = self.readInt(u8);
                     var args = try std.ArrayList(Value).initCapacity(self.allocator, count);
                     defer args.deinit();
@@ -397,11 +392,30 @@ pub const Vm = struct {
                     var target = self.pop();
                     if (target != .obj) return error.RuntimeError;
                     switch (target.obj.data) {
+                        // TODO: Will want to clean this up
+                        .string => {
+                            if (index == .obj and index.obj.data == .string) {
+                                var name = index.obj.data.string;
+                                if (std.mem.eql(u8, name, "has")) {
+                                    try self.push(builtins.Has.value);
+                                    try self.push(target);
+                                }
+                            }
+                        },
                         .list => |l| {
                             if (index == .obj and index.obj.data == .string) {
                                 var name = index.obj.data.string;
                                 if (std.mem.eql(u8, name, "count")) {
                                     try self.push(builtins.Count.value);
+                                    try self.push(target);
+                                } else if (std.mem.eql(u8, name, "add")) {
+                                    try self.push(builtins.Add.value);
+                                    try self.push(target);
+                                } else if (std.mem.eql(u8, name, "remove")) {
+                                    try self.push(builtins.Remove.value);
+                                    try self.push(target);
+                                } else if (std.mem.eql(u8, name, "has")) {
+                                    try self.push(builtins.Has.value);
                                     try self.push(target);
                                 }
                             } else if (index == .number) {
@@ -412,9 +426,42 @@ pub const Vm = struct {
                             } else return error.RuntimeError;
                         },
                         .map => |m| {
-                            if (m.get(index)) |v| {
+                            if (index == .obj and index.obj.data == .string) {
+                                var name = index.obj.data.string;
+                                if (std.mem.eql(u8, name, "count")) {
+                                    try self.push(builtins.Count.value);
+                                    try self.push(target);
+                                } else if (std.mem.eql(u8, name, "add")) {
+                                    try self.push(builtins.AddMap.value);
+                                    try self.push(target);
+                                } else if (std.mem.eql(u8, name, "remove")) {
+                                    try self.push(builtins.Remove.value);
+                                    try self.push(target);
+                                } else if (std.mem.eql(u8, name, "has")) {
+                                    try self.push(builtins.Has.value);
+                                    try self.push(target);
+                                }
+                            } else if (m.get(index)) |v| {
                                 try self.push(v);
                             } else try self.push(values.Nil);
+                        },
+                        .set => {
+                            if (index == .obj and index.obj.data == .string) {
+                                var name = index.obj.data.string;
+                                if (std.mem.eql(u8, name, "count")) {
+                                    try self.push(builtins.Count.value);
+                                    try self.push(target);
+                                } else if (std.mem.eql(u8, name, "add")) {
+                                    try self.push(builtins.Add.value);
+                                    try self.push(target);
+                                } else if (std.mem.eql(u8, name, "remove")) {
+                                    try self.push(builtins.Remove.value);
+                                    try self.push(target);
+                                } else if (std.mem.eql(u8, name, "has")) {
+                                    try self.push(builtins.Has.value);
+                                    try self.push(target);
+                                }
+                            }
                         },
                         .instance => |i| {
                             if (i.fields.get(index.obj.data.string)) |field| {
@@ -463,7 +510,7 @@ pub const Vm = struct {
                             if (f.arity != arg_count) {
                                 return self.fail(
                                     "Function expected {} arguments, but found {}",
-                                    DebugToken.get(self.bytecode.tokens, self.ip) orelse undefined,
+                                    DebugToken.get(self.bytecode.?.tokens, self.ip) orelse undefined,
                                     .{ f.arity, arg_count },
                                 );
                             }
@@ -475,7 +522,7 @@ pub const Vm = struct {
                             if (b.arity != arg_count)
                                 return self.fail(
                                     "Function expected {} arguments, but found {}",
-                                    DebugToken.get(self.bytecode.tokens, self.ip) orelse undefined,
+                                    DebugToken.get(self.bytecode.?.tokens, self.ip) orelse undefined,
                                     .{ b.arity, arg_count },
                                 );
                             var result = b.backing(&self.gc, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
@@ -489,7 +536,7 @@ pub const Vm = struct {
                 .closure => {
                     const index = self.readInt(u16);
                     const count = self.readInt(u8);
-                    var value = self.bytecode.constants[index];
+                    var value = self.bytecode.?.constants[index];
                     var free_values = try self.allocator.alloc(Value, count);
                     for (0..count) |i| {
                         free_values[i] = self.stack.items[self.stack.count - count + i];
@@ -568,7 +615,7 @@ pub const Vm = struct {
     }
 
     fn push(self: *Vm, value: Value) !void {
-        errdefer value.print(std.debug, self.bytecode.constants);
+        errdefer value.print(std.debug, self.bytecode.?.constants);
         if (self.stack.items.len >= stack_size) return error.OutOfMemory;
         self.stack.push(value);
     }
@@ -691,6 +738,21 @@ test "Variables" {
     }
 }
 
+test "Constant Variables" {
+    const test_cases = &[_][]const u8{
+        "const one = 1 one = 2",
+        "const one = 1 one += 3",
+    };
+
+    inline for (test_cases) |case| {
+        var vm = try Vm.init(testing.allocator, TestRunner);
+        defer vm.deinit();
+        vm.interpretSource(case) catch |err| {
+            try testing.expect(Vm.Error.CompilerError == err);
+        };
+    }
+}
+
 test "Strings" {
     const test_cases = .{
         .{ .input = "\"testing\"", .value = "testing" },
@@ -699,6 +761,10 @@ test "Strings" {
         .{ .input = "\"{123}test\"", .value = "123test" },
         .{ .input = "\"test{123}\"", .value = "test123" },
         .{ .input = "\"{123}te{4 * 5}st{6 + 7}\"", .value = "123te20st13" },
+        .{ .input = "\"test\".has(\"tes\")", .value = true },
+        .{ .input = "\"test\".has(\"foo\")", .value = false },
+        .{ .input = "\"testing\".has(\"tin\")", .value = true },
+        .{ .input = "\"testing\".has(\"tester\")", .value = false },
     };
 
     inline for (test_cases) |case| {
@@ -707,7 +773,11 @@ test "Strings" {
         // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
-        try testing.expectEqualStrings(case.value, vm.stack.previous().obj.data.string);
+        switch (@TypeOf(case.value)) {
+            []const u8 => try testing.expectEqualStrings(case.value, vm.stack.previous().obj.data.string),
+            bool => try testing.expect(case.value == vm.stack.previous().bool),
+            else => {},
+        }
     }
 }
 
@@ -716,6 +786,10 @@ test "Lists" {
         .{ .input = "[]", .value = [_]f32{} },
         .{ .input = "[1,2,3]", .value = [_]f32{ 1, 2, 3 } },
         .{ .input = "[1 + 2, 3 * 4, 5 + 6]", .value = [_]f32{ 3, 12, 11 } },
+        .{ .input = "var l = [] l.add(1) l", .value = [_]f32{1} },
+        .{ .input = "var l = [] l.add(1) l.add(2) l", .value = [_]f32{ 1, 2 } },
+        .{ .input = "var l = [] l.add(1) l.add(2) l.remove(1) l", .value = [_]f32{2} },
+        .{ .input = "var l = [1,2,3,4,5] l.remove(3) l", .value = [_]f32{ 1, 2, 4, 5 } },
     };
 
     inline for (test_cases) |case| {
@@ -723,8 +797,9 @@ test "Lists" {
         // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
+        var prev = vm.stack.previous();
         for (case.value, 0..) |v, i| {
-            try testing.expect(v == vm.stack.previous().obj.data.list.items[i].number);
+            try testing.expect(v == prev.obj.data.list.items[i].number);
         }
     }
 }
@@ -734,6 +809,8 @@ test "Maps" {
         .{ .input = "({:})", .keys = [_]f32{}, .values = [_]f32{} },
         .{ .input = "({1:2, 3: 4})", .keys = [_]f32{ 1, 3 }, .values = [_]f32{ 2, 4 } },
         .{ .input = "({1 + 1: 2 * 2, 3 + 3: 4 * 4})", .keys = [_]f32{ 2, 6 }, .values = [_]f32{ 4, 16 } },
+        .{ .input = "var m = {1:2} m.add(3, 4) m", .keys = [_]f32{ 1, 3 }, .values = [_]f32{ 2, 4 } },
+        .{ .input = "var m = {1:2} m.add(3, 4) m.remove(1) m", .keys = [_]f32{3}, .values = [_]f32{4} },
     };
 
     inline for (test_cases) |case| {
@@ -758,6 +835,8 @@ test "Sets" {
         .{ .input = "({})", .values = [_]f32{} },
         .{ .input = "({1, 2})", .values = [_]f32{ 1, 2 } },
         .{ .input = "({1 + 1, 3 + 3})", .values = [_]f32{ 2, 6 } },
+        .{ .input = "var s = {1} s.add(2) s.add(1) s", .values = [_]f32{ 1, 2 } },
+        .{ .input = "var s = {1} s.add(2) s.remove(1) s", .values = [_]f32{2} },
     };
 
     inline for (test_cases) |case| {

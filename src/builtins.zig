@@ -103,3 +103,110 @@ pub const Count = struct {
         return .{ .number = @floatFromInt(f32, count) };
     }
 };
+
+pub const Add = struct {
+    const Self = @This();
+    pub var value: Value = .{
+        .obj = &Self.obj,
+    };
+    var obj: Value.Obj = .{
+        .data = .{
+            .builtin = .{ .backing = Self.builtin, .arity = 2 },
+        },
+    };
+    fn builtin(_: *Gc, args: []Value) Value {
+        var item = args[1];
+        switch (args[0].obj.data) {
+            .list => args[0].obj.data.list.append(item) catch {},
+            .set => args[0].obj.data.set.put(item, {}) catch {},
+            else => unreachable,
+        }
+        return values.Nil;
+    }
+};
+
+pub const AddMap = struct {
+    const Self = @This();
+    pub var value: Value = .{
+        .obj = &Self.obj,
+    };
+    var obj: Value.Obj = .{
+        .data = .{
+            .builtin = .{ .backing = Self.builtin, .arity = 3 },
+        },
+    };
+    fn builtin(_: *Gc, args: []Value) Value {
+        var key = args[1];
+        var item = args[2];
+        switch (args[0].obj.data) {
+            .map => args[0].obj.data.map.put(key, item) catch {},
+            else => unreachable,
+        }
+        return values.Nil;
+    }
+};
+pub const Remove = struct {
+    const Self = @This();
+    pub var value: Value = .{
+        .obj = &Self.obj,
+    };
+    var obj: Value.Obj = .{
+        .data = .{
+            .builtin = .{ .backing = Self.builtin, .arity = 2 },
+        },
+    };
+    fn builtin(_: *Gc, args: []Value) Value {
+        var item = args[1];
+        switch (args[0].obj.data) {
+            .list => {
+                for (args[0].obj.data.list.items, 0..) |it, i| {
+                    if (!Value.eql(it, item)) continue;
+                    _ = args[0].obj.data.list.orderedRemove(i);
+                    break;
+                }
+            },
+            .set => _ = args[0].obj.data.set.orderedRemove(item),
+            .map => _ = args[0].obj.data.map.orderedRemove(item),
+            else => unreachable,
+        }
+        return values.Nil;
+    }
+};
+
+pub const Has = struct {
+    const Self = @This();
+    pub var value: Value = .{
+        .obj = &Self.obj,
+    };
+    var obj: Value.Obj = .{
+        .data = .{
+            .builtin = .{ .backing = Self.builtin, .arity = 2 },
+        },
+    };
+    fn builtin(_: *Gc, args: []Value) Value {
+        var item = args[1];
+        const result = switch (args[0].obj.data) {
+            .list => blk: {
+                for (args[0].obj.data.list.items) |it| {
+                    if (!Value.eql(it, item)) continue;
+                    break :blk true;
+                }
+                break :blk false;
+            },
+            .set => args[0].obj.data.set.contains(item),
+            .map => args[0].obj.data.map.contains(item),
+            .string => |s| blk: {
+                if (item.obj.data != .string) break :blk false;
+                const len = item.obj.data.string.len;
+                for (0..s.len) |i| {
+                    if (i + len > s.len) break;
+                    if (std.mem.eql(u8, s[i..(i + len)], item.obj.data.string)) break :blk true;
+                }
+                break :blk false;
+            },
+            else => false,
+        };
+        if (result) return values.True;
+        return values.False;
+    }
+};

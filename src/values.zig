@@ -70,30 +70,6 @@ pub const Value = union(Type) {
         pub const MapType = std.ArrayHashMap(Value, Value, Adapter, true);
         pub const SetType = std.ArrayHashMap(Value, void, Adapter, true);
 
-        pub fn add(self: *Data, value: Value) !void {
-            switch (self) {
-                .list => |l| try l.append(value),
-                .set => |s| try s.putNoClobber(value, void),
-                else => return error.RuntimeError,
-            }
-        }
-
-        pub fn addMap(self: *Data, key: Value, value: Value) !void {
-            switch (self) {
-                .map => |m| try m.putNoClobber(key, value),
-                else => return error.RuntimeError,
-            }
-        }
-
-        pub fn remove(self: *Data, key: Value) !void {
-            switch (self) {
-                .list => |l| _ = l.orderedRemove(key),
-                .set => |s| _ = s.orderedRemove(key),
-                .map => |m| _ = m.orderedRemove(key),
-                else => return error.RuntimeError,
-            }
-        }
-
         pub fn toValue(self: *Obj) *Value {
             return @fieldParentPtr(Value, "obj", self);
         }

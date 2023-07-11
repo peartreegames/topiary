@@ -7,6 +7,8 @@ pub const Symbol = struct {
     index: u16,
     name: []const u8,
     tag: Scope.Tag,
+    is_mutable: bool,
+    is_extern: bool,
 };
 
 pub const Scope = struct {
@@ -48,13 +50,15 @@ pub const Scope = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn define(self: *Scope, name: []const u8) !*Symbol {
+    pub fn define(self: *Scope, name: []const u8, is_mutable: bool, is_extern: bool) !*Symbol {
         const symbol = try self.allocator.create(Symbol);
 
         symbol.* = .{
             .name = name,
             .index = self.count,
             .tag = self.tag,
+            .is_mutable = is_mutable,
+            .is_extern = is_extern,
         };
         self.count += 1;
         try self.symbols.putNoClobber(name, symbol);
@@ -67,6 +71,8 @@ pub const Scope = struct {
             .name = name,
             .index = 0,
             .tag = .function,
+            .is_mutable = false,
+            .is_extern = false,
         };
         try self.symbols.putNoClobber(name, symbol);
         return symbol;
@@ -81,6 +87,8 @@ pub const Scope = struct {
             .name = original.name,
             .index = index,
             .tag = .free,
+            .is_mutable = original.is_mutable,
+            .is_extern = original.is_extern,
         };
         try self.symbols.putNoClobber(symbol.name, symbol);
         return symbol;

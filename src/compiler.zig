@@ -134,7 +134,7 @@ pub const Compiler = struct {
 
     pub fn compile(self: *Compiler, tree: ast.Tree) Error!void {
         inline for (builtins) |builtin| {
-            _ = try self.builtins.define(builtin.name);
+            _ = try self.builtins.define(builtin.name, false, false);
         }
 
         self.jump_tree.root = try JumpTree.Node.create(self.allocator, "root", null);
@@ -264,7 +264,7 @@ pub const Compiler = struct {
                 try self.getOrSetIdentifierConstant(c.name, token);
                 try self.writeOp(.class, token);
                 _ = try self.writeInt(OpCode.Size(.class), @intCast(OpCode.Size(.class), c.fields.len), token);
-                var symbol = try self.scope.define(c.name);
+                var symbol = try self.scope.define(c.name, false, false);
                 if (symbol.tag == .global) {
                     try self.writeOp(.set_global, token);
                     _ = try self.writeInt(OpCode.Size(.set_global), symbol.index, token);
@@ -294,7 +294,7 @@ pub const Compiler = struct {
                 try self.writeOp(.constant, token);
                 _ = try self.writeInt(OpCode.Size(.constant), i, token);
 
-                var symbol = try self.scope.define(e.name);
+                var symbol = try self.scope.define(e.name, false, false);
                 if (symbol.tag == .global) {
                     try self.writeOp(.set_global, token);
                     _ = try self.writeInt(OpCode.Size(.set_global), symbol.index, token);
@@ -352,7 +352,7 @@ pub const Compiler = struct {
             .variable => |v| {
                 if (self.builtins.symbols.contains(v.name))
                     return self.failError("{s} is a builtin function and cannot be used as a variable name", token, .{v.name}, Error.IllegalOperation);
-                var symbol = try self.scope.define(v.name);
+                var symbol = try self.scope.define(v.name, v.is_mutable, v.is_extern);
                 try self.compileExpression(&v.initializer);
                 if (symbol.tag == .global) {
                     try self.writeOp(.set_global, token);
@@ -663,11 +663,11 @@ pub const Compiler = struct {
 
                 if (f.is_method) {
                     length += 1;
-                    _ = try self.scope.define("self");
+                    _ = try self.scope.define("self", false, false);
                 }
 
                 for (f.parameters) |param| {
-                    _ = try self.scope.define(param);
+                    _ = try self.scope.define(param, true, false);
                 }
 
                 try self.compileBlock(f.body);
@@ -730,6 +730,7 @@ pub const Compiler = struct {
 
     fn setSymbol(self: *Compiler, symbol: ?*Symbol, token: Token) !void {
         if (symbol) |ptr| {
+            if (!ptr.is_mutable) return self.fail("Cannot assign to constant variable {s}", token, .{ptr.name});
             switch (ptr.tag) {
                 .global => {
                     try self.writeOp(.set_global, token);
