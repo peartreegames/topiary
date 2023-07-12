@@ -305,49 +305,32 @@ pub const Compiler = struct {
                 }
             },
             .@"for" => |f| {
-                _ = f;
-                // try self.enterScope(.closure);
-                // try self.compileStatement(f.index.*);
+                try self.compileExpression(&f.iterator);
+                try self.writeOp(.iter_start, token);
+                const start = self.instructionPos();
 
-                // const start = self.instructionPos();
-                // try self.compileExpression(&f.condition);
-                // try self.compileExpression(&f.iterator);
-                // _ = try self.scope.define(f.capture);
+                try self.writeOp(.iter_next, token);
+                try self.writeOp(.jump_if_false, token);
+                const jump_end = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
 
-                // try self.compileBlock(f.body);
-                // try self.removeLastPop();
-                // const locals_count = self.scope.symbols.count();
+                try self.enterScope(.local);
+                try self.writeOp(.set_local, token);
+                _ = try self.writeInt(OpCode.Size(.set_local), 0, token);
+                _ = try self.scope.define(f.capture, false, false);
 
-                // try self.compileExpression(&f.increment);
-                // try self.writeOp(.jump, token);
-                // _ = try self.writeInt(OpCode.Size(.jump), start, token);
+                try self.compileBlock(f.body);
+                try self.writeOp(.jump, token);
+                _ = try self.writeInt(OpCode.Size(.jump), start, token);
 
-                // const end = self.instructionPos();
-                // try self.writeOp(.return_void, token);
+                const end = self.instructionPos();
+                try self.replaceValue(jump_end, OpCode.Size(.jump), end);
+                try replaceJumps(self.chunk.instructions.items[start..], BREAK_HOLDER, end);
+                try replaceJumps(self.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
 
-                // var inst = try self.exitScope();
-
-                // try replaceJumps(inst.instructions, BREAK_HOLDER, end);
-                // try replaceJumps(inst.instructions, CONTINUE_HOLDER, start);
-
-                // const obj = try self.allocator.create(Value.Obj);
-
-                // // TODO: use debug tokens
-                // self.allocator.free(inst.debug_tokens);
-
-                // obj.* = .{
-                //     .data = .{
-                //         .loop = .{
-                //             .instructions = inst.instructions,
-                //             .locals_count = locals_count,
-                //         },
-                //     },
-                // };
-                // const i = try self.addConstant(.{ .obj = obj });
-                // try self.writeOp(.constant, token);
-                // _ = try self.writeInt(OpCode.Size(.constant), i, token);
-
-                // try self.writeOp(.loop, token);
+                _ = try self.exitScope();
+                try self.writeOp(.iter_end, token);
+                // pop item
+                try self.writeOp(.pop, token);
             },
             .variable => |v| {
                 if (self.builtins.symbols.contains(v.name))
@@ -723,6 +706,11 @@ pub const Compiler = struct {
                 var length = c.arguments.len;
                 if (c.target.type == .indexer) length += 1;
                 _ = try self.writeInt(size, @intCast(size, length), token);
+            },
+            .range => |r| {
+                try self.compileExpression(r.left);
+                try self.compileExpression(r.right);
+                try self.writeOp(.range, token);
             },
             else => {},
         }

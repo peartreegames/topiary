@@ -44,6 +44,11 @@ pub const OpCode = enum(u8) {
     set,
     class,
     instance,
+    range,
+
+    iter_start,
+    iter_next,
+    iter_end,
 
     index,
     call,
@@ -92,6 +97,10 @@ pub const OpCode = enum(u8) {
             .set => "OP_SET",
             .class => "OP_CLASS",
             .instance => "OP_INSTANCE",
+            .range => "OP_RANGE",
+            .iter_start => "OP_ITER_START",
+            .iter_next => "OP_ITER_NEXT",
+            .iter_end => "OP_ITER_END",
             .index => "OP_INDEX",
             .call => "OP_CALL",
             .closure => "OP_CLOSURE",

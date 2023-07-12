@@ -17,8 +17,10 @@ const DebugToken = @import("./debug.zig").DebugToken;
 const testing = std.testing;
 const stack_size = 2047;
 const frame_size = 1023;
+const iterator_size = 255;
 const globals_size = 65535;
 const Value = values.Value;
+const Iterator = values.Iterator;
 const adapter = values.adapter;
 const input_buf: [2]u8 = undefined;
 
@@ -46,6 +48,7 @@ pub const Vm = struct {
     gc: Gc,
     globals: std.ArrayList(Value),
     stack: Stack(Value),
+    iterators: Stack(Iterator),
 
     bytecode: ?ByteCode = null,
     ip: usize = 0,
@@ -75,6 +78,7 @@ pub const Vm = struct {
             .globals = try std.ArrayList(Value).initCapacity(allocator, 1024),
             .gc = Gc.init(allocator),
             .stack = try Stack(Value).init(allocator, stack_size),
+            .iterators = try Stack(Iterator).init(allocator, iterator_size),
             .on_dialogue = runner.on_dialogue,
             .on_choices = runner.on_choices,
             .choices_list = std.ArrayList(Choice).init(allocator),
@@ -84,6 +88,7 @@ pub const Vm = struct {
     pub fn deinit(self: *Vm) void {
         self.choices_list.deinit();
         self.stack.deinit();
+        self.iterators.deinit();
         self.globals.deinit();
         self.frames.deinit();
         self.err.deinit();
@@ -348,6 +353,29 @@ pub const Vm = struct {
                     set.sort(adapter);
                     try self.pushAlloc(.{ .set = set });
                 },
+                .iter_start => {
+                    var value = self.pop();
+                    self.iterators.push(.{
+                        .value = value,
+                        .index = 0,
+                    });
+                    if (value.len() > 0) try self.push(value.getAtIndex(0));
+                },
+                .iter_next => {
+                    var iter = self.iterators.peek().*;
+                    var value = iter.value;
+                    if (iter.index >= value.len()) {
+                        try self.push(values.Nil);
+                        try self.push(values.False);
+                    } else {
+                        try self.push(value.getAtIndex(iter.index));
+                        try self.push(values.True);
+                    }
+                    self.iterators.peek().index += 1;
+                },
+                .iter_end => {
+                    _ = self.iterators.pop();
+                },
                 .class => {
                     var value = self.pop();
                     var count = self.readInt(OpCode.Size(.class));
@@ -387,87 +415,109 @@ pub const Vm = struct {
                     var instance = try class.createInstance(try fields.toOwnedSlice());
                     try self.pushAlloc(.{ .instance = instance });
                 },
+                .range => {
+                    var right = self.pop();
+                    var left = self.pop();
+                    try self.push(.{
+                        .range = .{
+                            .start = @intFromFloat(i32, left.number),
+                            .end = @intFromFloat(i32, right.number),
+                        },
+                    });
+                },
                 .index => {
                     const index = self.pop();
                     var target = self.pop();
-                    if (target != .obj) return error.RuntimeError;
-                    switch (target.obj.data) {
-                        // TODO: Will want to clean this up
-                        .string => {
+                    switch (target) {
+                        .obj => |o| switch (o.data) {
+                            // TODO: Will want to clean this up
+                            .string => {
+                                if (index == .obj and index.obj.data == .string) {
+                                    var name = index.obj.data.string;
+                                    if (std.mem.eql(u8, name, "has")) {
+                                        try self.push(builtins.Has.value);
+                                        try self.push(target);
+                                    }
+                                }
+                            },
+                            .list => |l| {
+                                if (index == .obj and index.obj.data == .string) {
+                                    var name = index.obj.data.string;
+                                    if (std.mem.eql(u8, name, "count")) {
+                                        try self.push(builtins.Count.value);
+                                        try self.push(target);
+                                    } else if (std.mem.eql(u8, name, "add")) {
+                                        try self.push(builtins.Add.value);
+                                        try self.push(target);
+                                    } else if (std.mem.eql(u8, name, "remove")) {
+                                        try self.push(builtins.Remove.value);
+                                        try self.push(target);
+                                    } else if (std.mem.eql(u8, name, "has")) {
+                                        try self.push(builtins.Has.value);
+                                        try self.push(target);
+                                    }
+                                } else if (index == .number) {
+                                    const i = @intFromFloat(u32, index.number);
+                                    if (i < 0 or i >= l.items.len) {
+                                        try self.push(values.Nil);
+                                    } else try self.push(l.items[i]);
+                                } else return error.RuntimeError;
+                            },
+                            .map => |m| {
+                                if (index == .obj and index.obj.data == .string) {
+                                    var name = index.obj.data.string;
+                                    if (std.mem.eql(u8, name, "count")) {
+                                        try self.push(builtins.Count.value);
+                                        try self.push(target);
+                                    } else if (std.mem.eql(u8, name, "add")) {
+                                        try self.push(builtins.AddMap.value);
+                                        try self.push(target);
+                                    } else if (std.mem.eql(u8, name, "remove")) {
+                                        try self.push(builtins.Remove.value);
+                                        try self.push(target);
+                                    } else if (std.mem.eql(u8, name, "has")) {
+                                        try self.push(builtins.Has.value);
+                                        try self.push(target);
+                                    }
+                                } else if (m.get(index)) |v| {
+                                    try self.push(v);
+                                } else try self.push(values.Nil);
+                            },
+                            .set => {
+                                if (index == .obj and index.obj.data == .string) {
+                                    var name = index.obj.data.string;
+                                    if (std.mem.eql(u8, name, "count")) {
+                                        try self.push(builtins.Count.value);
+                                        try self.push(target);
+                                    } else if (std.mem.eql(u8, name, "add")) {
+                                        try self.push(builtins.Add.value);
+                                        try self.push(target);
+                                    } else if (std.mem.eql(u8, name, "remove")) {
+                                        try self.push(builtins.Remove.value);
+                                        try self.push(target);
+                                    } else if (std.mem.eql(u8, name, "has")) {
+                                        try self.push(builtins.Has.value);
+                                        try self.push(target);
+                                    }
+                                }
+                            },
+                            .instance => |i| {
+                                if (i.fields.get(index.obj.data.string)) |field| {
+                                    try self.push(field);
+                                    if (field == .obj and field.obj.data == .closure) {
+                                        try self.push(target);
+                                    }
+                                } else return error.RuntimeError;
+                            },
+                            else => unreachable,
+                        },
+                        .map_pair => |mp| {
                             if (index == .obj and index.obj.data == .string) {
                                 var name = index.obj.data.string;
-                                if (std.mem.eql(u8, name, "has")) {
-                                    try self.push(builtins.Has.value);
-                                    try self.push(target);
-                                }
-                            }
-                        },
-                        .list => |l| {
-                            if (index == .obj and index.obj.data == .string) {
-                                var name = index.obj.data.string;
-                                if (std.mem.eql(u8, name, "count")) {
-                                    try self.push(builtins.Count.value);
-                                    try self.push(target);
-                                } else if (std.mem.eql(u8, name, "add")) {
-                                    try self.push(builtins.Add.value);
-                                    try self.push(target);
-                                } else if (std.mem.eql(u8, name, "remove")) {
-                                    try self.push(builtins.Remove.value);
-                                    try self.push(target);
-                                } else if (std.mem.eql(u8, name, "has")) {
-                                    try self.push(builtins.Has.value);
-                                    try self.push(target);
-                                }
-                            } else if (index == .number) {
-                                const i = @intFromFloat(u32, index.number);
-                                if (i < 0 or i >= l.items.len) {
-                                    try self.push(values.Nil);
-                                } else try self.push(l.items[i]);
-                            } else return error.RuntimeError;
-                        },
-                        .map => |m| {
-                            if (index == .obj and index.obj.data == .string) {
-                                var name = index.obj.data.string;
-                                if (std.mem.eql(u8, name, "count")) {
-                                    try self.push(builtins.Count.value);
-                                    try self.push(target);
-                                } else if (std.mem.eql(u8, name, "add")) {
-                                    try self.push(builtins.AddMap.value);
-                                    try self.push(target);
-                                } else if (std.mem.eql(u8, name, "remove")) {
-                                    try self.push(builtins.Remove.value);
-                                    try self.push(target);
-                                } else if (std.mem.eql(u8, name, "has")) {
-                                    try self.push(builtins.Has.value);
-                                    try self.push(target);
-                                }
-                            } else if (m.get(index)) |v| {
-                                try self.push(v);
-                            } else try self.push(values.Nil);
-                        },
-                        .set => {
-                            if (index == .obj and index.obj.data == .string) {
-                                var name = index.obj.data.string;
-                                if (std.mem.eql(u8, name, "count")) {
-                                    try self.push(builtins.Count.value);
-                                    try self.push(target);
-                                } else if (std.mem.eql(u8, name, "add")) {
-                                    try self.push(builtins.Add.value);
-                                    try self.push(target);
-                                } else if (std.mem.eql(u8, name, "remove")) {
-                                    try self.push(builtins.Remove.value);
-                                    try self.push(target);
-                                } else if (std.mem.eql(u8, name, "has")) {
-                                    try self.push(builtins.Has.value);
-                                    try self.push(target);
-                                }
-                            }
-                        },
-                        .instance => |i| {
-                            if (i.fields.get(index.obj.data.string)) |field| {
-                                try self.push(field);
-                                if (field == .obj and field.obj.data == .closure) {
-                                    try self.push(target);
+                                if (std.mem.eql(u8, name, "key")) {
+                                    try self.push(mp.key.*);
+                                } else if (std.mem.eql(u8, name, "value")) {
+                                    try self.push(mp.value.*);
                                 }
                             } else return error.RuntimeError;
                         },
@@ -1195,21 +1245,40 @@ test "Loops" {
         \\ }
         \\ x
         , .value = 10 },
-        // .{ .input =
-        // \\ const list = [1,2,3,4,5]
-        // \\ var sum = 0
-        // \\ for list |item| {
-        // \\     sum = sum + item
-        // \\ }
-        // \\ sum
-        // , .value = 15 },
+        .{ .input = 
+        \\ const list = [1,2,3,4,5]
+        \\ var sum = 0
+        \\ for list |item| {
+        \\     sum += item
+        \\ }
+        \\ sum
+        , .value = 15 },
+        .{ .input = 
+        \\ const set = {1,2,3,3,3}
+        \\ var sum = 0
+        \\ for set |item| {
+        \\     sum += item
+        \\ }
+        \\ sum
+        , .value = 6 },
+        .{ .input = 
+        \\ const map = {1:2,3:4,5:6}
+        \\ var sum = 0
+        \\ for map |kvp| {
+        \\     sum += kvp.key + kvp.value
+        \\ }
+        \\ sum
+        , .value = 21 },
     };
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator, TestRunner);
         // vm.debug = true;
         defer vm.deinit();
-        try vm.interpretSource(case.input);
+        vm.interpretSource(case.input) catch |err| {
+            try vm.err.write(case.input, std.io.getStdErr().writer());
+            return err;
+        };
         const value = vm.stack.previous();
         try testing.expectEqual(value.number, case.value);
     }

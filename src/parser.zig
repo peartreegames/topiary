@@ -852,70 +852,11 @@ pub const Parser = struct {
         const capture = try self.consumeIdentifier();
         try self.expectPeek(.left_brace);
         const body = try self.block();
-
-        var index_variable = Statement{
-            .token = start_token,
-            .type = .{
-                .variable = .{
-                    .name = "__FOR_LOOP_IDX__",
-                    .is_mutable = true,
-                    .initializer = .{
-                        .token = start_token,
-                        .type = .{
-                            .number = 0,
-                        },
-                    },
-                },
-            },
-        };
-
-        var one = Expression{
-            .token = start_token,
-            .type = .{ .number = 1 },
-        };
-
-        var increment = Expression{
-            .token = start_token,
-            .type = .{
-                .binary = .{
-                    .operator = .add,
-                    .left = &index_variable.type.variable.initializer,
-                    .right = &one,
-                },
-            },
-        };
-        var count = Expression{
-            .token = start_token,
-            .type = .{
-                .identifier = "count",
-            },
-        };
-        var indexer = Expression{
-            .token = start_token,
-            .type = .{
-                .indexer = .{
-                    .target = &iterator,
-                    .index = &count,
-                },
-            },
-        };
-        var condition = Expression{
-            .token = start_token,
-            .type = .{
-                .binary = .{
-                    .operator = .less_than,
-                    .left = &index_variable.type.variable.initializer,
-                    .right = &indexer,
-                },
-            },
-        };
         return .{
             .token = start_token,
             .type = .{
                 .@"for" = .{
-                    .index = &index_variable,
-                    .increment = increment,
-                    .condition = condition,
+                    .index = ast.Expression.for_index,
                     .capture = capture,
                     .iterator = iterator,
                     .body = body,

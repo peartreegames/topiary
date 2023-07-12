@@ -20,6 +20,12 @@ pub const Type = enum(u8) {
     number,
     range,
     obj,
+    map_pair,
+};
+
+pub const Iterator = struct {
+    value: Value,
+    index: usize,
 };
 
 pub const adapter = Value.Adapter{};
@@ -32,6 +38,10 @@ pub const Value = union(Type) {
     range: struct {
         start: i32,
         end: i32,
+    },
+    map_pair: struct {
+        key: *Value,
+        value: *Value,
     },
     obj: *Obj,
 
@@ -62,10 +72,6 @@ pub const Value = union(Type) {
             },
             class: Class,
             instance: Class.Instance,
-            bough: struct {
-                instructions: []const u8,
-                locals_count: usize,
-            },
         };
         pub const MapType = std.ArrayHashMap(Value, Value, Adapter, true);
         pub const SetType = std.ArrayHashMap(Value, void, Adapter, true);
@@ -82,7 +88,6 @@ pub const Value = union(Type) {
                 .map => obj.data.map.deinit(),
                 .set => obj.data.set.deinit(),
                 .function => |f| allocator.free(f.instructions),
-                .bough => |b| allocator.free(b.instructions),
                 .builtin => {},
                 .closure => |c| allocator.free(c.free_values),
                 .class => |c| c.deinit(),
@@ -102,6 +107,38 @@ pub const Value = union(Type) {
 
     pub fn eql(a: Value, b: Value) bool {
         return adapter.eql(a, b, 0);
+    }
+
+    pub fn len(self: Value) usize {
+        return switch (self) {
+            .range => |r| @intCast(usize, std.math.absInt(r.end - r.start) catch 0),
+            .obj => |o| switch (o.data) {
+                .string => |s| s.len,
+                .list => |l| l.items.len,
+                .map => |m| m.count(),
+                .set => |s| s.count(),
+                else => std.math.maxInt(usize),
+            },
+            else => std.math.maxInt(usize),
+        };
+    }
+
+    pub fn getAtIndex(self: Value, index: usize) Value {
+        return switch (self) {
+            .range => |r| .{ .number = @floatFromInt(f32, r.start + @intCast(i32, index)) },
+            .obj => |o| switch (o.data) {
+                .list => |l| l.items[index],
+                .map => |m| .{
+                    .map_pair = .{
+                        .key = &m.keys()[index],
+                        .value = &m.values()[index],
+                    },
+                },
+                .set => |s| s.keys()[index],
+                else => Nil,
+            },
+            else => Nil,
+        };
     }
 
     pub fn isTruthy(self: Value) !bool {
@@ -156,11 +193,6 @@ pub const Value = union(Type) {
                         ByteCode.printInstructions(writer, f.instructions, constants);
                         writer.print("---", .{});
                     },
-                    .bough => |b| {
-                        writer.print("\n---\n", .{});
-                        ByteCode.printInstructions(writer, b.instructions, constants);
-                        writer.print("---", .{});
-                    },
                     .closure => |c| {
                         writer.print("\n---\n", .{});
                         ByteCode.printInstructions(writer, c.data.function.instructions, constants);
@@ -180,7 +212,9 @@ pub const Value = union(Type) {
                         }
                         writer.print("}}", .{});
                     },
-                    else => {},
+                    else => {
+                        writer.print("{s}", .{@tagName(o.data)});
+                    },
                 }
             },
             // .range => |r| writer.print("{}..{}", .{ r.start, r.end }),

@@ -7,7 +7,7 @@ pub const Frame = struct {
     bp: usize,
 
     pub fn create(obj: *Obj, ip: usize, bp: usize) !Frame {
-        if (obj.data != .closure and obj.data != .bough) {
+        if (obj.data != .closure) {
             return error.InvalidType;
         }
         return .{

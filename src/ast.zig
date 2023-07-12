@@ -26,6 +26,7 @@ pub const Expression = struct {
     token: Token,
     type: ExpressionValue,
 
+    pub var for_index: Expression = .{ .token = undefined, .type = .{ .number = 0 } };
     pub const ExpressionValue = union(enum) {
         indexer: struct {
             target: *Expression,
@@ -146,9 +147,7 @@ pub const Statement = struct {
         },
         expression: Expression,
         @"for": struct {
-            index: *Statement,
-            increment: Expression,
-            condition: Expression,
+            index: Expression,
             iterator: Expression,
             capture: []const u8,
             body: []const Statement,
