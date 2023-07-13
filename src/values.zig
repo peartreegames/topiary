@@ -111,15 +111,15 @@ pub const Value = union(Type) {
 
     pub fn len(self: Value) usize {
         return switch (self) {
-            .range => |r| @intCast(usize, std.math.absInt(r.end - r.start) catch 0),
+            .range => |r| @intCast(usize, std.math.absInt(r.end - r.start) catch 0) + 1,
             .obj => |o| switch (o.data) {
                 .string => |s| s.len,
                 .list => |l| l.items.len,
                 .map => |m| m.count(),
                 .set => |s| s.count(),
-                else => std.math.maxInt(usize),
+                else => unreachable,
             },
-            else => std.math.maxInt(usize),
+            else => unreachable,
         };
     }
 

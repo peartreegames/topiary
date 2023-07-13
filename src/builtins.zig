@@ -210,3 +210,24 @@ pub const Has = struct {
         return values.False;
     }
 };
+pub const Clear = struct {
+    const Self = @This();
+    pub var value: Value = .{
+        .obj = &Self.obj,
+    };
+    var obj: Value.Obj = .{
+        .data = .{
+            .builtin = .{ .backing = Self.builtin, .arity = 1 },
+        },
+    };
+    fn builtin(_: *Gc, args: []Value) Value {
+        var data = args[0].obj.data;
+        switch (data) {
+            .list => data.list.clearAndFree(),
+            .map => data.map.clearAndFree(),
+            .set => data.set.clearAndFree(),
+            else => {},
+        }
+        return values.Nil;
+    }
+};

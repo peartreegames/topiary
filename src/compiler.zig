@@ -347,22 +347,27 @@ pub const Compiler = struct {
                 }
             },
             .fork => |f| {
-                const start_pos = self.instructionPos();
                 if (f.name) |name| {
                     self.jump_node = try self.jump_node.getChild(name);
                     self.jump_node.*.ip = self.instructionPos();
                 }
                 try self.enterScope(.local);
                 try self.compileBlock(f.body);
-                // try self.writeOp(.fin, token);
                 _ = try self.exitScope();
                 if (f.name != null) {
                     self.jump_node = self.jump_node.parent.?;
                 }
 
+                var backup_pos: usize = 0;
+                if (f.is_backup) {
+                    try self.writeOp(.backup, token);
+                    backup_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
+                }
                 try self.writeOp(.fork, token);
                 const end_pos = self.instructionPos();
-                try replaceJumps(self.chunk.instructions.items[start_pos..], FORK_HOLDER, end_pos);
+                if (f.is_backup) {
+                    try self.replaceValue(backup_pos, OpCode.Size(.jump), end_pos);
+                }
             },
             .choice => |c| {
                 try self.compileExpression(&c.text);
@@ -378,9 +383,6 @@ pub const Compiler = struct {
                 try self.removeLast(.pop);
                 try self.writeOp(.fin, token);
                 _ = try self.exitScope();
-                try self.writeOp(.jump, token);
-                _ = try self.writeInt(OpCode.Size(.jump), FORK_HOLDER, token);
-
                 try self.replaceValue(jump_pos, OpCode.Size(.jump), self.instructionPos());
             },
             .bough => |b| {
@@ -416,10 +418,20 @@ pub const Compiler = struct {
                 _ = try self.writeInt(u8, @intCast(u8, d.tags.len), token);
             },
             .divert => |d| {
-                var node = try self.getDivertNode(d);
+                var node = try self.getDivertNode(d.path);
+                var backup_pos: usize = 0;
+                if (d.is_backup) {
+                    try self.writeOp(.backup, token);
+                    backup_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
+                }
                 try self.writeOp(.jump, token);
                 try self.divert_log.append(.{ .node = node, .jump_ip = self.instructionPos() });
                 _ = try self.writeInt(OpCode.Size(.jump), DIVERT_HOLDER, token);
+
+                const end_pos = self.instructionPos();
+                if (d.is_backup) {
+                    try self.replaceValue(backup_pos, OpCode.Size(.jump), end_pos);
+                }
             },
             .return_expression => |r| {
                 try self.compileExpression(&r);
@@ -708,8 +720,8 @@ pub const Compiler = struct {
                 _ = try self.writeInt(size, @intCast(size, length), token);
             },
             .range => |r| {
-                try self.compileExpression(r.left);
                 try self.compileExpression(r.right);
+                try self.compileExpression(r.left);
                 try self.writeOp(.range, token);
             },
             else => {},

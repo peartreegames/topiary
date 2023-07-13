@@ -91,6 +91,7 @@ pub const Lexer = struct {
             '>' => if (self.peekChar() == '=') {
                 return self.readAndCreateToken(.greater_equal, 2);
             } else .greater,
+            '^' => .caret,
             '/' => if (self.peekChar() == '=') {
                 return self.readAndCreateToken(.slash_equal, 2);
             } else if (self.peekChar() == '/') {

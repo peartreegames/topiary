@@ -57,6 +57,7 @@ pub const OpCode = enum(u8) {
     dialogue,
     fork,
     choice,
+    backup,
 
     return_void,
     return_value,
@@ -108,6 +109,7 @@ pub const OpCode = enum(u8) {
             .dialogue => "OP_DIALOGUE",
             .fork => "OP_FORK",
             .choice => "OP_CHOICE",
+            .backup => "OP_BACKUP",
             .return_void => "OP_RETURN_VOID",
             .return_value => "OP_RETURN_VALUE",
             .fin => "OP_FIN",
@@ -118,7 +120,7 @@ pub const OpCode = enum(u8) {
         // kept separate to easily change if needed
         return switch (self) {
             .constant => u16,
-            .jump, .jump_if_false => u16,
+            .jump, .jump_if_false, .backup => u16,
             .set_global, .get_global, .choice => u16,
             .list, .map, .set => u16,
             .get_local, .set_local, .get_builtin, .get_free, .set_free, .call, .class, .instance => u8,

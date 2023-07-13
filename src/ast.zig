@@ -155,6 +155,7 @@ pub const Statement = struct {
         fork: struct {
             name: ?[]const u8,
             body: []const Statement,
+            is_backup: bool,
         },
         @"if": struct {
             condition: *Expression,
@@ -165,7 +166,10 @@ pub const Statement = struct {
             path: []const u8,
             contents: []const Statement,
         },
-        divert: [][]const u8,
+        divert: struct {
+            path: [][]const u8,
+            is_backup: bool,
+        },
         return_expression: Expression,
         return_void: void,
         class: struct {

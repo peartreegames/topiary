@@ -4,7 +4,8 @@
 
 ### Boughs
 
-Sections of dialogue are called Boughs, and are denoted with `=== [Name] {}`. So `=== START {}` is a bough called `START` with an empty "body".
+Sections of dialogue are called Boughs, and are denoted with `=== [Name] {}`. 
+So `=== START {}` is a bough called `START` with an empty "body".
 
 ### Lines
 
@@ -16,7 +17,7 @@ Tags can are also optional and can be omitted or multiple can be separated each 
 
 ### Jumps
 
-Boughs can be started with jumps, denoted with `=> [Name]`. Boughs must be initialized before a jump to it occurs.
+Boughs can be started with jumps, denoted with `=> [Name]`.
 
 So with that we can write a very simple program.
 
@@ -104,7 +105,7 @@ Topi supports the following types
 
 ### Collections
 Topi has three builtin collection types. Lists, Sets, and Maps. Each type has four builtin methods attached as well. 
-`add`, `remove`, `has`, `clear`
+`add`, `remove`, `has`, `clear`, `count`
 
 Lists are a collections of values in order.
 ```
@@ -113,6 +114,7 @@ var emptyList = []
 
 list.add("four") // List["one", "two", "three", "four"]
 list.remove("one") // List["two", "three", "four"]
+list.count() // 3
 list.has("two") // true
 list.clear() // List[]
 ```
@@ -124,6 +126,7 @@ var set = {"one", "two", "one"} // Set{one, two}
 const emptySet = {}
 
 set.add("two") // Set{one, two}
+set.count() // 2
 set.remove("one") // Set{two}
 set.has("one") // false
 set.clear() // Set{}
@@ -135,6 +138,7 @@ const map = {"one": 1, "two": 2} // Map{one:1, two:2}
 const emptyMap = {:}
 
 map.add("one", 3) // Map{one:3, two:2} (add will replace values if already exists)
+map.count() // 2
 map.remove("one") // Map{two:2}
 map.has('two") // true
 map.clear() // Map{}
@@ -147,7 +151,7 @@ map.clear() // Map{}
 While loops will execute so long as the condition is met. However there is an internal limit of 100,000 to catch infinite loops. This can be adjusted by setting `Topiary.MaxWhile = -1 // no limit`
 ```topi
 var i = 0
-while (i < 10) {
+while i < 10 {
     print(i)
     i += 1
 }
@@ -157,34 +161,31 @@ while (i < 10) {
 
 For loops can be a range (inclusive), or a collection. The item the loop is on is declared within pipes (`|`) after the iterator
 ```topi
-for (0..10) |i| {
+for 0..10 |i| {
     print(i) // 0,1,2,3,4,5,6,7,8,9,10
 }
 ```
 
 ```topi
 var list = ["one", "two", "three"]
-for (list) |item| {
+for list |item| {
     print(item) // one, two, thee
 }
-var emptyList = []
 ```
 
 ```topi
 var set = {"one", "two", "one"}
-for (set) |item| {
+for set |item| {
     print(item) // one, two
 }
-var emptySet = {}
 ```
 
 ```topi
 var map = {"one":1.1, "two":1.2, "three":1.3}
-for (map) |item| {
+for map |item| {
     print(item.key) // one, two, three
     print(item.value) // 1.1, 1.2, 1.3
 }
-var emptyMap = {:}
 ```
 
 ### Control flow 
@@ -236,14 +237,14 @@ switch(""else"") {
 
 ### Inline Code
 
-Code can be executed within a dialogue line with backticks.
+Code can be executed within a dialogue line with braces `{}`.
 ```topi
 var greeting = "Howdy"
 const value = 42
 === START {
-    :John: "`greeting`, Jane!" // Howdy, Jane!
+    :John: "{greeting}, Jane!" // Howdy, Jane!
     greeting = "Hello"
-    :Jane: "`greeting`, John. The password is `value`." // Hello, John. The password is 42.
+    :Jane: "{greeting}, John. The password is {value}." // Hello, John. The password is 42.
 }
 => START
 ```
@@ -276,11 +277,11 @@ enum Cardinal {
 var direction = Cardinal.North
 ```
 
-### Structures
+### Classes
 
-Structures are an encapsulation of named data. 
+Classes are an encapsulation of named data. 
 All fields must be given a default value.
-Instances of structures are created with the `new` keyword.
+Instances of classes are created with the `new` keyword.
 Any field not initialized will use the default value.
 
 
@@ -293,13 +294,15 @@ struct Person {
 var john = new Person {
     name = "John Doe"
 }
+
+print(john) // person{name = "John Doe", age = 25}
 ```
 
-Structures can also have methods on them, 
+Classes can also have functions as fields, 
 references to its own fields can be achieved with `self`
 
 ```topi
-struct Person {
+class Person {
     age = 0,
     firstName = "",
     lastName = "",

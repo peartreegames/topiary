@@ -683,7 +683,14 @@ pub const Parser = struct {
         // TODO: Perhaps this should just be an expression and indexers used
         var list = std.ArrayList([]const u8).init(self.allocator);
         errdefer list.deinit();
+        var is_backup: bool = false;
+        if (self.peekIs(.caret)) {
+            is_backup = true;
+            self.next();
+        }
+
         try self.expectPeek(.identifier);
+
         try list.append(try self.getStringValue());
         while (self.peekIs(.dot)) {
             self.next();
@@ -694,7 +701,10 @@ pub const Parser = struct {
         return .{
             .token = start_token,
             .type = .{
-                .divert = try list.toOwnedSlice(),
+                .divert = .{
+                    .path = try list.toOwnedSlice(),
+                    .is_backup = is_backup,
+                },
             },
         };
     }
@@ -703,6 +713,11 @@ pub const Parser = struct {
         const start = self.current_token;
         var name: ?[]const u8 = null;
         self.next();
+        var is_backup: bool = false;
+        if (self.currentIs(.caret)) {
+            is_backup = true;
+            self.next();
+        }
         if (self.currentIs(.identifier)) name = try self.consumeIdentifier();
         return .{
             .token = start,
@@ -710,6 +725,7 @@ pub const Parser = struct {
                 .fork = .{
                     .name = name,
                     .body = try self.block(),
+                    .is_backup = is_backup,
                 },
             },
         };
@@ -735,8 +751,15 @@ pub const Parser = struct {
         const start_token = self.current_token;
         self.next();
         var speaker: ?[]const u8 = null;
-        if (self.currentIs(.identifier)) {
-            speaker = try self.consumeIdentifier();
+        if (!self.currentIs(.colon)) {
+            var speaker_start = self.current_token.start;
+            var speaker_end = self.current_token.end;
+            // allow any character including spaces for speaker
+            while (!self.currentIs(.colon)) {
+                self.next();
+                speaker_end = self.current_token.end;
+            }
+            speaker = try self.allocator.dupe(u8, self.source[speaker_start..speaker_end]);
         }
         try self.expectCurrent(.colon);
         self.next();
@@ -1421,7 +1444,7 @@ test "Parse divert" {
         return err;
     };
     defer tree.deinit();
-    const divert = tree.root[1].type.divert;
+    const divert = tree.root[1].type.divert.path;
     try testing.expectEqualStrings("BOUGH", divert[0]);
 }
 

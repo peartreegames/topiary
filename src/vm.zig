@@ -29,13 +29,13 @@ const InterpretResult = union(enum) {
     Paused,
 };
 
-const Dialogue = struct {
+pub const Dialogue = struct {
     speaker: ?[]const u8,
     content: []const u8,
     tags: [][]const u8,
 };
 
-const Choice = struct {
+pub const Choice = struct {
     content: []const u8,
     count: usize,
     ip: u16,
@@ -49,6 +49,7 @@ pub const Vm = struct {
     globals: std.ArrayList(Value),
     stack: Stack(Value),
     iterators: Stack(Iterator),
+    jump_backups: std.ArrayList(OpCode.Size(.jump)),
 
     bytecode: ?ByteCode = null,
     ip: usize = 0,
@@ -79,6 +80,7 @@ pub const Vm = struct {
             .gc = Gc.init(allocator),
             .stack = try Stack(Value).init(allocator, stack_size),
             .iterators = try Stack(Iterator).init(allocator, iterator_size),
+            .jump_backups = std.ArrayList(OpCode.Size(.jump)).init(allocator),
             .on_dialogue = runner.on_dialogue,
             .on_choices = runner.on_choices,
             .choices_list = std.ArrayList(Choice).init(allocator),
@@ -89,6 +91,7 @@ pub const Vm = struct {
         self.choices_list.deinit();
         self.stack.deinit();
         self.iterators.deinit();
+        self.jump_backups.deinit();
         self.globals.deinit();
         self.frames.deinit();
         self.err.deinit();
@@ -416,8 +419,8 @@ pub const Vm = struct {
                     try self.pushAlloc(.{ .instance = instance });
                 },
                 .range => {
-                    var right = self.pop();
                     var left = self.pop();
+                    var right = self.pop();
                     try self.push(.{
                         .range = .{
                             .start = @intFromFloat(i32, left.number),
@@ -455,6 +458,9 @@ pub const Vm = struct {
                                     } else if (std.mem.eql(u8, name, "has")) {
                                         try self.push(builtins.Has.value);
                                         try self.push(target);
+                                    } else if (std.mem.eql(u8, name, "clear")) {
+                                        try self.push(builtins.Clear.value);
+                                        try self.push(target);
                                     }
                                 } else if (index == .number) {
                                     const i = @intFromFloat(u32, index.number);
@@ -478,6 +484,9 @@ pub const Vm = struct {
                                     } else if (std.mem.eql(u8, name, "has")) {
                                         try self.push(builtins.Has.value);
                                         try self.push(target);
+                                    } else if (std.mem.eql(u8, name, "clear")) {
+                                        try self.push(builtins.Clear.value);
+                                        try self.push(target);
                                     }
                                 } else if (m.get(index)) |v| {
                                     try self.push(v);
@@ -498,6 +507,9 @@ pub const Vm = struct {
                                     } else if (std.mem.eql(u8, name, "has")) {
                                         try self.push(builtins.Has.value);
                                         try self.push(target);
+                                    } else if (std.mem.eql(u8, name, "clear")) {
+                                        try self.push(builtins.Clear.value);
+                                        try self.push(target);
                                     }
                                 }
                             },
@@ -509,7 +521,10 @@ pub const Vm = struct {
                                     }
                                 } else return error.RuntimeError;
                             },
-                            else => unreachable,
+                            else => {
+                                std.log.warn("Invalid index type: {}", .{o.data});
+                                return error.RuntimeError;
+                            },
                         },
                         .map_pair => |mp| {
                             if (index == .obj and index.obj.data == .string) {
@@ -627,14 +642,24 @@ pub const Vm = struct {
                     self.choices_list.clearRetainingCapacity();
                 },
                 .choice => {
-                    const ip = self.readInt(u16);
+                    const ip = self.readInt(OpCode.Size(.choice));
                     try self.choices_list.append(.{
                         .content = self.pop().obj.data.string,
                         .count = 0,
                         .ip = ip,
                     });
                 },
-                .fin => break,
+                .backup => {
+                    const ip = self.readInt(OpCode.Size(.backup));
+                    try self.jump_backups.append(ip);
+                },
+                .fin => {
+                    if (self.jump_backups.items.len > 0) {
+                        self.currentFrame().ip = self.jump_backups.pop();
+                        continue;
+                    }
+                    break;
+                },
             }
         }
     }
@@ -1249,6 +1274,7 @@ test "Loops" {
         \\ const list = [1,2,3,4,5]
         \\ var sum = 0
         \\ for list |item| {
+        \\     print(item)
         \\     sum += item
         \\ }
         \\ sum
@@ -1269,11 +1295,28 @@ test "Loops" {
         \\ }
         \\ sum
         , .value = 21 },
+        .{ .input = 
+        \\ var sum = 0
+        \\ for 0..10 |i| {
+        \\     print(i)
+        \\     sum += i
+        \\ }
+        \\ sum
+        , .value = 55 },
+        .{ .input = 
+        \\ const list = [1,2,3,4,5]
+        \\ var sum = 0
+        \\ for 0..(list.count() - 1) |i| {
+        \\     print(i)
+        \\     sum += list[i]
+        \\ }
+        \\ sum
+        , .value = 15 },
     };
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        vm.debug = true;
         defer vm.deinit();
         vm.interpretSource(case.input) catch |err| {
             try vm.err.write(case.input, std.io.getStdErr().writer());
@@ -1446,6 +1489,50 @@ test "Forks" {
             \\ === DONE {
             \\     :speaker: "Done"
             \\ }
+            ,
+        },
+    };
+
+    inline for (test_cases) |case| {
+        errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
+        var vm = try Vm.init(testing.allocator, TestRunner);
+        // vm.debug = true;
+        std.debug.print("\n======\n", .{});
+        defer vm.deinit();
+        try vm.interpretSource(case.input);
+    }
+}
+
+test "Jump Backups" {
+    const test_cases = .{
+        .{
+            .input =
+            \\ => START
+            \\ === START {
+            \\     :speaker: "Question"
+            \\     =>^ MIDDLE
+            \\     :speaker: "Continue here after divert"
+            \\ }
+            \\ === MIDDLE {
+            \\     :speaker: "Done"
+            \\ }
+            ,
+        },
+        .{
+            .input =
+            \\ === START {
+            \\     :speaker: "Question"
+            \\    fork^ {
+            \\        ~ "Answer one" {
+            \\            :speaker: "You chose one"
+            \\        }
+            \\        ~ "Answer two" {      
+            \\            :speaker: "You chose two"
+            \\        }
+            \\    }
+            \\    :speaker: "Continue here after fork"
+            \\ }
+            \\ => START
             ,
         },
     };
