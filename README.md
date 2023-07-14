@@ -5,6 +5,18 @@ It is designed to be integrated into video games which require a large amount of
 
 It is written in [Zig](https://ziglang.org) and includes a C binary.
 
+## Usage
+
+Currently Topiary can only be run as a CLI tool.
+Simply download the appropiary binary then pass in a `--file=[PATH]` argument.
+
+You can then press `space` for the next line, and select a choice with `0-9` then `enter`
+
+Example:
+```
+./zig-out/bin/topi-cli --file=./examples/basic.topi
+```
+
 ## Future
 
 Topiary is in early development and still has a long way to go. 
@@ -22,7 +34,7 @@ and [LoLa](https://github.com/MasterQ32/LoLa/tree/master) both of which are cred
 
 ## Contributing
 
-Download and install [Zig](https://ziglang.org). Currently Topiary uses 0.11.0-dev.3777+64f0059cd
+Download and install [Zig](https://ziglang.org). Currently Topiary uses version `0.11.0-dev.3777+64f0059cd`
 
 ```
 git clone https://github.com/peartreegames/topiary

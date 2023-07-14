@@ -67,6 +67,7 @@ Fork bodies can be either a jump or a block surrounded by braces.
 ```
 
 Forks can also be named to revisit, useful if wanting to loop choices.
+
 ```topi
 === START {
     fork DIFFICULTY { 
@@ -133,6 +134,7 @@ Backups can also be applied to forks with `fork^` on anonymous forks and `fork [
 ### Variables
 
 Variables can either be mutable `var` or constant `const`. Constant variables cannot be reassigned.
+
 ```topi
 var value = 0
 value = 5 // okay
@@ -144,15 +146,17 @@ constant = 5 // error
 ### Types
 
 Topi supports the following types
- - `bool` - `true/false`
- - `string` - `"text"`
- - `number` - `1`,`1.1`,`-2.2`
+
+ - `bool`: `true/false`
+ - `string`: `"text"`
+ - `number`: `1`,`1.1`,`-2.2`
 
 ### Collections
-Topi has three builtin collection types. Lists, Sets, and Maps. Each type has four builtin methods attached as well. 
+Topi has three builtin collection types. Lists, Sets, and Maps. Each type has five builtin methods attached as well. 
 `add`, `remove`, `has`, `clear`, `count`
 
 Lists are a collections of values in order.
+
 ```
 var list = ["one", "two", "three"] // List["one", "two", "three"]
 var emptyList = []
@@ -178,6 +182,7 @@ set.clear() // Set{}
 ```
 
 Maps are a collection of key/value pairs.
+
 ```
 const map = {"one": 1, "two": 2} // Map{one:1, two:2}
 const emptyMap = {:}
@@ -194,6 +199,7 @@ map.clear() // Map{}
 #### While
 
 While loops will execute so long as the condition is met. However there is an internal limit of 100,000 to catch infinite loops. This can be adjusted by setting `Topiary.MaxWhile = -1 // no limit`
+
 ```topi
 var i = 0
 while i < 10 {
@@ -205,6 +211,7 @@ while i < 10 {
 #### For
 
 For loops can be a range (inclusive), or a collection. The item the loop is on is declared within pipes (`|`) after the iterator
+
 ```topi
 for 0..10 |i| {
     print(i) // 0,1,2,3,4,5,6,7,8,9,10
@@ -237,6 +244,7 @@ for map |item| {
 
 Code and dialogues can be conditional with `if/else`.
 Braces are optional if only one line is used.
+
 ```topi
 var value = 0
 if (value < 10) value = 11
@@ -245,12 +253,13 @@ else value = -5
 print(value) // 11
 ```
 
-Switch statements can also be used. 
+Switch statements can also be used (**Coming Soon**). 
 Breaks are implied on the first case which matches. 
 Multiple conditions can be matched with commas (`,`), 
 and if using numbers Ranges can also be used.
 
 Again braces are optional if only one line is used.
+
 ```topi
 // basic switch
 switch(""string"") {
@@ -280,9 +289,11 @@ switch(""else"") {
     else: print(""switch else here"")
 ```
 
+
 ### Inline Code
 
 Code can be executed within a dialogue line with braces `{}`.
+
 ```topi
 var greeting = "Howdy"
 const value = 42
