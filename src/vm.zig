@@ -1587,3 +1587,24 @@ test "Jump Backups" {
         try vm.interpretSource(case.input);
     }
 }
+
+test "Externs" {
+    const test_cases = .{
+        .{ .input = 
+        \\ extern const value = 1
+        \\ value
+        , .value = 2.0 },
+    };
+
+    inline for (test_cases) |case| {
+        errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
+        var vm = try Vm.init(testing.allocator, TestRunner);
+        vm.debug = true;
+        std.debug.print("\n======\n", .{});
+        // vm.setExtern("value", 2);
+        // defer vm.removeExtern("value");
+        defer vm.deinit();
+        try vm.interpretSource(case.input);
+        try testing.expect(case.value == vm.stack.previous().number);
+    }
+}

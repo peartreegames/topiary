@@ -80,6 +80,7 @@ pub const Compiler = struct {
         IllegalOperation,
         OutOfScope,
         SymbolNotFound,
+        ExternError,
     } || parser.Parser.Error;
 
     pub fn init(allocator: std.mem.Allocator, root_scope: *Scope, root_chunk: *Chunk, errors: *Errors) Compiler {

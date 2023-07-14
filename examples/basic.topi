@@ -4,38 +4,3 @@ class Character {
 	relation = || self.like / (self.like + self.dislike)
 }
 
-const taithligh = new Character{}
-
-=> START
-
-=== START {
-	:Mrs Taithligh: "Oh thank goodness you're here Inspector Hatton"
-	fork {
-		~ "Happy to assist maddam" {
-			taithligh.like += 1
-			:Mrs Taithligh: "Such a handsome one, you are."
-			:Mrs Taithligh: "But let's get to the issue at hand."
-			=> REASON_FOR_CALL
-		}
-		~ "What seems to be the issue?" {
-			taithligh.dislike += 1
-			:Mrs Taithligh: "Staight to the point. Very well"
-			=> REASON_FOR_CALL
-		}
-	}
-}
-
-=== REASON_FOR_CALL {
-	:Mrs Taithligh: "As you know I host the annual Garden afternoon tea."
-	:Mrs Taithligh: "This year I requested a rare oolong tea, said to have incredible depth of flavours."
-	fork^ {
-		~ "Sounds nice." {
-			taithligh.like += 1
-		}
-		~ "Can we move on to why you called?" {
-			taithligh.dislike += 1
-		}
-	}
-	:Mrs Taithligh: "Let's come back to this."
-}
-

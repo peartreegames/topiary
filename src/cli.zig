@@ -10,7 +10,7 @@ const Choice = _vm.Choice;
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-    var file_path = getFilePath(arena.allocator());
+    var file_path = try getFilePath(arena.allocator());
     if (file_path == null) {
         std.log.warn("No file argument provided.", .{});
         return;
@@ -33,7 +33,7 @@ pub fn main() !void {
     };
 }
 
-fn getFilePath(allocator: std.mem.Allocator) ?[]const u8 {
+fn getFilePath(allocator: std.mem.Allocator) !?[]const u8 {
     var args = try std.process.argsWithAllocator(allocator);
     while (args.next()) |arg| {
         var splits = std.mem.split(u8, arg, "=");
