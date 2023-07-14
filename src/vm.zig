@@ -193,6 +193,7 @@ pub const Vm = struct {
                     const right = self.pop();
                     const left = self.pop();
                     if (@intFromEnum(right) != @intFromEnum(left)) {
+                        std.log.warn("Cannot add types {} and {}", .{ left, right });
                         return error.RuntimeError;
                     }
                     switch (right) {

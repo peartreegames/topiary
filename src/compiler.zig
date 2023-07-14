@@ -234,7 +234,7 @@ pub const Compiler = struct {
                 _ = try self.writeInt(OpCode.Size(.jump), CONTINUE_HOLDER, token);
             },
             .@"while" => |w| {
-                try self.enterScope(if (self.scope.tag == .global) .global else .local);
+                try self.enterScope(.local);
 
                 const start = self.instructionPos();
                 try self.compileExpression(&w.condition);
@@ -252,7 +252,8 @@ pub const Compiler = struct {
 
                 try replaceJumps(self.chunk.instructions.items[start..], BREAK_HOLDER, end);
                 try replaceJumps(self.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
-                _ = try self.exitScope();
+                const scope = try self.exitScope();
+                self.scope.count += scope.locals_count;
             },
             .class => |c| {
                 for (c.fields, 0..) |field, i| {
@@ -312,7 +313,7 @@ pub const Compiler = struct {
                 try self.writeOp(.jump_if_false, token);
                 const jump_end = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
 
-                try self.enterScope(if (self.scope.tag == .global) .global else .local);
+                try self.enterScope(.local);
                 try self.writeOp(.set_local, token);
                 _ = try self.writeInt(OpCode.Size(.set_local), 0, token);
                 _ = try self.scope.define(f.capture, false, false);
@@ -326,7 +327,8 @@ pub const Compiler = struct {
                 try replaceJumps(self.chunk.instructions.items[start..], BREAK_HOLDER, end);
                 try replaceJumps(self.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
 
-                _ = try self.exitScope();
+                const scope = try self.exitScope();
+                self.scope.count += scope.locals_count;
                 try self.writeOp(.iter_end, token);
                 // pop item
                 try self.writeOp(.pop, token);
@@ -379,7 +381,6 @@ pub const Compiler = struct {
 
                 try self.enterScope(.global);
                 try self.compileBlock(c.body);
-                try self.removeLast(.pop);
                 try self.writeOp(.fin, token);
                 _ = try self.exitScope();
                 try self.replaceValue(jump_pos, OpCode.Size(.jump), self.instructionPos());
@@ -395,7 +396,6 @@ pub const Compiler = struct {
                 try self.enterScope(.global);
 
                 try self.compileBlock(b.body);
-                try self.removeLast(.pop);
                 try self.writeOp(.fin, token);
 
                 var scope = try self.exitScope();
