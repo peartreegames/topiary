@@ -680,7 +680,10 @@ pub const Vm = struct {
     fn comparisonOp(self: *Vm, op: OpCode) !void {
         const right = self.pop();
         const left = self.pop();
-        if (@intFromEnum(right) != @intFromEnum(left)) return error.RuntimeError;
+        if (@intFromEnum(right) != @intFromEnum(left)) {
+            std.log.warn("Mismatched types {} and {}", .{ left, right });
+            return error.RuntimeError;
+        }
         switch (op) {
             .equal => try self.push(.{ .bool = right.eql(left) }),
             .not_equal => try self.push(.{ .bool = !right.eql(left) }),
@@ -779,10 +782,13 @@ test "Conditionals" {
         .{ .input = "if false { 10 }", .value = void, .type = .nil },
         .{ .input = "if 1 > 0 or 2 < 1 { 10 }", .value = 10.0, .type = .number },
         .{ .input = "if 1 > 0 and 2 < 1 { 10 }", .value = void, .type = .nil },
+        .{ .input = "const one = if true 1 else 0 one", .value = 1.0, .type = .number },
+        .{ .input = "const zero = if false 1 else 0 zero", .value = 0.0, .type = .number },
     };
 
     inline for (test_cases) |case| {
         var vm = try Vm.init(testing.allocator, TestRunner);
+        vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
         switch (case.type) {
@@ -1405,6 +1411,13 @@ test "Boughs" {
         },
         .{ .input = 
         \\ === START {
+        \\     if true { :speaker: "This is true" }
+        \\     else { :speaker: "This is false" }      
+        \\ }
+        \\ => START
+        },
+        .{ .input = 
+        \\ === START {
         \\    if true :speaker: "True text goes here" 
         \\    :speaker: "More text here"
         \\    if false :speaker: "False text doesn't appear"
@@ -1444,7 +1457,7 @@ test "Boughs" {
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        vm.debug = true;
         defer vm.deinit();
         std.debug.print("\n======\n", .{});
         try vm.interpretSource(case.input);
@@ -1510,7 +1523,7 @@ test "Jump Backups" {
             \\ => START
             \\ === START {
             \\     :speaker: "Question"
-            \\     =>^ MIDDLE
+            \\     => MIDDLE^
             \\     :speaker: "Continue here after divert"
             \\ }
             \\ === MIDDLE {
@@ -1535,12 +1548,39 @@ test "Jump Backups" {
             \\ => START
             ,
         },
+        .{
+            .input =
+            \\ === START {
+            \\     :speaker: "Question"
+            \\    var count = 0
+            \\    fork NAMED {
+            \\        ~ "Answer one" {
+            \\            :speaker: "You chose one"
+            \\            if count == 0 {
+            \\                count += 1
+            \\                => NAMED^
+            \\            }
+            \\            else :speaker: "Else branch"
+            \\        }
+            \\    }
+            \\    => DONE
+            \\ }
+            \\ var done = false
+            \\ === DONE {
+            \\     if done == false {
+            \\        done = true
+            \\        :speaker: "Not done yet"
+            \\     } else :speaker: "Done"
+            \\ }
+            \\ => START
+            ,
+        },
     };
 
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        vm.debug = true;
         std.debug.print("\n======\n", .{});
         defer vm.deinit();
         try vm.interpretSource(case.input);

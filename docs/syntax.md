@@ -83,6 +83,51 @@ Forks can also be named to revisit, useful if wanting to loop choices.
 => START
 ```
 
+### Flow and Jump Back Ups
+
+If the flow of the story hits a closing backet it will end. 
+But sometimes we want to temporarily duck into a bough and then continue on.
+We can do that by adding a caret `^` to a jump name `=> [NAME]^` (meaning jump then come back up).
+
+```topi
+=== NO_BACKUP {
+    :John: "Hello Jane!" #greet
+    => JUMP
+    :John: "How've you been?" // This will never be executed.
+}
+=> NO_BACKUP
+
+=== WITH_BACKUP {    
+    :John: "Hello Jane!" #greet
+    => JUMP^
+    :John: "How've you been?" // This will be executed.
+}
+=> WITH_BACKUP
+
+=== JUMP {
+    :Jane: "Great to see you, John"
+}
+```
+
+Backups can also be applied to forks with `fork^` on anonymous forks and `fork [NAME]^` on named forks.
+
+```topi
+=== START {
+    :Jane: "Which way do you want to go?"
+    fork^ {
+        ~ "Easy route" {
+            :John: "Nice and easy"
+        }
+        ~ "Hard route" {
+            :John: "Nothing easy was ever worth doing."
+        }
+    }
+    :Jane: "Good choice."
+}
+=> START
+```
+
+
 ## Code
 
 ### Variables

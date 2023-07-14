@@ -206,7 +206,6 @@ pub const Compiler = struct {
                 try self.writeOp(.jump_if_false, token);
                 const falsePos = try self.writeInt(u16, JUMP_HOLDER, token);
                 try self.compileBlock(i.then_branch);
-                try self.removeLast(.pop);
 
                 try self.writeOp(.jump, token);
                 const jumpPos = try self.writeInt(u16, JUMP_HOLDER, token);
@@ -215,11 +214,11 @@ pub const Compiler = struct {
                 if (i.else_branch == null) {
                     try self.writeOp(.nil, token);
                     try self.writeOp(.pop, token);
-                    try self.replaceValue(jumpPos, u16, self.instructionPos() - 1);
+                    try self.replaceValue(jumpPos, u16, self.instructionPos());
                     return;
                 }
                 try self.compileBlock(i.else_branch.?);
-                try self.replaceValue(jumpPos, u16, self.instructionPos() - 1);
+                try self.replaceValue(jumpPos, u16, self.instructionPos());
             },
             .block => |b| try self.compileBlock(b),
             .expression => |exp| {
@@ -313,7 +312,7 @@ pub const Compiler = struct {
                 try self.writeOp(.jump_if_false, token);
                 const jump_end = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
 
-                try self.enterScope(.local);
+                try self.enterScope(if (self.scope.tag == .global) .global else .local);
                 try self.writeOp(.set_local, token);
                 _ = try self.writeInt(OpCode.Size(.set_local), 0, token);
                 _ = try self.scope.define(f.capture, false, false);
@@ -351,7 +350,7 @@ pub const Compiler = struct {
                     self.jump_node = try self.jump_node.getChild(name);
                     self.jump_node.*.ip = self.instructionPos();
                 }
-                try self.enterScope(.local);
+                try self.enterScope(.global);
                 try self.compileBlock(f.body);
                 _ = try self.exitScope();
                 if (f.name != null) {
@@ -378,7 +377,7 @@ pub const Compiler = struct {
                 const jump_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
                 try self.replaceValue(start_pos, OpCode.Size(.jump), self.instructionPos());
 
-                try self.enterScope(.local);
+                try self.enterScope(.global);
                 try self.compileBlock(c.body);
                 try self.removeLast(.pop);
                 try self.writeOp(.fin, token);
@@ -393,18 +392,17 @@ pub const Compiler = struct {
                 self.jump_node = try self.jump_node.getChild(b.name);
                 self.jump_node.*.ip = self.instructionPos();
 
-                try self.enterScope(if (self.scope.tag == .global) .global else .local);
+                try self.enterScope(.global);
 
                 try self.compileBlock(b.body);
                 try self.removeLast(.pop);
                 try self.writeOp(.fin, token);
 
                 var scope = try self.exitScope();
+                self.scope.count += scope.locals_count;
                 self.jump_node = self.jump_node.parent.?;
-                defer self.allocator.free(scope.free_symbols);
 
                 const end = self.instructionPos();
-
                 try self.replaceValue(start_pos, OpCode.Size(.jump), end);
             },
             .dialogue => |d| {
@@ -897,13 +895,14 @@ test "Conditionals Compile" {
                 @intFromEnum(OpCode.true),
                 @intFromEnum(OpCode.jump_if_false),
                 0,
-                10,
+                11,
                 @intFromEnum(OpCode.constant),
                 0,
                 0,
+                @intFromEnum(OpCode.pop),
                 @intFromEnum(OpCode.jump),
                 0,
-                11,
+                13,
                 @intFromEnum(OpCode.nil),
                 @intFromEnum(OpCode.pop),
                 @intFromEnum(OpCode.constant),
@@ -915,7 +914,27 @@ test "Conditionals Compile" {
         .{
             .input = "if true { 10 } else { 20 } 333",
             .constants = [_]Value{ .{ .number = 10 }, .{ .number = 20 }, .{ .number = 333 } },
-            .instructions = [_]u8{ @intFromEnum(OpCode.true), @intFromEnum(OpCode.jump_if_false), 0, 10, @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.jump), 0, 13, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.pop), @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.pop) },
+            .instructions = [_]u8{
+                @intFromEnum(OpCode.true),
+                @intFromEnum(OpCode.jump_if_false),
+                0,
+                11,
+                @intFromEnum(OpCode.constant),
+                0,
+                0,
+                @intFromEnum(OpCode.pop),
+                @intFromEnum(OpCode.jump),
+                0,
+                15,
+                @intFromEnum(OpCode.constant),
+                0,
+                1,
+                @intFromEnum(OpCode.pop),
+                @intFromEnum(OpCode.constant),
+                0,
+                2,
+                @intFromEnum(OpCode.pop),
+            },
         },
     };
 
@@ -929,7 +948,7 @@ test "Conditionals Compile" {
         };
         defer bytecode.free(allocator);
         for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("{}", .{i});
+            errdefer std.log.warn("Error on instruction:{}", .{i});
             try testing.expectEqual(instruction, bytecode.instructions[i]);
         }
         for (case.constants, 0..) |constant, i| {

@@ -683,11 +683,6 @@ pub const Parser = struct {
         // TODO: Perhaps this should just be an expression and indexers used
         var list = std.ArrayList([]const u8).init(self.allocator);
         errdefer list.deinit();
-        var is_backup: bool = false;
-        if (self.peekIs(.caret)) {
-            is_backup = true;
-            self.next();
-        }
 
         try self.expectPeek(.identifier);
 
@@ -696,6 +691,11 @@ pub const Parser = struct {
             self.next();
             self.next();
             try list.append(try self.getStringValue());
+        }
+        var is_backup: bool = false;
+        if (self.peekIs(.caret)) {
+            is_backup = true;
+            self.next();
         }
 
         return .{
@@ -719,6 +719,7 @@ pub const Parser = struct {
             self.next();
         }
         if (self.currentIs(.identifier)) name = try self.consumeIdentifier();
+
         return .{
             .token = start,
             .type = .{

@@ -32,7 +32,7 @@ pub const ByteCode = struct {
             writer.print("{s: <16} ", .{op.toString()});
             i += 1;
             switch (op) {
-                .jump, .jump_if_false, .set_global, .get_global, .list, .map, .set, .choice => {
+                .jump, .jump_if_false, .set_global, .get_global, .list, .map, .set, .choice, .backup => {
                     var dest = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
                     writer.print("{d: >8}", .{dest});
                     i += 2;
