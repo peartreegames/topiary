@@ -141,6 +141,15 @@ pub const Value = union(Type) {
         };
     }
 
+    pub fn createFrom(comptime T: type, value: T) Value {
+        return switch (T) {
+            bool => if (value) True else False,
+            @TypeOf(null) => Nil,
+            f32 => .{ .number = value },
+            else => unreachable,
+        };
+    }
+
     pub fn isTruthy(self: Value) !bool {
         return switch (self) {
             .bool => |b| b,

@@ -338,6 +338,9 @@ pub const Compiler = struct {
                 if (self.builtins.symbols.contains(v.name))
                     return self.failError("{s} is a builtin function and cannot be used as a variable name", token, .{v.name}, Error.IllegalOperation);
                 var symbol = try self.scope.define(v.name, v.is_mutable, v.is_extern);
+                // extenr variables will be set before running by the user
+                if (v.is_extern) return;
+
                 try self.compileExpression(&v.initializer);
                 if (symbol.tag == .global) {
                     try self.writeOp(.set_global, token);
@@ -974,7 +977,7 @@ test "Variables" {
         .{
             .input =
             \\ var one = 1
-            \\ extern var two = one
+            \\ var two = one
             \\ two
             ,
             .constants = [_]Value{.{ .number = 1 }},

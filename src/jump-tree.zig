@@ -1,6 +1,7 @@
 const std = @import("std");
 const OpCode = @import("./opcode.zig").OpCode;
 
+/// Used to keep track of jump locations by scope name
 pub const JumpTree = struct {
     allocator: std.mem.Allocator,
     root: *Node,

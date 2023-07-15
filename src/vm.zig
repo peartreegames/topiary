@@ -26,6 +26,7 @@ const Value = values.Value;
 const Iterator = values.Iterator;
 const adapter = values.adapter;
 const ExternList = externals.ExternList;
+const Extern = externals.Extern;
 
 const input_buf: [2]u8 = undefined;
 
@@ -129,9 +130,33 @@ pub const Vm = struct {
         self.allocator.free(self.current_choices);
     }
 
-    pub fn setExtern(self: *Vm, name: []const u8, value_getter: anytype) !void {
+    pub fn setExternNumber(self: *Vm, name: []const u8, value: f32) !void {
+        return self.setExtern(name, f32, value);
+    }
+
+    pub fn setExternBool(self: *Vm, name: []const u8, value: bool) !void {
+        return self.setExtern(name, bool, value);
+    }
+
+    pub fn setExternNil(self: *Vm, name: []const u8, value: null) !void {
+        return self.setExtern(name, null, value);
+    }
+
+    pub fn setExtern(self: *Vm, name: []const u8, comptime T: type, value: T) !void {
         if (self.externs.getByName(name)) |ext| {
-            ext.setWithoutNotify(&self.globals, value_getter);
+            try ext.setWithoutNotify(&self.globals, Value.createFrom(T, value));
+        } else return error.SymbolNotFound;
+    }
+
+    pub fn subscribe(self: *Vm, name: []const u8, callback: Extern.OnValueChanged) !void {
+        if (self.externs.getByName(name)) |ext| {
+            try ext.subscribe(callback);
+        } else return error.SymbolNotFound;
+    }
+
+    pub fn unsubscribe(self: *Vm, name: []const u8, callback: Extern.OnValueChanged) !void {
+        if (self.externs.getByName(name)) |ext| {
+            ext.unsubscribe(callback);
         } else return error.SymbolNotFound;
     }
 
@@ -1615,6 +1640,10 @@ test "Externs" {
         \\ extern const value = 1
         \\ value
         , .value = 2.0 },
+        .{ .input = 
+        \\ extern var value = 1
+        \\ value = 5
+        , .value = 5.0 },
     };
 
     inline for (test_cases) |case| {
@@ -1635,19 +1664,19 @@ test "Externs" {
         defer compiler.deinit();
 
         try compiler.compile(tree);
-        const ValueGetter = struct {
-            fn getValue() Value {
-                return .{ .number = 2 };
-            }
-        };
         for (root_scope.symbols.values()) |sym| {
-            std.log.warn("EXT CREATE: {s}", .{sym.name});
             if (sym.is_extern) {
                 try vm.externs.append(sym.name, sym.index);
             }
         }
+        const Listener = struct {
+            pub fn onChange(value: Value) void {
+                std.debug.print("Listener::{}\n", .{value});
+            }
+        };
         const bytecode = try compiler.bytecode();
-        try vm.setExtern("value", ValueGetter);
+        try vm.setExternNumber("value", 2);
+        try vm.subscribe("value", Listener.onChange);
         defer vm.deinit();
         try vm.interpret(bytecode);
         try testing.expect(case.value == vm.stack.previous().number);

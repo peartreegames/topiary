@@ -19,8 +19,8 @@ Example:
 
 ## Future
 
-Topiary is in early development and still has a long way to go. 
-Please check the Project tab on the repo to see the plans.
+Topiary is in early development and still has a long way to go.
+Please check the Issues tab on the repo to see features I'd like to implement.
 
 ## Credits
 

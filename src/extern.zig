@@ -67,13 +67,14 @@ pub const Extern = struct {
     pub fn set(self: *Extern, globals: *std.ArrayList(Value), value: Value) void {
         if (globals.items[self.globals_index].eql(value)) return;
         globals.items[self.globals_index] = value;
-
         for (self.subscribers.items) |sub| {
             sub(value);
         }
     }
 
-    pub fn setWithoutNotify(self: *Extern, globals: *std.ArrayList(Value), value: Value) void {
+    pub fn setWithoutNotify(self: *Extern, globals: *std.ArrayList(Value), value: Value) !void {
+        if (self.globals_index >= globals.items.len)
+            try globals.resize((1 + self.globals_index) * 2);
         globals.items[self.globals_index] = value;
     }
 };
