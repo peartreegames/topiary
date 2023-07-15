@@ -1,5 +1,6 @@
 const std = @import("std");
-const compiler = @import("./compiler.zig");
+const Compiler = @import("./compiler.zig").Compiler;
+const compileSource = @import("./compiler.zig").compileSource;
 const ByteCode = @import("./bytecode.zig").ByteCode;
 const Errors = @import("./error.zig").Errors;
 const parser = @import("./parser.zig");
@@ -10,9 +11,11 @@ const Gc = @import("./gc.zig").Gc;
 const Token = @import("./token.zig").Token;
 const Frame = @import("./frame.zig").Frame;
 const Class = @import("./class.zig").Class;
+const Scope = @import("./scope.zig").Scope;
 const builtins = @import("./builtins.zig");
 const Rnd = @import("./builtins.zig").Rnd;
 const DebugToken = @import("./debug.zig").DebugToken;
+const externals = @import("./extern.zig");
 
 const testing = std.testing;
 const stack_size = 2047;
@@ -22,6 +25,8 @@ const globals_size = 65535;
 const Value = values.Value;
 const Iterator = values.Iterator;
 const adapter = values.adapter;
+const ExternList = externals.ExternList;
+
 const input_buf: [2]u8 = undefined;
 
 const InterpretResult = union(enum) {
@@ -48,6 +53,7 @@ pub const Vm = struct {
     gc: Gc,
     globals: std.ArrayList(Value),
     stack: Stack(Value),
+    externs: ExternList,
     iterators: Stack(Iterator),
     jump_backups: std.ArrayList(OpCode.Size(.jump)),
 
@@ -67,7 +73,7 @@ pub const Vm = struct {
     pub const Error = error{
         RuntimeError,
         InvalidChoice,
-    } || compiler.Compiler.Error;
+    } || Compiler.Error;
 
     pub fn init(allocator: std.mem.Allocator, runner: anytype) !Vm {
         if (!std.meta.trait.hasFunctions(runner, .{ "on_dialogue", "on_choices" }))
@@ -77,6 +83,7 @@ pub const Vm = struct {
             .err = Errors.init(allocator),
             .frames = try Stack(Frame).init(allocator, frame_size),
             .globals = try std.ArrayList(Value).initCapacity(allocator, 1024),
+            .externs = ExternList.init(allocator),
             .gc = Gc.init(allocator),
             .stack = try Stack(Value).init(allocator, stack_size),
             .iterators = try Stack(Iterator).init(allocator, iterator_size),
@@ -93,6 +100,7 @@ pub const Vm = struct {
         self.iterators.deinit();
         self.jump_backups.deinit();
         self.globals.deinit();
+        self.externs.deinit();
         self.frames.deinit();
         self.err.deinit();
         self.gc.deinit();
@@ -121,6 +129,12 @@ pub const Vm = struct {
         self.allocator.free(self.current_choices);
     }
 
+    pub fn setExtern(self: *Vm, name: []const u8, value_getter: anytype) !void {
+        if (self.externs.getByName(name)) |ext| {
+            ext.setWithoutNotify(&self.globals, value_getter);
+        } else return error.SymbolNotFound;
+    }
+
     pub fn interpret(self: *Vm, bytecode: ByteCode) !void {
         self.bytecode = bytecode;
         var root_frame = try self.allocator.create(Value.Obj.Data);
@@ -147,7 +161,7 @@ pub const Vm = struct {
     }
 
     pub fn interpretSource(self: *Vm, source: []const u8) !void {
-        var bytecode = compiler.compileSource(self.allocator, source, &self.err) catch |err| {
+        var bytecode = compileSource(self.allocator, source, &self.err) catch |err| {
             self.err.write(source, std.io.getStdErr().writer()) catch {};
             return err;
         };
@@ -251,8 +265,15 @@ pub const Vm = struct {
                 },
                 .set_global => {
                     const index = self.readInt(OpCode.Size(.set_global));
+                    if (index > globals_size) return Error.RuntimeError;
                     if (index >= self.globals.items.len) try self.globals.resize(@intFromFloat(usize, @floatFromInt(f32, index + 1) * @as(f32, 2.0)));
-                    self.globals.items[index] = self.pop();
+                    // if it's an extern we need to make sure we let subscribers know
+                    if (self.externs.getByIndex(index)) |ext| {
+                        ext.set(&self.globals, self.pop());
+                        continue;
+                    }
+                    const value = self.pop();
+                    self.globals.items[index] = value;
                 },
                 .get_global => {
                     const index = self.readInt(OpCode.Size(.get_global));
@@ -1597,14 +1618,38 @@ test "Externs" {
     };
 
     inline for (test_cases) |case| {
+        const allocator = testing.allocator;
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator, TestRunner);
         vm.debug = true;
         std.debug.print("\n======\n", .{});
-        // vm.setExtern("value", 2);
-        // defer vm.removeExtern("value");
+
+        const tree = try parser.parse(allocator, case.input, &vm.err);
+        defer tree.deinit();
+
+        var root_scope = try Scope.create(allocator, null, .global);
+        defer root_scope.destroy();
+        var root_chunk = try Compiler.Chunk.create(allocator, null);
+        defer root_chunk.destroy();
+        var compiler = Compiler.init(allocator, root_scope, root_chunk, &vm.err);
+        defer compiler.deinit();
+
+        try compiler.compile(tree);
+        const ValueGetter = struct {
+            fn getValue() Value {
+                return .{ .number = 2 };
+            }
+        };
+        for (root_scope.symbols.values()) |sym| {
+            std.log.warn("EXT CREATE: {s}", .{sym.name});
+            if (sym.is_extern) {
+                try vm.externs.append(sym.name, sym.index);
+            }
+        }
+        const bytecode = try compiler.bytecode();
+        try vm.setExtern("value", ValueGetter);
         defer vm.deinit();
-        try vm.interpretSource(case.input);
+        try vm.interpret(bytecode);
         try testing.expect(case.value == vm.stack.previous().number);
     }
 }

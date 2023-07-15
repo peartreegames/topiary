@@ -974,7 +974,7 @@ test "Variables" {
         .{
             .input =
             \\ var one = 1
-            \\ var two = one
+            \\ extern var two = one
             \\ two
             ,
             .constants = [_]Value{.{ .number = 1 }},
