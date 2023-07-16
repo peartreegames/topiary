@@ -46,13 +46,11 @@ fn getFilePath(allocator: std.mem.Allocator) !?[]const u8 {
 }
 
 const CliRunner = struct {
-    const stdin = std.io.getStdIn().reader();
-    const stdout = std.io.getStdOut().writer();
-
     pub fn on_dialogue(vm: *Vm, dialogue: Dialogue) void {
         if (dialogue.speaker) |speaker| {
             std.debug.print("{s}: ", .{speaker});
         }
+        const stdin = std.io.getStdIn().reader();
         std.debug.print("{s}", .{dialogue.content});
         var buf: [1]u8 = undefined;
         if (stdin.readUntilDelimiterOrEof(buf[0..], '\n') catch &buf) |_| {
@@ -65,6 +63,7 @@ const CliRunner = struct {
             std.debug.print("[{d}] {s}\n", .{ i, choice.content });
         }
         var buf: [10]u8 = undefined;
+        const stdin = std.io.getStdIn().reader();
         if (stdin.readUntilDelimiterOrEof(buf[0..], '\n') catch &buf) |user_input| {
             var index = std.fmt.parseInt(usize, user_input, 10) catch 0;
             vm.selectChoice(index) catch |err| std.debug.print("Error: {}", .{err});
