@@ -17,6 +17,12 @@ Example:
 ./zig-out/bin/topi-cli --file=./examples/basic.topi
 ```
 
+## Writing in Topi
+
+You can view a full breakdown in the [syntax](https://github.com/peartreegames/topiary/blob/main/docs/syntax.md) file.
+
+And examples in the [example folder](https://github.com/peartreegames/topiary/tree/main/examples)
+
 ## Future
 
 Topiary is in early development and still has a long way to go.
