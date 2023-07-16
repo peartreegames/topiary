@@ -82,7 +82,7 @@ pub const Scope = struct {
     }
 
     pub fn defineFree(self: *Scope, original: *Symbol) !*Symbol {
-        const index = @intCast(u16, self.free_symbols.items.len);
+        const index = @as(u16, @intCast(self.free_symbols.items.len));
         try self.free_symbols.append(original);
 
         const symbol = try self.allocator.create(Symbol);

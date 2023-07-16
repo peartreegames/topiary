@@ -198,7 +198,9 @@ map.clear() // Map{}
 
 #### While
 
-While loops will execute so long as the condition is met. However there is an internal limit of 100,000 to catch infinite loops. This can be adjusted by setting `Topiary.MaxWhile = -1 // no limit`
+While loops will execute so long as the condition is met. 
+~~However there is an internal limit of 100,000 to catch infinite loops. 
+This can be adjusted by setting `Topiary.MaxWhile = -1 // no limit`~~
 
 ```topi
 var i = 0
@@ -210,7 +212,8 @@ while i < 10 {
 
 #### For
 
-For loops can be a range (inclusive), or a collection. The item the loop is on is declared within pipes (`|`) after the iterator
+For loops can be a range (inclusive), or a collection. 
+The item the loop is on is declared within pipes (`|`) after the iterator
 
 ```topi
 for 0..10 |i| {

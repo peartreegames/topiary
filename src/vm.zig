@@ -220,7 +220,7 @@ pub const Vm = struct {
         while (self.ip < self.currentFrame().instructions().len) : (self.ip = self.currentFrame().ip) {
             if (self.is_waiting) continue;
             const instruction = self.readByte();
-            const op = @enumFromInt(OpCode, instruction);
+            const op: OpCode = @enumFromInt(instruction);
             switch (op) {
                 .constant => {
                     var index = self.readInt(u16);
@@ -291,7 +291,7 @@ pub const Vm = struct {
                 .set_global => {
                     const index = self.readInt(OpCode.Size(.set_global));
                     if (index > globals_size) return Error.RuntimeError;
-                    if (index >= self.globals.items.len) try self.globals.resize(@intFromFloat(usize, @floatFromInt(f32, index + 1) * @as(f32, 2.0)));
+                    if (index >= self.globals.items.len) try self.globals.resize(@as(usize, @intFromFloat(@as(f32, @floatFromInt(index + 1)) * @as(f32, 2.0))));
                     // if it's an extern we need to make sure we let subscribers know
                     if (self.externs.getByIndex(index)) |ext| {
                         ext.set(&self.globals, self.pop());
@@ -470,8 +470,8 @@ pub const Vm = struct {
                     var right = self.pop();
                     try self.push(.{
                         .range = .{
-                            .start = @intFromFloat(i32, left.number),
-                            .end = @intFromFloat(i32, right.number),
+                            .start = @as(i32, @intFromFloat(left.number)),
+                            .end = @as(i32, @intFromFloat(right.number)),
                         },
                     });
                 },
@@ -510,7 +510,7 @@ pub const Vm = struct {
                                         try self.push(target);
                                     }
                                 } else if (index == .number) {
-                                    const i = @intFromFloat(u32, index.number);
+                                    const i = @as(u32, @intFromFloat(index.number));
                                     if (i < 0 or i >= l.items.len) {
                                         try self.push(values.Nil);
                                     } else try self.push(l.items[i]);

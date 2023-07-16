@@ -22,9 +22,9 @@ pub const Rnd = struct {
     };
     fn builtin(_: *Gc, args: []Value) Value {
         if (r == null) r = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
-        const start = @intFromFloat(i32, args[0].number);
-        const end = @intFromFloat(i32, args[1].number);
-        return .{ .number = @floatFromInt(f32, r.?.random().intRangeAtMost(i32, start, end)) };
+        const start = @as(i32, @intFromFloat(args[0].number));
+        const end = @as(i32, @intFromFloat(args[1].number));
+        return .{ .number = @as(f32, @floatFromInt(r.?.random().intRangeAtMost(i32, start, end))) };
     }
 };
 
@@ -100,7 +100,7 @@ pub const Count = struct {
             .set => |s| s.count(),
             else => 0,
         };
-        return .{ .number = @floatFromInt(f32, count) };
+        return .{ .number = @as(f32, @floatFromInt(count)) };
     }
 };
 

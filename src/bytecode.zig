@@ -28,7 +28,7 @@ pub const ByteCode = struct {
         var i: usize = 0;
         while (i < instructions.len) {
             writer.print("{d:0>4} ", .{i});
-            const op = @enumFromInt(OpCode, instructions[i]);
+            const op: OpCode = @enumFromInt(instructions[i]);
             writer.print("{s: <16} ", .{op.toString()});
             i += 1;
             switch (op) {

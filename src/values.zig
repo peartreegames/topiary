@@ -111,7 +111,7 @@ pub const Value = union(Type) {
 
     pub fn len(self: Value) usize {
         return switch (self) {
-            .range => |r| @intCast(usize, std.math.absInt(r.end - r.start) catch 0) + 1,
+            .range => |r| @as(usize, @intCast(std.math.absInt(r.end - r.start) catch 0)) + 1,
             .obj => |o| switch (o.data) {
                 .string => |s| s.len,
                 .list => |l| l.items.len,
@@ -125,7 +125,7 @@ pub const Value = union(Type) {
 
     pub fn getAtIndex(self: Value, index: usize) Value {
         return switch (self) {
-            .range => |r| .{ .number = @floatFromInt(f32, r.start + @intCast(i32, index)) },
+            .range => |r| .{ .number = @as(f32, @floatFromInt(r.start + @as(i32, @intCast(index)))) },
             .obj => |o| switch (o.data) {
                 .list => |l| l.items[index],
                 .map => |m| .{
@@ -246,7 +246,7 @@ pub const Value = union(Type) {
             var hasher = std.hash.Wyhash.init(0);
 
             switch (v) {
-                .number => |n| hashFn(&hasher, @intFromFloat(u32, n * 10000.0)),
+                .number => |n| hashFn(&hasher, @as(u32, @intFromFloat(n * 10000.0))),
                 .bool => |b| hashFn(&hasher, b),
                 .obj => |o| {
                     switch (o.data) {
@@ -277,7 +277,7 @@ pub const Value = union(Type) {
                 },
                 else => unreachable,
             }
-            return @truncate(u32, hasher.final());
+            return @as(u32, @truncate(hasher.final()));
         }
 
         pub fn lessThan(self: @This(), a_index: usize, b_index: usize) bool {

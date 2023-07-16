@@ -173,7 +173,7 @@ pub const Compiler = struct {
     fn exitScope(self: *Compiler) !struct { locals_count: u8, free_symbols: []*Symbol } {
         const old_scope = self.scope;
         const result = .{
-            .locals_count = @intCast(u8, old_scope.count),
+            .locals_count = @as(u8, @intCast(old_scope.count)),
             .free_symbols = try old_scope.free_symbols.toOwnedSlice(),
         };
 
@@ -264,7 +264,7 @@ pub const Compiler = struct {
 
                 try self.getOrSetIdentifierConstant(c.name, token);
                 try self.writeOp(.class, token);
-                _ = try self.writeInt(OpCode.Size(.class), @intCast(OpCode.Size(.class), c.fields.len), token);
+                _ = try self.writeInt(OpCode.Size(.class), @as(OpCode.Size(.class), @intCast(c.fields.len)), token);
                 var symbol = try self.scope.define(c.name, false, false);
                 if (symbol.tag == .global) {
                     try self.writeOp(.set_global, token);
@@ -272,7 +272,7 @@ pub const Compiler = struct {
                 } else {
                     try self.writeOp(.set_local, token);
                     const size = OpCode.Size(.set_local);
-                    _ = try self.writeInt(size, @intCast(size, symbol.index), token);
+                    _ = try self.writeInt(size, @as(size, @intCast(symbol.index)), token);
                 }
             },
             .@"enum" => |e| {
@@ -302,7 +302,7 @@ pub const Compiler = struct {
                 } else {
                     try self.writeOp(.set_local, token);
                     const size = OpCode.Size(.set_local);
-                    _ = try self.writeInt(size, @intCast(size, symbol.index), token);
+                    _ = try self.writeInt(size, @as(size, @intCast(symbol.index)), token);
                 }
             },
             .@"for" => |f| {
@@ -348,7 +348,7 @@ pub const Compiler = struct {
                 } else {
                     try self.writeOp(.set_local, token);
                     const size = OpCode.Size(.set_local);
-                    _ = try self.writeInt(size, @intCast(size, symbol.index), token);
+                    _ = try self.writeInt(size, @as(size, @intCast(symbol.index)), token);
                 }
             },
             .fork => |f| {
@@ -417,7 +417,7 @@ pub const Compiler = struct {
                 try self.writeOp(.dialogue, d.content.token);
                 var has_speaker_value = if (d.speaker == null) @as(u8, 0) else @as(u8, 1);
                 _ = try self.writeInt(u8, has_speaker_value, token);
-                _ = try self.writeInt(u8, @intCast(u8, d.tags.len), token);
+                _ = try self.writeInt(u8, @as(u8, @intCast(d.tags.len)), token);
             },
             .divert => |d| {
                 var node = try self.getDivertNode(d.path);
@@ -583,7 +583,7 @@ pub const Compiler = struct {
                 const i = try self.addConstant(.{ .obj = obj });
                 try self.writeOp(.string, token);
                 _ = try self.writeInt(OpCode.Size(.constant), i, token);
-                _ = try self.writeInt(u8, @intCast(u8, s.expressions.len), token);
+                _ = try self.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
             },
             .list => |l| {
                 for (l) |*item| {
@@ -591,7 +591,7 @@ pub const Compiler = struct {
                 }
                 try self.writeOp(.list, token);
                 const size = OpCode.Size(.list);
-                const length = @intCast(size, l.len);
+                const length = @as(size, @intCast(l.len));
                 _ = try self.writeInt(size, length, token);
             },
             .map => |m| {
@@ -600,7 +600,7 @@ pub const Compiler = struct {
                 }
                 const size = OpCode.Size(.map);
                 try self.writeOp(.map, token);
-                const length = @intCast(size, m.len);
+                const length = @as(size, @intCast(m.len));
                 _ = try self.writeInt(size, length, token);
             },
             .set => |s| {
@@ -609,7 +609,7 @@ pub const Compiler = struct {
                 }
                 const size = OpCode.Size(.set);
                 try self.writeOp(.set, token);
-                const length = @intCast(size, s.len);
+                const length = @as(size, @intCast(s.len));
                 _ = try self.writeInt(size, length, token);
             },
             .map_pair => |mp| {
@@ -689,7 +689,7 @@ pub const Compiler = struct {
                             .is_method = f.is_method,
                             .instructions = chunk.instructions,
                             .locals_count = scope.locals_count,
-                            .arity = @intCast(u8, length),
+                            .arity = @as(u8, @intCast(length)),
                         },
                     },
                 };
@@ -697,7 +697,7 @@ pub const Compiler = struct {
 
                 try self.writeOp(.closure, token);
                 _ = try self.writeInt(OpCode.Size(.constant), i, token);
-                _ = try self.writeInt(u8, @intCast(u8, scope.free_symbols.len), token);
+                _ = try self.writeInt(u8, @as(u8, @intCast(scope.free_symbols.len)), token);
             },
             .class => |c| {
                 for (c.fields, 0..) |field, i| {
@@ -707,7 +707,7 @@ pub const Compiler = struct {
                 var symbol = try self.scope.resolve(c.name);
                 try self.loadSymbol(symbol, token);
                 try self.writeOp(.instance, token);
-                _ = try self.writeInt(OpCode.Size(.instance), @intCast(OpCode.Size(.instance), c.fields.len), token);
+                _ = try self.writeInt(OpCode.Size(.instance), @as(OpCode.Size(.instance), @intCast(c.fields.len)), token);
             },
             .call => |c| {
                 try self.compileExpression(c.target);
@@ -719,7 +719,7 @@ pub const Compiler = struct {
                 std.debug.assert(c.arguments.len < std.math.maxInt(size));
                 var length = c.arguments.len;
                 if (c.target.type == .indexer) length += 1;
-                _ = try self.writeInt(size, @intCast(size, length), token);
+                _ = try self.writeInt(size, @as(size, @intCast(length)), token);
             },
             .range => |r| {
                 try self.compileExpression(r.right);
@@ -741,13 +741,13 @@ pub const Compiler = struct {
                 .free => {
                     try self.writeOp(.set_free, token);
                     const size = OpCode.Size(.set_free);
-                    _ = try self.writeInt(size, @intCast(size, ptr.index), token);
+                    _ = try self.writeInt(size, @as(size, @intCast(ptr.index)), token);
                 },
                 .builtin, .function => return self.failError("Cannot set {s}", token, .{ptr.name}, Error.IllegalOperation),
                 else => {
                     try self.writeOp(.set_local, token);
                     const size = OpCode.Size(.set_local);
-                    _ = try self.writeInt(size, @intCast(size, ptr.index), token);
+                    _ = try self.writeInt(size, @as(size, @intCast(ptr.index)), token);
                 },
             }
         } else return self.failError("Unknown symbol", token, .{}, Error.SymbolNotFound);
@@ -763,12 +763,12 @@ pub const Compiler = struct {
                 .builtin => {
                     try self.writeOp(.get_builtin, token);
                     const size = OpCode.Size(.get_builtin);
-                    _ = try self.writeInt(size, @intCast(size, ptr.index), token);
+                    _ = try self.writeInt(size, @as(size, @intCast(ptr.index)), token);
                 },
                 .free => {
                     try self.writeOp(.get_free, token);
                     const size = OpCode.Size(.get_free);
-                    _ = try self.writeInt(size, @intCast(size, ptr.index), token);
+                    _ = try self.writeInt(size, @as(size, @intCast(ptr.index)), token);
                 },
                 .function => {
                     try self.writeOp(.current_closure, token);
@@ -776,14 +776,14 @@ pub const Compiler = struct {
                 else => {
                     try self.writeOp(.get_local, token);
                     const size = OpCode.Size(.get_local);
-                    _ = try self.writeInt(size, @intCast(size, ptr.index), token);
+                    _ = try self.writeInt(size, @as(size, @intCast(ptr.index)), token);
                 },
             }
         } else return self.failError("Unknown symbol", token, .{}, Error.SymbolNotFound);
     }
 
     fn instructionPos(self: *Compiler) u16 {
-        return @intCast(u16, self.chunk.instructions.items.len);
+        return @as(u16, @intCast(self.chunk.instructions.items.len));
     }
 
     fn currentScope(self: *Compiler) *Scope {
@@ -841,7 +841,7 @@ pub const Compiler = struct {
 
     pub fn addConstant(self: *Compiler, value: Value) !u16 {
         try self.constants.append(value);
-        return @intCast(u16, self.constants.items.len - 1);
+        return @as(u16, @intCast(self.constants.items.len - 1));
     }
 
     fn getOrSetIdentifierConstant(self: *Compiler, name: []const u8, token: Token) !void {
