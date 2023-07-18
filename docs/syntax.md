@@ -111,6 +111,7 @@ We can do that by adding a caret `^` to a jump name `=> [NAME]^` (meaning jump t
 ```
 
 Backups can also be applied to forks with `fork^` on anonymous forks and `fork [NAME]^` on named forks.
+However named forks with backups should be used with caution.
 
 ```topi
 === START {
@@ -256,7 +257,8 @@ else value = -5
 print(value) // 11
 ```
 
-Switch statements can also be used (**Coming Soon**). 
+Switch statements can also be used (**Coming Soon**).
+ 
 Breaks are implied on the first case which matches. 
 Multiple conditions can be matched with commas (`,`), 
 and if using numbers Ranges can also be used.
@@ -348,7 +350,7 @@ Any field not initialized will use the default value.
 
 
 ```topi
-struct Person {
+class Person {
     age = 25,
     name = ""
 }

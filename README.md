@@ -3,18 +3,19 @@
 Topiary is a narrative scripting tool which uses the in the Topi language to write interactive stories.
 It is designed to be integrated into video games which require a large amount of state and control flow in their narrative.
 
-It is written in [Zig](https://ziglang.org) and includes a C binary.
+It is written in [Zig](https://ziglang.org).
 
 ## Usage
 
 Currently Topiary can only be run as a CLI tool.
-Simply download the appropiary binary then pass in a `--file=[PATH]` argument.
+Simply download the appropiary binary then pass in a `[PATH]` argument.
 
-You can then press `space` for the next line, and select a choice with `0-9` then `enter`
+You can then press `enter` for the next line, and select a choice with `0-9` then `enter`
 
 Example:
 ```
-./zig-out/bin/topi-cli --file=./examples/basic.topi
+zig build
+./zig-out/bin/topi-cli ./examples/basic.topi
 ```
 
 ## Writing in Topi

@@ -1,6 +1,1 @@
-class Character {
-	like = 1,
-	dislike = 1,
-	relation = || self.like / (self.like + self.dislike)
-}
-
+// TODO: Write basic story.
