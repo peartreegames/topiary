@@ -35,14 +35,8 @@ pub fn main() !void {
 
 fn getFilePath(allocator: std.mem.Allocator) !?[]const u8 {
     var args = try std.process.argsWithAllocator(allocator);
-    while (args.next()) |arg| {
-        var splits = std.mem.split(u8, arg, "=");
-        while (splits.next()) |chunk| {
-            if (!std.mem.eql(u8, chunk, "--file")) continue;
-            return splits.next();
-        }
-    }
-    return null;
+    _ = args.skip();
+    return args.next();
 }
 
 const CliRunner = struct {
