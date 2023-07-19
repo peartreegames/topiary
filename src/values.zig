@@ -50,7 +50,20 @@ pub const Value = union(Type) {
         next: ?*Obj = null,
         data: Data,
 
-        pub const Data = union(enum(u4)) {
+        pub const DataType = enum(u8) {
+            string,
+            @"enum",
+            list,
+            map,
+            set,
+            function,
+            builtin,
+            closure,
+            class,
+            instance,
+        };
+
+        pub const Data = union(DataType) {
             string: []const u8,
             @"enum": Enum,
             list: std.ArrayList(Value),
@@ -155,6 +168,149 @@ pub const Value = union(Type) {
             .bool => |b| b,
             .nil => false,
             else => return error.InvalidType,
+        };
+    }
+
+    pub fn serialize(self: Value, writer: anytype) !void {
+        try writer.writeByte(@intFromEnum(@as(Type, self)));
+        switch (self) {
+            .bool => |b| try writer.writeByte(if (b) 1 else 0),
+            .number => |n| {
+                var buf: [512]u8 = undefined;
+                var buf_stream = std.io.fixedBufferStream(&buf);
+                try std.fmt.formatFloatDecimal(n, .{
+                    .precision = 5,
+                }, buf_stream.writer());
+                try writer.writeIntBig(u16, @as(u16, @intCast(buf_stream.pos)));
+                try writer.writeAll(buf[0..buf_stream.pos]);
+            },
+            .range => |r| {
+                try writer.writeIntBig(i32, r.start);
+                try writer.writeIntBig(i32, r.end);
+            },
+            .map_pair => |mp| {
+                try serialize(mp.key.*, writer);
+                try serialize(mp.value.*, writer);
+            },
+            .obj => |o| {
+                try writer.writeByte(@intFromEnum(@as(Obj.DataType, o.data)));
+                switch (o.data) {
+                    .string => |s| {
+                        try writer.writeIntBig(u16, @as(u16, @intCast(s.len)));
+                        try writer.writeAll(s);
+                    },
+                    .list => |l| {
+                        try writer.writeIntBig(u16, @as(u16, @intCast(l.items.len)));
+                        for (l.items) |i| try serialize(i, writer);
+                    },
+                    .map => |m| {
+                        try writer.writeIntBig(u16, @as(u16, @intCast(m.count())));
+                        for (m.keys()) |k| {
+                            try serialize(k, writer);
+                            try serialize(m.get(k) orelse Nil, writer);
+                        }
+                    },
+                    .set => |s| {
+                        try writer.writeIntBig(u16, @as(u16, @intCast(s.count())));
+                        for (s.keys()) |k| {
+                            try serialize(k, writer);
+                        }
+                    },
+                    .function => |f| {
+                        try writer.writeByte(f.arity);
+                        try writer.writeByte(if (f.is_method) 1 else 0);
+                        try writer.writeIntBig(u16, @as(u16, @intCast(f.locals_count)));
+                        try writer.writeIntBig(u16, @as(u16, @intCast(f.instructions.len)));
+                        try writer.writeAll(f.instructions);
+                    },
+                    else => {},
+                }
+            },
+            .nil, .void => {},
+        }
+    }
+
+    pub fn deserialize(reader: anytype, allocator: std.mem.Allocator) !Value {
+        var value_type: Type = @enumFromInt(try reader.readByte());
+        return switch (value_type) {
+            .nil => Nil,
+            .bool => if (try reader.readByte() == 1) True else False,
+            .number => {
+                var length = try reader.readIntBig(u16);
+                var buf = try allocator.alloc(u8, length);
+                defer allocator.free(buf);
+                try reader.readNoEof(buf);
+                return .{ .number = try std.fmt.parseFloat(f32, buf) };
+            },
+            .obj => {
+                var data_type: Obj.DataType = @enumFromInt(try reader.readByte());
+                switch (data_type) {
+                    .string => {
+                        const length = try reader.readIntBig(u16);
+                        var buf = try allocator.alloc(u8, length);
+                        try reader.readNoEof(buf);
+                        const obj = try allocator.create(Value.Obj);
+                        obj.* = .{ .data = .{ .string = buf } };
+                        return .{ .obj = obj };
+                    },
+                    .list => {
+                        const length = try reader.readIntBig(u16);
+                        var list = try std.ArrayList(Value).initCapacity(allocator, length);
+                        var i: usize = 0;
+                        while (i < length) : (i += 1) {
+                            list.items[i] = try Value.deserialize(reader, allocator);
+                        }
+                        const obj = try allocator.create(Value.Obj);
+                        obj.* = .{ .data = .{ .list = list } };
+                        return .{ .obj = obj };
+                    },
+                    .map => {
+                        const length = try reader.readIntBig(u16);
+                        var map = Value.Obj.MapType.initContext(allocator, adapter);
+                        var i: usize = 0;
+                        while (i < length) : (i += 1) {
+                            var key = try Value.deserialize(reader, allocator);
+                            var value = try Value.deserialize(reader, allocator);
+                            try map.put(key, value);
+                        }
+                        const obj = try allocator.create(Value.Obj);
+                        obj.* = .{ .data = .{ .map = map } };
+                        return .{ .obj = obj };
+                    },
+                    .set => {
+                        const length = try reader.readIntBig(u16);
+                        var set = Value.Obj.SetType.initContext(allocator, adapter);
+                        var i: usize = 0;
+                        while (i < length) : (i += 1) {
+                            var key = try Value.deserialize(reader, allocator);
+                            try set.put(key, {});
+                        }
+                        const obj = try allocator.create(Value.Obj);
+                        obj.* = .{ .data = .{ .set = set } };
+                        return .{ .obj = obj };
+                    },
+                    .function => {
+                        const arity = try reader.readByte();
+                        const is_method = if (try reader.readByte() == 1) true else false;
+                        const locals_count = try reader.readIntBig(u16);
+                        const instructions_count = try reader.readIntBig(u16);
+                        var buf = try allocator.alloc(u8, instructions_count);
+                        try reader.readNoEof(buf);
+                        const obj = try allocator.create(Value.Obj);
+                        obj.* = .{ .data = .{
+                            .function = .{
+                                .arity = arity,
+                                .is_method = is_method,
+                                .locals_count = locals_count,
+                                .instructions = buf,
+                            },
+                        } };
+                        return .{ .obj = obj };
+                    },
+                    else => return error.Unknown,
+                }
+            },
+            else => return error.Unknown,
         };
     }
 
@@ -294,25 +450,45 @@ pub const Value = union(Type) {
                 .nil => b == .nil,
                 .obj => |o| {
                     const b_data = b.obj.*.data;
+                    if (@intFromEnum(o.data) != @intFromEnum(b_data)) return false;
                     return switch (o.data) {
                         .string => |s| std.mem.eql(u8, s, b_data.string),
                         .list => |l| {
                             const l_b = b_data.list;
-
                             if (l.items.len != l_b.items.len) return false;
                             for (l.items, 0..) |item, i| {
                                 if (!adapter.eql(item, l_b.items[i], 0)) return false;
                             }
                             return true;
                         },
-                        // .map => |m| {
-                        //     const map_b = b.map;
-                        //     if (m.items().len != map_b.items().len) return false;
-                        //     for (a.items(), 0..) |entry, i| {
-                        //         if (entry.hash != map_b.items()[i].hash) return false;
-                        //     }
-                        //     return true;
-                        // },
+                        .map => |m| {
+                            const a_keys = m.keys();
+                            const b_keys = b_data.map.keys();
+                            if (a_keys.len != b_keys.len) return false;
+                            for (a_keys) |a_key| {
+                                if (!b_data.map.contains(a_key)) return false;
+                                const a_value = m.get(a_key);
+                                const b_value = b_data.map.get(a_key);
+                                if (a_value == null and b_value != null) return false;
+                                if (a_value != null and b_value == null) return false;
+                                if (!a_value.?.eql(b_value.?)) return false;
+                            }
+                            return true;
+                        },
+                        .set => |s| {
+                            const a_keys = s.keys();
+                            const b_keys = b_data.map.keys();
+                            if (a_keys.len != b_keys.len) return false;
+                            for (a_keys) |a_key| {
+                                if (!b_data.map.contains(a_key)) return false;
+                            }
+                            return true;
+                        },
+                        .function => |f| {
+                            const b_f = b_data.function;
+                            const inst = std.mem.eql(u8, f.instructions, b_f.instructions);
+                            return inst and f.locals_count == b_f.locals_count and f.arity == b_f.arity and f.is_method == b_f.is_method;
+                        },
                         else => return false,
                     };
                 },

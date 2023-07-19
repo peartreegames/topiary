@@ -19,6 +19,31 @@ pub const ByteCode = struct {
         allocator.free(self.tokens);
     }
 
+    pub fn serialize(self: *ByteCode, writer: anytype) !void {
+        // we could make this base64 encoded as well to reduce size, but the extra cost
+        // to decode it might not be worth it
+        try writer.writeIntBig(u64, @as(u64, @intCast(self.instructions.len)));
+        try writer.writeAll(self.instructions);
+        try writer.writeIntBig(u64, @as(u64, @intCast(self.constants.len)));
+        for (self.constants) |constant| try constant.serialize(writer);
+    }
+
+    pub fn deserialize(reader: anytype, allocator: std.mem.Allocator) !ByteCode {
+        const instruction_count = try reader.readIntBig(u64);
+        var instructions = try allocator.alloc(u8, instruction_count);
+        try reader.readNoEof(instructions);
+        var constant_count = try reader.readIntBig(u64);
+        var constants = try allocator.alloc(Value, constant_count);
+        for (0..constant_count) |i| {
+            constants[i] = try Value.deserialize(reader, allocator);
+        }
+        return .{
+            .instructions = instructions,
+            .constants = constants,
+            .tokens = &[_]DebugToken{},
+        };
+    }
+
     pub fn print(code: *ByteCode, writer: anytype) void {
         writer.print("\n==BYTECODE==\n", .{});
         printInstructions(writer, code.instructions, code.constants);

@@ -1790,3 +1790,40 @@ test "Classes" {
         }
     }
 }
+
+test "Serialize" {
+    const input =
+        \\ var str = "string value"
+        \\ const num = 25
+        \\ const fun = |x| {
+        \\     return x * 2
+        \\ }
+        \\ var list = ["one", "two"]
+        \\ const set = {1, 2, 3.3}
+        \\ const map = {1:2.2, 3: 4.4}
+    ;
+
+    errdefer std.log.warn("{s}", .{input});
+    var allocator = testing.allocator;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    var bytecode = compileSource(allocator, input, &errors) catch |err| {
+        try errors.write(input, std.io.getStdErr().writer());
+        return err;
+    };
+    defer bytecode.free(allocator);
+
+    // this doesn't need to be a file, but it's nice to sometimes not delete it and inspect it
+    const file = try std.fs.cwd().createFile("tmp.topib", .{ .read = true });
+    defer std.fs.cwd().deleteFile("tmp.topib") catch {};
+    defer file.close();
+    try bytecode.serialize(file.writer());
+
+    try file.seekTo(0);
+    var deserialized = try ByteCode.deserialize(file.reader(), allocator);
+    defer deserialized.free(allocator);
+    try testing.expectEqualSlices(u8, bytecode.instructions, deserialized.instructions);
+    for (bytecode.constants, 0..) |constant, i| {
+        try testing.expect(constant.eql(deserialized.constants[i]));
+    }
+}
