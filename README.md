@@ -15,7 +15,7 @@ You can then press `enter` for the next line, and select a choice with `0-9` the
 Example:
 ```
 zig build
-./zig-out/bin/topi-cli ./examples/basic.topi
+./zig-out/bin/topi-cli ./examples/hello.topi
 ```
 
 ## Writing in Topi
