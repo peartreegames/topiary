@@ -24,9 +24,9 @@ pub fn Stack(comptime T: type) type {
         }
 
         pub fn push(self: *Self, item: T) void {
+            self.items = self.backing[0 .. self.count + 1];
+            self.items[self.count] = item;
             self.count += 1;
-            self.items = self.backing[0..self.count];
-            self.items[self.count - 1] = item;
         }
 
         pub fn resize(self: *Self, i: usize) void {
@@ -47,6 +47,15 @@ pub fn Stack(comptime T: type) type {
 
         pub fn previous(self: *Self) T {
             return self.backing[self.count];
+        }
+
+        pub fn print(self: *Self, writer: anytype) !void {
+            var i: usize = self.count - 1;
+            while (i >= 0) : (i -= 1) {
+                self.items[i].print(writer, null);
+                writer.print("\n", .{});
+                if (i == 0) break;
+            }
         }
     };
 }

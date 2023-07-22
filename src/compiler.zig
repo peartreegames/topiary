@@ -81,6 +81,7 @@ pub const Compiler = struct {
         OutOfScope,
         SymbolNotFound,
         ExternError,
+        NotYetImplemented,
     } || parser.Parser.Error;
 
     pub fn init(allocator: std.mem.Allocator, root_scope: *Scope, root_chunk: *Chunk, errors: *Errors) Compiler {
@@ -141,6 +142,11 @@ pub const Compiler = struct {
         self.jump_tree.root = try JumpTree.Node.create(self.allocator, "root", null);
         self.jump_node = self.jump_tree.root;
         for (tree.root) |stmt| {
+            // We first get a list of all boughs and named forks,
+            // then we'll switch out all the divert jump locations
+            // to the appropriate places.
+            // Alternatively, maybe it'd be better to store boughs and named forks
+            // as constant values, then just fetch the ip location as needed.
             try self.precompileScopes(stmt, self.jump_tree.root);
         }
 
@@ -243,8 +249,6 @@ pub const Compiler = struct {
                 const temp_start = try self.writeInt(OpCode.Size(.jump_if_false), JUMP_HOLDER, token);
 
                 try self.compileBlock(w.body);
-                try self.removeLast(.pop);
-
                 try self.writeOp(.jump, token);
                 _ = try self.writeInt(OpCode.Size(.jump), start, token);
 
@@ -329,6 +333,8 @@ pub const Compiler = struct {
                 try replaceJumps(self.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
 
                 const scope = try self.exitScope();
+                try self.writeOp(.pop, token);
+
                 self.scope.count += scope.locals_count;
                 try self.writeOp(.iter_end, token);
                 // pop item
@@ -338,7 +344,7 @@ pub const Compiler = struct {
                 if (self.builtins.symbols.contains(v.name))
                     return self.failError("{s} is a builtin function and cannot be used as a variable name", token, .{v.name}, Error.IllegalOperation);
                 var symbol = try self.scope.define(v.name, v.is_mutable, v.is_extern);
-                // extenr variables will be set before running by the user
+                // extern variables will be set before running by the user
                 if (v.is_extern) return;
 
                 try self.compileExpression(&v.initializer);
@@ -504,7 +510,6 @@ pub const Compiler = struct {
                 if (bin.operator == .assign) {
                     switch (bin.left.type) {
                         .identifier => |id| {
-                            try self.compileExpression(bin.left);
                             try self.compileExpression(bin.right);
                             var symbol = try self.scope.resolve(id);
                             try self.setSymbol(symbol, token);
@@ -516,6 +521,7 @@ pub const Compiler = struct {
                             try self.compileExpression(bin.left);
                             try self.removeLast(.index);
                             try self.writeOp(.set_property, token);
+                            try self.compileExpression(bin.left);
                             return;
                         },
                         else => unreachable,
@@ -699,15 +705,15 @@ pub const Compiler = struct {
                 _ = try self.writeInt(OpCode.Size(.constant), i, token);
                 _ = try self.writeInt(u8, @as(u8, @intCast(scope.free_symbols.len)), token);
             },
-            .class => |c| {
-                for (c.fields, 0..) |field, i| {
+            .instance => |ins| {
+                for (ins.fields, 0..) |field, i| {
                     try self.compileExpression(&field);
-                    try self.getOrSetIdentifierConstant(c.field_names[i], token);
+                    try self.getOrSetIdentifierConstant(ins.field_names[i], token);
                 }
-                var symbol = try self.scope.resolve(c.name);
+                var symbol = try self.scope.resolve(ins.name);
                 try self.loadSymbol(symbol, token);
                 try self.writeOp(.instance, token);
-                _ = try self.writeInt(OpCode.Size(.instance), @as(OpCode.Size(.instance), @intCast(c.fields.len)), token);
+                _ = try self.writeInt(OpCode.Size(.instance), @as(OpCode.Size(.instance), @intCast(ins.fields.len)), token);
             },
             .call => |c| {
                 try self.compileExpression(c.target);
@@ -726,7 +732,7 @@ pub const Compiler = struct {
                 try self.compileExpression(r.left);
                 try self.writeOp(.range, token);
             },
-            else => {},
+            else => return Error.NotYetImplemented,
         }
     }
 

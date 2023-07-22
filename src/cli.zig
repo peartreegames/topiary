@@ -27,9 +27,9 @@ pub fn main() !void {
     var vm_alloc = arena.allocator();
 
     var vm = try Vm.init(vm_alloc, CliRunner);
-    vm.interpretSource(contents) catch |err| {
+    vm.debug = true;
+    vm.interpretSource(contents) catch {
         try vm.err.write(contents, std.io.getStdErr().writer());
-        return err;
     };
 }
 

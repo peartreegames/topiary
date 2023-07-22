@@ -362,7 +362,7 @@ pub const Parser = struct {
             },
             .left_brace => try self.mapSetExpression(),
             .left_bracket => try self.listExpression(),
-            .new => try self.classExpression(),
+            .new => try self.instanceExpression(),
             .pipe => try self.functionExpression(),
             .nil => .{ .token = self.current_token, .type = .nil },
             else => return self.fail("Unexpected token in expression: {}", self.current_token, .{self.current_token.token_type}),
@@ -455,7 +455,7 @@ pub const Parser = struct {
         return try list.toOwnedSlice();
     }
 
-    fn classExpression(self: *Parser) Error!Expression {
+    fn instanceExpression(self: *Parser) Error!Expression {
         var start = self.current_token;
         self.next();
         const name = try self.consumeIdentifier();
@@ -482,7 +482,7 @@ pub const Parser = struct {
         return .{
             .token = start,
             .type = .{
-                .class = .{
+                .instance = .{
                     .name = name,
                     .field_names = try field_names.toOwnedSlice(),
                     .fields = try fields.toOwnedSlice(),
@@ -1062,8 +1062,8 @@ test "Parse Declaration" {
     try testing.expect(tree.root[2].type.class.fields[0].type.number == 0);
 
     try testing.expect(tree.root[3].type.variable.is_mutable);
-    try testing.expectEqualStrings("ClassType", tree.root[3].type.variable.initializer.type.class.name);
-    try testing.expect(tree.root[3].type.variable.initializer.type.class.fields.len == 0);
+    try testing.expectEqualStrings("ClassType", tree.root[3].type.variable.initializer.type.instance.name);
+    try testing.expect(tree.root[3].type.variable.initializer.type.instance.fields.len == 0);
 
     try testing.expectEqualStrings("EnumType", tree.root[4].type.@"enum".name);
     try testing.expect(tree.root[4].type.@"enum".values.len == 2);

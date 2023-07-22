@@ -14,10 +14,7 @@ pub const Rnd = struct {
     };
     var obj: Value.Obj = .{
         .data = .{
-            .builtin = .{
-                .backing = Self.builtin,
-                .arity = 2,
-            },
+            .builtin = .{ .backing = Self.builtin, .arity = 2, .is_method = false },
         },
     };
     fn builtin(_: *Gc, args: []Value) Value {
@@ -39,6 +36,7 @@ const Rnd01 = struct {
             .builtin = .{
                 .backing = Self.builtin,
                 .arity = 0,
+                .is_method = false,
             },
         },
     };
@@ -56,7 +54,7 @@ const Print = struct {
     };
     var obj: Value.Obj = .{
         .data = .{
-            .builtin = .{ .backing = Self.builtin, .arity = 1 },
+            .builtin = .{ .backing = Self.builtin, .arity = 1, .is_method = false },
         },
     };
     fn builtin(_: *Gc, args: []Value) Value {
@@ -89,7 +87,7 @@ pub const Count = struct {
     };
     var obj: Value.Obj = .{
         .data = .{
-            .builtin = .{ .backing = Self.builtin, .arity = 1 },
+            .builtin = .{ .backing = Self.builtin, .arity = 1, .is_method = true },
         },
     };
     fn builtin(_: *Gc, args: []Value) Value {
@@ -111,7 +109,7 @@ pub const Add = struct {
     };
     var obj: Value.Obj = .{
         .data = .{
-            .builtin = .{ .backing = Self.builtin, .arity = 2 },
+            .builtin = .{ .backing = Self.builtin, .arity = 2, .is_method = true },
         },
     };
     fn builtin(_: *Gc, args: []Value) Value {
@@ -132,7 +130,7 @@ pub const AddMap = struct {
     };
     var obj: Value.Obj = .{
         .data = .{
-            .builtin = .{ .backing = Self.builtin, .arity = 3 },
+            .builtin = .{ .backing = Self.builtin, .arity = 3, .is_method = true },
         },
     };
     fn builtin(_: *Gc, args: []Value) Value {
@@ -152,7 +150,7 @@ pub const Remove = struct {
     };
     var obj: Value.Obj = .{
         .data = .{
-            .builtin = .{ .backing = Self.builtin, .arity = 2 },
+            .builtin = .{ .backing = Self.builtin, .arity = 2, .is_method = true },
         },
     };
     fn builtin(_: *Gc, args: []Value) Value {
@@ -180,7 +178,7 @@ pub const Has = struct {
     };
     var obj: Value.Obj = .{
         .data = .{
-            .builtin = .{ .backing = Self.builtin, .arity = 2 },
+            .builtin = .{ .backing = Self.builtin, .arity = 2, .is_method = true },
         },
     };
     fn builtin(_: *Gc, args: []Value) Value {
@@ -217,7 +215,7 @@ pub const Clear = struct {
     };
     var obj: Value.Obj = .{
         .data = .{
-            .builtin = .{ .backing = Self.builtin, .arity = 1 },
+            .builtin = .{ .backing = Self.builtin, .arity = 1, .is_method = true },
         },
     };
     fn builtin(_: *Gc, args: []Value) Value {

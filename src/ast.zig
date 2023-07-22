@@ -44,7 +44,7 @@ pub const Expression = struct {
             value: []const u8,
             expressions: []const Expression,
         },
-        class: struct {
+        instance: struct {
             name: []const u8,
             field_names: [][]const u8,
             fields: []const Expression,

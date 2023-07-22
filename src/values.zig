@@ -78,6 +78,7 @@ pub const Value = union(Type) {
             builtin: struct {
                 arity: u8,
                 backing: Builtin,
+                is_method: bool,
             },
             closure: struct {
                 data: *Data,
@@ -323,7 +324,7 @@ pub const Value = union(Type) {
                 switch (o.data) {
                     .string => |s| writer.print("{s}", .{s}),
                     .list => |l| {
-                        writer.print("[", .{});
+                        writer.print("list[", .{});
                         for (l.items, 0..) |item, i| {
                             item.print(writer, constants);
                             if (i != l.items.len - 1)
@@ -332,7 +333,7 @@ pub const Value = union(Type) {
                         writer.print("]", .{});
                     },
                     .map => |m| {
-                        writer.print("{{", .{});
+                        writer.print("map{{", .{});
                         var keys = m.keys();
                         for (keys, 0..) |k, i| {
                             k.print(writer, constants);
@@ -345,7 +346,7 @@ pub const Value = union(Type) {
                     },
                     .set => |s| {
                         var keys = s.keys();
-                        writer.print("{{", .{});
+                        writer.print("set{{", .{});
                         for (keys, 0..) |k, i| {
                             k.print(writer, constants);
                             if (i != keys.len - 1)
@@ -354,12 +355,12 @@ pub const Value = union(Type) {
                         writer.print("}}", .{});
                     },
                     .function => |f| {
-                        writer.print("\n---\n", .{});
+                        writer.print("\nfn---\n", .{});
                         ByteCode.printInstructions(writer, f.instructions, constants);
                         writer.print("---", .{});
                     },
                     .closure => |c| {
-                        writer.print("\n---\n", .{});
+                        writer.print("\ncl---\n", .{});
                         ByteCode.printInstructions(writer, c.data.function.instructions, constants);
                         writer.print("---", .{});
                     },
@@ -392,7 +393,7 @@ pub const Value = union(Type) {
             //     }
             //     writer.print("}\n", .{});
             // },
-            else => writer.print("void", .{}),
+            else => writer.print("{s}", .{@tagName(self)}),
         }
     }
 
@@ -449,8 +450,9 @@ pub const Value = union(Type) {
                 .bool => |bl| bl == b.bool,
                 .nil => b == .nil,
                 .obj => |o| {
-                    const b_data = b.obj.*.data;
-                    if (@intFromEnum(o.data) != @intFromEnum(b_data)) return false;
+                    const b_data = b.obj.data;
+                    if (@intFromEnum(o.data) != @intFromEnum(b_data))
+                        return false;
                     return switch (o.data) {
                         .string => |s| std.mem.eql(u8, s, b_data.string),
                         .list => |l| {
@@ -471,7 +473,7 @@ pub const Value = union(Type) {
                                 const b_value = b_data.map.get(a_key);
                                 if (a_value == null and b_value != null) return false;
                                 if (a_value != null and b_value == null) return false;
-                                if (!a_value.?.eql(b_value.?)) return false;
+                                if (!adapter.eql(a_value.?, b_value.?, 0)) return false;
                             }
                             return true;
                         },

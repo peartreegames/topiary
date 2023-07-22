@@ -183,6 +183,10 @@ pub const Vm = struct {
         };
         self.frames.push(try Frame.create(root_closure, 0, 0));
         try self.run();
+        if (self.stack.count > 0) {
+            std.log.warn("Completed run but still had {} items on stack.", .{self.stack.count});
+            // try self.stack.print(std.debug);
+        }
     }
 
     pub fn interpretSource(self: *Vm, source: []const u8) !void {
@@ -197,7 +201,8 @@ pub const Vm = struct {
         try self.interpret(bytecode);
     }
 
-    fn fail(self: *Vm, comptime msg: []const u8, token: Token, args: anytype) !void {
+    fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {
+        var token = DebugToken.get(self.bytecode.?.tokens, self.ip) orelse undefined;
         try self.err.add(msg, token, .err, args);
         return Error.RuntimeError;
     }
@@ -480,14 +485,18 @@ pub const Vm = struct {
                     var target = self.pop();
                     switch (target) {
                         .obj => |o| switch (o.data) {
-                            // TODO: Will want to clean this up
+                            // TODO: Will want to clean this up.
+                            // Also the fails here should be caught in the compiler
+                            // but that's for another day
                             .string => {
                                 if (index == .obj and index.obj.data == .string) {
                                     var name = index.obj.data.string;
                                     if (std.mem.eql(u8, name, "has")) {
                                         try self.push(builtins.Has.value);
                                         try self.push(target);
-                                    }
+                                    } else if (std.mem.eql(u8, name, "count")) {
+                                        try self.push(.{ .number = @as(f32, @floatFromInt(o.data.string.len)) });
+                                    } else return self.fail("Unknown method \"{s}\" on string. Only \"count\", \"has\" are allowed.", .{index.obj.data.string});
                                 }
                             },
                             .list => |l| {
@@ -508,16 +517,18 @@ pub const Vm = struct {
                                     } else if (std.mem.eql(u8, name, "clear")) {
                                         try self.push(builtins.Clear.value);
                                         try self.push(target);
-                                    }
+                                    } else return self.fail("Unknown method \"{s}\" on list. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
                                 } else if (index == .number) {
                                     const i = @as(u32, @intFromFloat(index.number));
                                     if (i < 0 or i >= l.items.len) {
                                         try self.push(values.Nil);
                                     } else try self.push(l.items[i]);
-                                } else return error.RuntimeError;
+                                } else try self.push(values.Nil);
                             },
                             .map => |m| {
-                                if (index == .obj and index.obj.data == .string) {
+                                if (m.get(index)) |v| {
+                                    try self.push(v);
+                                } else if (index == .obj and index.obj.data == .string) {
                                     var name = index.obj.data.string;
                                     if (std.mem.eql(u8, name, "count")) {
                                         try self.push(builtins.Count.value);
@@ -534,54 +545,57 @@ pub const Vm = struct {
                                     } else if (std.mem.eql(u8, name, "clear")) {
                                         try self.push(builtins.Clear.value);
                                         try self.push(target);
-                                    }
-                                } else if (m.get(index)) |v| {
-                                    try self.push(v);
+                                    } else return self.fail("Unknown method \"{s}\" on map. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
                                 } else try self.push(values.Nil);
                             },
                             .set => {
-                                if (index == .obj and index.obj.data == .string) {
-                                    var name = index.obj.data.string;
-                                    if (std.mem.eql(u8, name, "count")) {
-                                        try self.push(builtins.Count.value);
-                                        try self.push(target);
-                                    } else if (std.mem.eql(u8, name, "add")) {
-                                        try self.push(builtins.Add.value);
-                                        try self.push(target);
-                                    } else if (std.mem.eql(u8, name, "remove")) {
-                                        try self.push(builtins.Remove.value);
-                                        try self.push(target);
-                                    } else if (std.mem.eql(u8, name, "has")) {
-                                        try self.push(builtins.Has.value);
-                                        try self.push(target);
-                                    } else if (std.mem.eql(u8, name, "clear")) {
-                                        try self.push(builtins.Clear.value);
-                                        try self.push(target);
-                                    }
-                                }
+                                if (index != .obj)
+                                    return self.fail("Can only query set methods by string name, not {s}", .{@tagName(index)});
+                                if (index.obj.data != .string)
+                                    return self.fail("Can only query set methods by string name, not {s}", .{@tagName(index.obj.data)});
+                                var name = index.obj.data.string;
+                                if (std.mem.eql(u8, name, "count")) {
+                                    try self.push(builtins.Count.value);
+                                    try self.push(target);
+                                } else if (std.mem.eql(u8, name, "add")) {
+                                    try self.push(builtins.Add.value);
+                                    try self.push(target);
+                                } else if (std.mem.eql(u8, name, "remove")) {
+                                    try self.push(builtins.Remove.value);
+                                    try self.push(target);
+                                } else if (std.mem.eql(u8, name, "has")) {
+                                    try self.push(builtins.Has.value);
+                                    try self.push(target);
+                                } else if (std.mem.eql(u8, name, "clear")) {
+                                    try self.push(builtins.Clear.value);
+                                    try self.push(target);
+                                } else return self.fail("Unknown method \"{s}\" on set. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
                             },
                             .instance => |i| {
+                                if (index != .obj)
+                                    return self.fail("Can only query instance fields by string name, not {s}", .{@tagName(index)});
+                                if (index.obj.data != .string)
+                                    return self.fail("Can only query instance fields by string name, not {s}", .{@tagName(index.obj.data)});
                                 if (i.fields.get(index.obj.data.string)) |field| {
                                     try self.push(field);
                                     if (field == .obj and field.obj.data == .closure) {
                                         try self.push(target);
                                     }
-                                } else return error.RuntimeError;
+                                } else return self.fail("Unknown field \"{s}\" on instance of {s}.", .{ index.obj.data.string, i.class.name });
                             },
-                            else => {
-                                std.log.warn("Invalid index type: {}", .{o.data});
-                                return error.RuntimeError;
-                            },
+                            else => return self.fail("Unknown target type {s} to index. Only lists, maps, sets, or instances can be indexed.", .{@tagName(target)}),
                         },
                         .map_pair => |mp| {
-                            if (index == .obj and index.obj.data == .string) {
-                                var name = index.obj.data.string;
-                                if (std.mem.eql(u8, name, "key")) {
-                                    try self.push(mp.key.*);
-                                } else if (std.mem.eql(u8, name, "value")) {
-                                    try self.push(mp.value.*);
-                                }
-                            } else return error.RuntimeError;
+                            if (index != .obj)
+                                return self.fail("Unknown index key \"{s}\" on map key/value pair. Only \"key\" or \"value\" are allowed.", .{@tagName(index)});
+                            if (index.obj.data != .string)
+                                return self.fail("Unknown index key \"{s}\" on map key/value pair. Only \"key\" or \"value\" are allowed.", .{@tagName(index.obj.data)});
+                            var name = index.obj.data.string;
+                            if (std.mem.eql(u8, name, "key")) {
+                                try self.push(mp.key.*);
+                            } else if (std.mem.eql(u8, name, "value")) {
+                                try self.push(mp.value.*);
+                            } else return self.fail("Unknown index key \"{s}\" on map key/value pair. Only \"key\" or \"value\" are allowed.", .{@tagName(index)});
                         },
                         else => unreachable,
                     }
@@ -609,20 +623,19 @@ pub const Vm = struct {
                         .speaker = speaker,
                         .tags = try tags.toOwnedSlice(),
                     };
-                    try self.push(values.Nil);
                     self.on_dialogue(self, result);
                 },
                 .call => {
                     const arg_count = self.readInt(OpCode.Size(.call));
                     var value = self.stack.items[self.stack.count - 1 - arg_count];
-                    if (value != .obj) return error.RuntimeError;
+                    if (value != .obj)
+                        return self.fail("Cannot call non-function type {s}", .{@tagName(value.obj.data)});
                     switch (value.obj.data) {
                         .closure => |c| {
                             const f = c.data.function;
                             if (f.arity != arg_count) {
                                 return self.fail(
                                     "Function expected {} arguments, but found {}",
-                                    DebugToken.get(self.bytecode.?.tokens, self.ip) orelse undefined,
                                     .{ f.arity, arg_count },
                                 );
                             }
@@ -633,15 +646,15 @@ pub const Vm = struct {
                         .builtin => |b| {
                             if (b.arity != arg_count)
                                 return self.fail(
-                                    "Function expected {} arguments, but found {}",
-                                    DebugToken.get(self.bytecode.?.tokens, self.ip) orelse undefined,
+                                    "Builtin Function expected {} arguments, but found {}",
                                     .{ b.arity, arg_count },
                                 );
                             var result = b.backing(&self.gc, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
+                            self.stack.count -= arg_count + 1;
                             try self.push(result);
                         },
                         else => {
-                            return error.RuntimeError;
+                            return self.fail("Cannot call non-function type {s}", .{@tagName(value.obj.data)});
                         },
                     }
                 },
@@ -659,9 +672,7 @@ pub const Vm = struct {
                             .free_values = free_values,
                         },
                     });
-                    var reset_count = self.stack.count - count + 1;
-                    // account for "self" in methods
-                    if (value.obj.data.function.is_method) reset_count -= 1;
+                    var reset_count = self.stack.count - count;
                     self.stack.count = reset_count;
                     try self.push(closure);
                 },
@@ -672,15 +683,13 @@ pub const Vm = struct {
                 .return_value => {
                     var value = self.pop();
                     var frame = self.frames.pop();
-                    _ = self.pop();
                     self.stack.count = frame.bp - 1;
                     try self.push(value);
                 },
                 .return_void => {
                     var frame = self.frames.pop();
-                    // _ = self.pop();
                     self.stack.count = frame.bp - 1;
-                    try self.push(values.Nil);
+                    try self.push(values.Void);
                 },
                 .fork => {
                     self.is_waiting = true;
@@ -719,7 +728,7 @@ pub const Vm = struct {
             .multiply => left * right,
             .divide => left / right,
             .modulus => @mod(left, right),
-            else => return error.UnknownOperator,
+            else => return self.fail("Unknown binary operator {s}", .{@tagName(op)}),
         };
         try self.push(.{ .number = total });
     }
@@ -728,14 +737,13 @@ pub const Vm = struct {
         const right = self.pop();
         const left = self.pop();
         if (@intFromEnum(right) != @intFromEnum(left)) {
-            std.log.warn("Mismatched types {} and {}", .{ left, right });
-            return error.RuntimeError;
+            return self.fail("Cannot compare mismatched types {s} and {s}", .{ @tagName(.left), @tagName(.right) });
         }
         switch (op) {
             .equal => try self.push(.{ .bool = right.eql(left) }),
             .not_equal => try self.push(.{ .bool = !right.eql(left) }),
             .greater_than => try self.push(.{ .bool = left.number > right.number }),
-            else => return error.UnknownOperator,
+            else => return self.fail("Unknown comparison operator {s}", .{@tagName(op)}),
         }
     }
 
@@ -835,7 +843,7 @@ test "Conditionals" {
 
     inline for (test_cases) |case| {
         var vm = try Vm.init(testing.allocator, TestRunner);
-        vm.debug = true;
+        // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
         switch (case.type) {
@@ -859,9 +867,10 @@ test "Variables" {
     inline for (test_cases) |case| {
         var vm = try Vm.init(testing.allocator, TestRunner);
         defer vm.deinit();
+        // vm.debug = true;
         try vm.interpretSource(case.input);
         var value = vm.stack.previous().number;
-        errdefer std.log.warn("\n{s}\n ==== {}", .{ case.input, value });
+        errdefer std.log.warn("\n{s}\n ==== {} != {}", .{ case.input, case.value, value });
         try testing.expect(case.value == value);
     }
 }
@@ -995,11 +1004,13 @@ test "Index" {
         .{ .input = "({1: 1})[2]", .value = null },
         .{ .input = "({:})[0]", .value = null },
         .{ .input = "[1,1,1].count()", .value = 3.0 },
+        .{ .input = "({\"one\"}).count()", .value = 1.0 },
+        .{ .input = "({\"one\": 1 })[\"one\"]", .value = 1.0 },
     };
 
     inline for (test_cases) |case| {
         var vm = try Vm.init(testing.allocator, TestRunner);
-        vm.debug = true;
+        // vm.debug = true;
         defer vm.deinit();
         try vm.interpretSource(case.input);
         const value = vm.stack.previous();
@@ -1014,7 +1025,7 @@ test "Functions" {
     const test_cases = .{
         .{ .input = 
         \\ const fifteen = || return 5 + 10
-        \\ fifteen()    
+        \\ fifteen()
         , .value = 15.0 },
         .{ .input = 
         \\ const one = || return 1
@@ -1067,7 +1078,7 @@ test "Functions" {
         const value = vm.stack.previous();
         switch (@TypeOf(case.value)) {
             comptime_float => try testing.expect(case.value == value.number),
-            else => try testing.expect(value == .nil),
+            else => try testing.expect(value == .void),
         }
     }
 }
@@ -1369,7 +1380,7 @@ test "Loops" {
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator, TestRunner);
-        vm.debug = true;
+        // vm.debug = true;
         defer vm.deinit();
         vm.interpretSource(case.input) catch |err| {
             try vm.err.write(case.input, std.io.getStdErr().writer());
@@ -1405,9 +1416,9 @@ test "Instance" {
         \\    incr = |i| self.value += i
         \\ }
         \\ const test = new Test{}
+        \\ test.value = 5
         \\ print(test)
         \\ print(test.value)
-        \\ test.value = 5
         \\ test.value += 1
         \\ print(test.value)
         \\ print(test.fn())
@@ -1416,7 +1427,7 @@ test "Instance" {
     ;
     errdefer std.log.warn("\n======\n{s}\n======\n", .{input});
     var vm = try Vm.init(testing.allocator, TestRunner);
-    // vm.debug = true;
+    vm.debug = true;
     std.debug.print("\n======\n", .{});
     try vm.interpretSource(input);
     defer vm.deinit();
@@ -1444,7 +1455,7 @@ test "Boughs" {
         \\ const repeat = |str, count| {
         \\     var result = ""
         \\     while count > 0 {
-        \\          result = result + str 
+        \\          result = result + str
         \\          count -= 1
         \\          print(count)
         \\     }
@@ -1504,7 +1515,7 @@ test "Boughs" {
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator, TestRunner);
-        vm.debug = true;
+        // vm.debug = true;
         defer vm.deinit();
         std.debug.print("\n======\n", .{});
         try vm.interpretSource(case.input);
@@ -1627,7 +1638,7 @@ test "Jump Backups" {
     inline for (test_cases) |case| {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator, TestRunner);
-        vm.debug = true;
+        // vm.debug = true;
         std.debug.print("\n======\n", .{});
         defer vm.deinit();
         try vm.interpretSource(case.input);
@@ -1650,7 +1661,7 @@ test "Externs" {
         const allocator = testing.allocator;
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator, TestRunner);
-        vm.debug = true;
+        // vm.debug = true;
         std.debug.print("\n======\n", .{});
 
         const tree = try parser.parse(allocator, case.input, &vm.err);
