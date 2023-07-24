@@ -27,7 +27,6 @@ pub fn main() !void {
     var vm_alloc = arena.allocator();
 
     var vm = try Vm.init(vm_alloc, CliRunner);
-    vm.debug = true;
     vm.interpretSource(contents) catch {
         try vm.err.write(contents, std.io.getStdErr().writer());
     };
@@ -46,21 +45,32 @@ const CliRunner = struct {
         }
         const stdin = std.io.getStdIn().reader();
         std.debug.print("{s}", .{dialogue.content});
-        var buf: [1]u8 = undefined;
-        if (stdin.readUntilDelimiterOrEof(buf[0..], '\n') catch &buf) |_| {
+        var buf: [2]u8 = undefined;
+        if (stdin.readUntilDelimiterOrEof(&buf, '\n') catch &buf) |_| {
             vm.selectContinue();
         }
     }
 
     pub fn on_choices(vm: *Vm, choices: []Choice) void {
-        for (choices, 0..) |choice, i| {
-            std.debug.print("[{d}] {s}\n", .{ i, choice.content });
-        }
-        var buf: [10]u8 = undefined;
         const stdin = std.io.getStdIn().reader();
-        if (stdin.readUntilDelimiterOrEof(buf[0..], '\n') catch &buf) |user_input| {
-            var index = std.fmt.parseInt(usize, user_input, 10) catch 0;
-            vm.selectChoice(index) catch |err| std.debug.print("Error: {}", .{err});
+        var index: ?usize = null;
+        while (index == null) {
+            for (choices, 0..) |choice, i| {
+                std.debug.print("[{d}] {s}\n", .{ i, choice.content });
+            }
+            var buf: [10]u8 = undefined;
+            if (stdin.readUntilDelimiterOrEof(&buf, '\n') catch &buf) |user_input| {
+                var input = std.mem.trim(u8, user_input, "\r\n");
+                index = std.fmt.parseInt(usize, input, 10) catch |err| blk: {
+                    std.debug.print("Invliad value: {}.\n", .{err});
+                    break :blk null;
+                };
+                if (index != null and index.? >= choices.len) {
+                    index = null;
+                    std.debug.print("Invalid value.\n", .{});
+                }
+            }
         }
+        vm.selectChoice(index.?) catch |err| std.debug.print("Error: {}", .{err});
     }
 };

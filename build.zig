@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const lib = b.addStaticLibrary(.{
-        .name = "topiary",
+        .name = "topi",
         .root_source_file = .{ .path = "src/vm.zig" },
         .target = target,
         .optimize = optimize,
