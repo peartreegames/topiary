@@ -21,6 +21,8 @@ const CONTINUE_HOLDER = 9001;
 const CHOICE_HOLDER = 9002;
 const FORK_HOLDER = 9003;
 const DIVERT_HOLDER = 9004;
+const PRONG_HOLDER = 9005;
+const SWITCH_END_HOLDER = 9006;
 const JUMP_HOLDER = 9999;
 
 pub fn compileSource(allocator: std.mem.Allocator, source: []const u8, errors: *Errors) !ByteCode {
@@ -226,6 +228,37 @@ pub const Compiler = struct {
                 }
                 try self.compileBlock(i.else_branch.?);
                 try self.replaceValue(jumpPos, u16, self.instructionPos());
+            },
+            .@"switch" => |s| {
+                var start = self.instructionPos();
+                try self.compileExpression(&s.capture);
+                var prong_jumps = try self.allocator.alloc(usize, s.prongs.len);
+                defer self.allocator.free(prong_jumps);
+                for (s.prongs, 0..) |prong_stmt, i| {
+                    var prong = prong_stmt.type.switch_prong;
+                    if (prong.values == null) break;
+                    for (prong.values.?) |value| {
+                        try self.compileExpression(&value);
+                    }
+                    try self.writeOp(.prong, prong_stmt.token);
+                    var prong_jump = try self.writeInt(OpCode.Size(.jump), PRONG_HOLDER, prong_stmt.token);
+                    _ = try self.writeInt(u8, @as(u8, @intCast(prong.values.?.len)), prong_stmt.token);
+                    prong_jumps[i] = prong_jump;
+                }
+
+                for (s.prongs, 0..) |prong_stmt, i| {
+                    var prong = prong_stmt.type.switch_prong;
+                    if (prong.values != null)
+                        try self.replaceValue(prong_jumps[i], OpCode.Size(.jump), self.instructionPos());
+                    try self.enterScope(if (self.scope.tag == .global) .global else .local);
+                    try self.compileBlock(prong.body);
+                    try self.writeOp(.jump, prong_stmt.token);
+                    _ = try self.writeInt(OpCode.Size(.jump), SWITCH_END_HOLDER, prong_stmt.token);
+                    var scope = try self.exitScope();
+                    self.scope.count += scope.locals_count;
+                }
+                try replaceJumps(self.chunk.instructions.items[start..], SWITCH_END_HOLDER, self.instructionPos());
+                try self.writeOp(.pop, token);
             },
             .block => |b| try self.compileBlock(b),
             .expression => |exp| {
@@ -788,8 +821,8 @@ pub const Compiler = struct {
         } else return self.failError("Unknown symbol", token, .{}, Error.SymbolNotFound);
     }
 
-    fn instructionPos(self: *Compiler) u16 {
-        return @as(u16, @intCast(self.chunk.instructions.items.len));
+    fn instructionPos(self: *Compiler) OpCode.Size(.jump) {
+        return @as(OpCode.Size(.jump), @intCast(self.chunk.instructions.items.len));
     }
 
     fn currentScope(self: *Compiler) *Scope {

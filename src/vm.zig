@@ -293,6 +293,24 @@ pub const Vm = struct {
                         self.currentFrame().ip = dest;
                     }
                 },
+                .prong => {
+                    var dest = self.readInt(OpCode.Size(.jump));
+                    var values_count = self.readInt(u8);
+                    var capture = self.stack.items[self.stack.count - values_count - 1];
+                    var i: usize = 0;
+                    var match = false;
+                    while (i < values_count) : (i += 1) {
+                        var value = self.pop();
+                        if (!self.prongIsMatch(capture, value)) continue;
+                        match = true;
+                        self.stack.count -= values_count - i - 1;
+                        break;
+                    }
+
+                    if (match) {
+                        self.currentFrame().ip = dest;
+                    }
+                },
                 .set_global => {
                     const index = self.readInt(OpCode.Size(.set_global));
                     if (index > globals_size) return Error.RuntimeError;
@@ -745,6 +763,14 @@ pub const Vm = struct {
             .greater_than => try self.push(.{ .bool = left.number > right.number }),
             else => return self.fail("Unknown comparison operator {s}", .{@tagName(op)}),
         }
+    }
+
+    fn prongIsMatch(self: *Vm, capture: Value, case: Value) bool {
+        _ = self;
+        return switch (case) {
+            .range => |r| @as(i32, @intFromFloat(capture.number)) >= r.start or @as(i32, @intFromFloat(capture.number)) <= r.end,
+            else => capture.eql(case),
+        };
     }
 
     fn push(self: *Vm, value: Value) !void {
@@ -1639,6 +1665,112 @@ test "Jump Backups" {
         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
         var vm = try Vm.init(testing.allocator, TestRunner);
         // vm.debug = true;
+        std.debug.print("\n======\n", .{});
+        defer vm.deinit();
+        try vm.interpretSource(case.input);
+    }
+}
+
+test "Switch" {
+    const test_cases = .{
+        .{
+            .input =
+            \\ var i = -1
+            \\ switch 1 {
+            \\     0: i = 0,
+            \\     1: i = 1 
+            \\ }
+            \\ i
+            ,
+            .value = 1.0,
+        },
+        .{
+            .input =
+            \\ var i = -1
+            \\ switch -1 {
+            \\     0: i = 0,
+            \\     1: i = 1 
+            \\ }
+            \\ i
+            ,
+            .value = -1.0,
+        },
+        .{
+            .input =
+            \\ var i = -1
+            \\ switch 1 {
+            \\     0: i = 0,
+            \\     1: i = 1,
+            \\ }
+            \\ i
+            ,
+            .value = 1.0,
+        },
+        .{
+            .input =
+            \\ var i = -1
+            \\ switch 1 {
+            \\     0: i = 0,
+            \\     1: i = 1,
+            \\     else: i = 5
+            \\ }
+            \\ i
+            ,
+            .value = 1.0,
+        },
+        .{
+            .input =
+            \\ var i = -1
+            \\ switch 10 {
+            \\     0: i = 0,
+            \\     1: i = 1,
+            \\     else: i = 5
+            \\ }
+            \\ i
+            ,
+            .value = 5.0,
+        },
+        .{
+            .input =
+            \\ var i = -1
+            \\ switch 4 {
+            \\     0,1,2,3: i = 0,
+            \\     4,5,6,7: i = 4,
+            \\     else: i = 5
+            \\ }
+            \\ i
+            ,
+            .value = 4.0,
+        },
+        .{
+            .input =
+            \\ var i = -1
+            \\ switch 4 {
+            \\     0..3: i = 0,
+            \\     4..7: i = 4,
+            \\     else: i = 5
+            \\ }
+            \\ i
+            ,
+            .value = 4.0,
+        },
+        .{
+            .input =
+            \\ var i = -1
+            \\ switch "test" {
+            \\     "one": i = 0,
+            \\     "two": i = 4,
+            \\     "test": i = 5
+            \\ }
+            \\ i
+            ,
+            .value = 5.0,
+        },
+    };
+    inline for (test_cases) |case| {
+        errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
+        var vm = try Vm.init(testing.allocator, TestRunner);
+        vm.debug = true;
         std.debug.print("\n======\n", .{});
         defer vm.deinit();
         try vm.interpretSource(case.input);

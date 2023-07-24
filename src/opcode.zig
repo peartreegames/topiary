@@ -25,6 +25,7 @@ pub const OpCode = enum(u8) {
 
     jump,
     jump_if_false,
+    prong,
 
     get_global,
     set_global,
@@ -84,6 +85,7 @@ pub const OpCode = enum(u8) {
             .greater_than => "OP_GREATER_THAN",
             .jump => "OP_JUMP",
             .jump_if_false => "OP_JUMP_IF_FALSE",
+            .prong => "OP_PRONG",
             .get_global => "OP_GET_GLOBAL",
             .set_global => "OP_SET_GLOBAL",
             .get_local => "OP_GET_LOCAL",
@@ -124,7 +126,7 @@ pub const OpCode = enum(u8) {
             .set_global, .get_global, .choice => u16,
             .list, .map, .set => u16,
             .get_local, .set_local, .get_builtin, .get_free, .set_free, .call, .class, .instance => u8,
-            .string, .closure => u24, // u16 for constant location, u8 for expressions count
+            .string, .closure, .prong => u24, // u16 for constant location, u8 for expressions count
             else => void,
         };
     }

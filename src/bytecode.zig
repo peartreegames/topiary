@@ -89,11 +89,19 @@ pub const ByteCode = struct {
                     i += 2;
                     writer.print("{d: >8}", .{index});
                     i += 1;
-                    writer.print("  = ", .{});
+                    writer.print("   = ", .{});
                     if (constants) |c| {
                         var value = c[index];
                         value.print(writer, c);
                     }
+                },
+                .prong => {
+                    var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
+                    i += 2;
+                    writer.print("{d: >8}", .{index});
+                    var count = std.mem.readIntSliceBig(u8, instructions[i..(i + 1)]);
+                    i += 1;
+                    writer.print("   = {d}", .{count});
                 },
                 else => {},
             }

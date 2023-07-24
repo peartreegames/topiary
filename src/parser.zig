@@ -140,7 +140,7 @@ pub const Parser = struct {
             .fork => try self.forkStatement(),
             .@"for" => try self.forStatement(),
             .@"if" => try self.ifStatement(),
-            // .@"switch" => switchStatement(),
+            .@"switch" => try self.switchStatement(),
             .@"while" => try self.whileStatement(),
             .@"return" => try self.returnStatement(),
             .@"break" => try self.breakStatement(),
@@ -902,52 +902,65 @@ pub const Parser = struct {
             },
         };
     }
-    // fn switchStatement(self: *Parser) Error!Node {
-    //     const node = try self.allocator.create(Node.SwitchLiteral);
-    //     node.* = .{ .token = self.current_token, .capture = undefined, .prongs = undefined };
-    //
-    //     try self.expectPeek(.left_paren);
-    //
-    //     self.next();
-    //     node.capture = try self.expression(.lowest);
-    //
-    //     try self.expectPeek(.right_paren);
-    //     try self.expectPeek(.left_brace);
-    //
-    //     self.next();
-    //     var prongs = std.ArrayList(Node).init(self.allocator);
-    //
-    //     try prongs.append(try self.parseSwitchProng());
-    //
-    //     while (self.peekIs(.comma)) {
-    //         self.next();
-    //         self.next();
-    //         try prongs.append(try self.parseSwitchProng());
-    //     }
-    //     node.prongs = try prongs.toOwnedSlice();
-    //
-    //     try self.expectPeek(.right_brace);
-    //
-    //     return Node{ .@"switch" = node };
-    // }
-    //
-    // /// Parses a switch prong i.e. x: 5 + 5 into a `Node.SwitchProng`
-    // fn switchCase(self: *Parser) Error!Node {
-    //     const node = try self.allocator.create(Node.SwitchProng);
-    //     node.* = .{ .token = undefined, .left = try self.expression(.lowest), .right = undefined };
-    //
-    //     try self.expectPeek(.colon);
-    //     node.token = self.current_token;
-    //     self.next();
-    //
-    //     node.right = if (self.currentIs(.left_brace))
-    //         try self.parseBlockStatement(.right_brace)
-    //     else
-    //         try self.expressionStatement();
-    //
-    //     return Node{ .switch_prong = node };
-    //
-    //
+
+    fn switchStatement(self: *Parser) Error!Statement {
+        var start_token = self.current_token;
+        self.next();
+        var capture = try self.expression(.lowest);
+
+        try self.expectPeek(.left_brace);
+        var prongs = std.ArrayList(Statement).init(self.allocator);
+
+        self.next();
+        try prongs.append(try self.switchProng());
+
+        while (self.peekIs(.comma)) {
+            self.next();
+            if (self.peekIs(.right_brace)) break;
+            self.next();
+            try prongs.append(try self.switchProng());
+        }
+
+        try self.expectPeek(.right_brace);
+
+        return .{
+            .token = start_token,
+            .type = .{
+                .@"switch" = .{
+                    .capture = capture,
+                    .prongs = try prongs.toOwnedSlice(),
+                },
+            },
+        };
+    }
+
+    fn switchProng(self: *Parser) Error!Statement {
+        var start_token = self.current_token;
+        var values = std.ArrayList(Expression).init(self.allocator);
+        defer values.deinit();
+        const is_else = start_token.token_type == .@"else";
+        if (!is_else) {
+            try values.append(try self.expression(.lowest));
+            while (self.peekIs(.comma)) {
+                self.next();
+                self.next();
+                try values.append(try self.expression(.lowest));
+            }
+        }
+
+        try self.expectPeek(.colon);
+        self.next();
+        return .{
+            .token = start_token,
+            .type = .{
+                .switch_prong = .{
+                    .values = if (is_else) null else try values.toOwnedSlice(),
+                    .body = try self.block(),
+                },
+            },
+        };
+    }
+
     fn commentStatement(self: *Parser) Error!Statement {
         return .{
             .token = self.current_token,

@@ -81,14 +81,6 @@ pub const Expression = struct {
             then_value: *Expression,
             else_value: *Expression,
         },
-        @"switch": struct {
-            capture: *Expression,
-            cases: []const Expression,
-        },
-        switch_case: struct {
-            value: *Expression,
-            body: []const Statement,
-        },
     };
     pub fn print(self: Expression, writer: anytype, prefix: []const u8, depth: usize) void {
         writer.print("\n", .{});
@@ -190,6 +182,14 @@ pub const Statement = struct {
         @"break": void,
         @"continue": void,
         comment: []const u8,
+        @"switch": struct {
+            capture: Expression,
+            prongs: []const Statement,
+        },
+        switch_prong: struct {
+            values: ?[]Expression,
+            body: []const Statement,
+        },
     };
 
     pub fn print(self: Statement, writer: anytype, prefix: []const u8, depth: usize) void {

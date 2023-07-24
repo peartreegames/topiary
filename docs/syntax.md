@@ -257,41 +257,41 @@ else value = -5
 print(value) // 11
 ```
 
-Switch statements can also be used (**Coming Soon**).
+Switch statements can also be used.
  
 Breaks are implied on the first case which matches. 
 Multiple conditions can be matched with commas (`,`), 
-and if using numbers Ranges can also be used.
+and if using numbers Ranges (`n..m`) can also be used.
 
 Again braces are optional if only one line is used.
+else statements are optional, if no prong matches it will be skipped.
 
 ```topi
 // basic switch
-switch(""string"") {
-    ""string"": print(""switch here"")
-    ""number"": print(""switch not here"")
-    else: print(""switch else not here"")
+switch "string" {
+    "string": print("switch here"),
+    "number": print("switch not here"),
+    else: print("switch else not here")
 }
 
 // range cases
-switch(2) {
-    -6..-1: print(""switch not here"")
-    0..5: print(""switch here"")
-    6..10: print(""switch not here"")
-    else: print(""switch else not here"")
+switch 2 {
+    -6..-1: print("switch not here"),
+    0..5: print("switch here"),
+    6..10: print("switch not here")
 }
 
 // multiple matches
-switch(5) {
-    2,3,4: print(""switch not here"")
-    5,6,7: print(""switch here"")
-    else: print(""switch else not here"")
+switch 5 {
+    2,3,4: print("switch not here"),
+    5,6,7: print("switch here"),
+    else: print("switch else not here")
 }
 
-switch(""else"") {
-    ""string"": print(""switch not here"")
-    ""number"": print(""switch not here"")
-    else: print(""switch else here"")
+switch "else" {
+    "string": print(""switch not here"),
+    "number": print(""switch not here"),
+    else: print(""switch else here")
 ```
 
 
