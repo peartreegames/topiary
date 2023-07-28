@@ -8,6 +8,7 @@ pub const Tree = struct {
     allocator: Allocator,
 
     root: []const Statement,
+    source: []const u8,
 
     pub fn deinit(self: *const Tree) void {
         self.arena.promote(self.allocator).deinit();
@@ -154,7 +155,7 @@ pub const Statement = struct {
             then_branch: []const Statement,
             else_branch: ?[]const Statement,
         },
-        import: struct {
+        include: struct {
             path: []const u8,
             contents: []const Statement,
         },

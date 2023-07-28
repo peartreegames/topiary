@@ -1,6 +1,8 @@
 const std = @import("std");
 const _vm = @import("./vm.zig");
-const parse = @import("./parser.zig").parse;
+const parseFile = @import("./parser.zig").parseFile;
+const Scope = @import("./scope.zig").Scope;
+const Compiler = @import("./compiler.zig").Compiler;
 const Errors = @import("./error.zig").Errors;
 
 const Vm = _vm.Vm;
@@ -15,20 +17,28 @@ pub fn main() !void {
         std.log.warn("No file argument provided.", .{});
         return;
     }
-    const file = std.fs.cwd().openFile(file_path.?, .{}) catch |e| {
-        return std.log.err("Could not open file: {s}, {}", .{ file_path.?, e });
-    };
-    defer file.close();
-
-    var content_alloc = arena.allocator();
-    var contents = try file.reader().readAllAlloc(content_alloc, 10_000);
-    defer content_alloc.free(contents);
-
+    var allocator = arena.allocator();
     var vm_alloc = arena.allocator();
 
     var vm = try Vm.init(vm_alloc, CliRunner);
-    vm.interpretSource(contents) catch {
-        try vm.err.write(contents, std.io.getStdErr().writer());
+    var dir = try std.fs.cwd().openDir(std.fs.path.dirname(file_path.?).?, .{});
+    var file_name = std.fs.path.basename(file_path.?);
+    var tree = try parseFile(allocator, dir, file_name, &vm.err);
+    defer tree.deinit();
+    defer allocator.free(tree.source);
+
+    var root_scope = try Scope.create(allocator, null, .global);
+    defer root_scope.destroy();
+    var root_chunk = try Compiler.Chunk.create(allocator, null);
+    defer root_chunk.destroy();
+    var compiler = Compiler.init(allocator, root_scope, root_chunk, &vm.err);
+    defer compiler.deinit();
+
+    try compiler.compile(tree);
+    var bytecode = try compiler.bytecode();
+
+    vm.interpret(bytecode) catch {
+        try vm.err.write(tree.source, std.io.getStdErr().writer());
     };
 }
 

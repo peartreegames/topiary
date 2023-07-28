@@ -48,6 +48,53 @@ fn findPrecedence(token_type: TokenType) Precedence {
         else => .lowest,
     };
 }
+
+/// Used for parsing files
+/// Required if topi file has "include" statements
+pub fn parseFile(allocator: Allocator, dir: std.fs.Dir, path: []const u8, err: *Errors) Parser.Error!Tree {
+    const file = dir.openFile(path, .{}) catch |e| {
+        err.add("Could not open file {s}: {}", undefined, .err, .{ path, e }) catch {};
+        return Parser.Error.ParserError;
+    };
+    defer file.close();
+
+    var source = file.reader().readAllAlloc(allocator, 10_000) catch |e| {
+        err.add("Could not read file {s}: {}", undefined, .err, .{ path, e }) catch {};
+        return Parser.Error.ParserError;
+    };
+    defer allocator.free(source);
+    var lexer = Lexer.init(source);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+
+    var parser = Parser{
+        .current_token = lexer.next(),
+        .peek_token = lexer.next(),
+        .arena = arena.state,
+        .allocator = arena.allocator(),
+        .lexer = &lexer,
+        .directory = dir,
+        .source = source,
+        .err = err,
+    };
+
+    var nodes = ArrayList(Statement).init(parser.allocator);
+    errdefer nodes.deinit();
+
+    while (!parser.currentIs(.eof)) : (parser.next()) {
+        try nodes.append(try parser.statement());
+    }
+
+    return Tree{
+        .root = try nodes.toOwnedSlice(),
+        .arena = arena.state,
+        .allocator = allocator,
+        .source = source,
+    };
+}
+
+/// Use for parsing source directly
+/// Cannot be used if source has "include" statements
 pub fn parse(allocator: Allocator, source: []const u8, err: *Errors) Parser.Error!Tree {
     var lexer = Lexer.init(source);
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -74,6 +121,7 @@ pub fn parse(allocator: Allocator, source: []const u8, err: *Errors) Parser.Erro
         .root = try nodes.toOwnedSlice(),
         .arena = arena.state,
         .allocator = allocator,
+        .source = source,
     };
 }
 pub const Parser = struct {
@@ -85,6 +133,7 @@ pub const Parser = struct {
     source: []const u8,
     err: *Errors,
     depth: usize = 0,
+    directory: ?std.fs.Dir = null,
 
     pub const Error = error{
         ParserError,
@@ -130,6 +179,7 @@ pub const Parser = struct {
 
     fn statement(self: *Parser) Error!Statement {
         return switch (self.current_token.token_type) {
+            .include => try self.includeStatement(),
             .class => try self.classDeclaration(),
             .@"enum" => try self.enumDeclaration(),
             .@"extern", .@"var", .@"const" => try self.varDeclaration(),
@@ -156,6 +206,29 @@ pub const Parser = struct {
                 .token = self.current_token,
                 .type = .{
                     .expression = try self.expression(.lowest),
+                },
+            },
+        };
+    }
+
+    fn includeStatement(self: *Parser) Error!Statement {
+        var start = self.current_token;
+        self.next();
+
+        var path = try self.getStringValue();
+        if (self.directory == null) return self.fail("Current directory not set.", self.current_token, .{});
+        var full_path = self.directory.?.realpathAlloc(self.allocator, path) catch path;
+        var dir = self.directory.?.openDir(std.fs.path.dirname(full_path).?, .{}) catch |e| {
+            return self.fail("Could not open directory {s}: {}", self.current_token, .{ path, e });
+        };
+        defer dir.close();
+        var include_tree = try parseFile(self.allocator, dir, path, self.err);
+        return .{
+            .token = start,
+            .type = .{
+                .include = .{
+                    .path = path,
+                    .contents = include_tree.root,
                 },
             },
         };
@@ -1029,18 +1102,14 @@ pub const Parser = struct {
     }
 };
 
-// test "Parse Import" {
-//     const allocator = testing.allocator;
-//     const input = "import \"./globals.topi\"";
-//     var errors = Errors.init(allocator);
-//     defer errors.deinit();
-//     const tree = parse(allocator, input, &errors) catch |err| {
-//         try errors.write(input, std.io.getStdErr().writer());
-//         return err;
-//     };
-//     defer tree.deinit();
-//     try testing.expectEqualStrings("./globals.topi", tree.root[0].type.import);
-// }
+test "Parse Include" {
+    const allocator = testing.allocator;
+    const input = "include \"./globals.topi\"";
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const err = parse(allocator, input, &errors);
+    try testing.expectError(Parser.Error.ParserError, err);
+}
 
 test "Parse Declaration" {
     var allocator = testing.allocator;

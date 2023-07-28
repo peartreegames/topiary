@@ -192,6 +192,9 @@ pub const Compiler = struct {
 
     pub fn precompileScopes(self: *Compiler, stmt: ast.Statement, node: *JumpTree.Node) Error!void {
         switch (stmt.type) {
+            .include => |i| {
+                for (i.contents) |s| try self.precompileScopes(s, node);
+            },
             .bough => |b| {
                 var bough_node = try JumpTree.Node.create(self.allocator, b.name, node);
                 for (b.body) |s| try self.precompileScopes(s, bough_node);
@@ -210,6 +213,9 @@ pub const Compiler = struct {
     pub fn compileStatement(self: *Compiler, stmt: ast.Statement) Error!void {
         var token = stmt.token;
         switch (stmt.type) {
+            .include => |i| {
+                try self.compileBlock(i.contents);
+            },
             .@"if" => |i| {
                 try self.compileExpression(i.condition);
                 try self.writeOp(.jump_if_false, token);

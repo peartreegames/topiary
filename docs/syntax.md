@@ -386,3 +386,29 @@ print(john.fullName()) // "John Doe"
 john.increaseAge(2)
 print(john.age) // 27
 ```
+
+## Multiple Files
+
+Multiple files can be joined together to create a single story using `include "[PATH]"`.
+All files are added into global scope, meaning you can't have the same variable names in both files.
+
+Currently circular dependencies are not allowed.
+
+```topi
+// main.topi
+include "./other.topi"
+sum(1, 5)
+
+// other.topi
+const sum = |x, y| return x + y
+```
+
+**Not allowed**
+
+```topi
+// main.topi
+include "./other.topi"
+
+// other.topi
+include "./main.topi"
+```
