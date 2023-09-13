@@ -51,7 +51,7 @@ pub const Errors = struct {
             try writer.print("{s}error: \x1b[0m{s}\n", .{ color_prefix, err.fmt });
 
             const start = @min(err.token.start, source.len - 1);
-            const end = @min(err.token.end, source.len - 1);
+            const end = @min(err.token.end, source.len);
 
             try writer.print("type: {s}, line: {d}, column: {d}\n", .{ tok.toString(err.token.token_type), err.token.line, err.token.column });
             try writer.print("{s}\n", .{source[start..end]});

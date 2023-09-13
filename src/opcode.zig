@@ -3,7 +3,6 @@ const std = @import("std");
 pub const OpCode = enum(u8) {
     constant,
     pop,
-
     add,
     subtract,
     multiply,
@@ -11,34 +10,26 @@ pub const OpCode = enum(u8) {
     modulus,
     negate,
     not,
-
     @"or",
     @"and",
-
     true,
     false,
     nil,
-
     equal,
     not_equal,
     greater_than,
-
     jump,
     jump_if_false,
     prong,
-
+    decl_global,
     get_global,
     set_global,
-
     get_local,
     set_local,
-
     set_property,
-
     get_builtin,
     get_free,
     set_free,
-
     string,
     list,
     map,
@@ -46,11 +37,9 @@ pub const OpCode = enum(u8) {
     class,
     instance,
     range,
-
     iter_start,
     iter_next,
     iter_end,
-
     index,
     call,
     closure,
@@ -59,7 +48,6 @@ pub const OpCode = enum(u8) {
     fork,
     choice,
     backup,
-
     return_void,
     return_value,
     fin,
@@ -86,6 +74,7 @@ pub const OpCode = enum(u8) {
             .jump => "OP_JUMP",
             .jump_if_false => "OP_JUMP_IF_FALSE",
             .prong => "OP_PRONG",
+            .decl_global => "OP_DECL_GLOBAL",
             .get_global => "OP_GET_GLOBAL",
             .set_global => "OP_SET_GLOBAL",
             .get_local => "OP_GET_LOCAL",
@@ -123,9 +112,21 @@ pub const OpCode = enum(u8) {
         return switch (self) {
             .constant => u16,
             .jump, .jump_if_false, .backup => u16,
-            .set_global, .get_global, .choice => u16,
+            .decl_global,
+            .set_global,
+            .get_global,
+            .get_local,
+            .set_local,
+            .choice,
+            => u16,
             .list, .map, .set => u16,
-            .get_local, .set_local, .get_builtin, .get_free, .set_free, .call, .class, .instance => u8,
+            .get_builtin,
+            .call,
+            .class,
+            .instance,
+            .get_free,
+            .set_free,
+            => u8,
             .string, .closure, .prong => u24, // u16 for constant location, u8 for expressions count
             else => void,
         };

@@ -5,7 +5,7 @@ const OpCode = @import("./opcode.zig").OpCode;
 pub const ExternList = struct {
     allocator: std.mem.Allocator,
     externs: std.ArrayList(Extern),
-    names: std.StringHashMap(usize),
+    names: std.StringHashMap(usize), // name <> externs index
     indexes: std.AutoHashMap(global_id_size, usize), // globals index <> externs index
 
     const global_id_size = OpCode.Size(.set_global);

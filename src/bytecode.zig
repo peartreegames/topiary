@@ -7,8 +7,11 @@ pub const ByteCode = struct {
     instructions: []u8,
     constants: []Value,
     tokens: []DebugToken,
+    global_names: [][]const u8,
+    global_indexes: []OpCode.Size(.get_global),
+    locals_count: usize,
 
-    pub fn free(self: *ByteCode, allocator: std.mem.Allocator) void {
+    pub fn free(self: *const ByteCode, allocator: std.mem.Allocator) void {
         allocator.free(self.instructions);
         for (self.constants) |item| {
             if (item == .obj) {
@@ -17,6 +20,8 @@ pub const ByteCode = struct {
         }
         allocator.free(self.constants);
         allocator.free(self.tokens);
+        allocator.free(self.global_names);
+        allocator.free(self.global_indexes);
     }
 
     pub fn serialize(self: *ByteCode, writer: anytype) !void {
@@ -26,6 +31,14 @@ pub const ByteCode = struct {
         try writer.writeAll(self.instructions);
         try writer.writeIntBig(u64, @as(u64, @intCast(self.constants.len)));
         for (self.constants) |constant| try constant.serialize(writer);
+        try writer.writeIntBig(u64, @as(u64, @intCast(self.global_names.len)));
+        for (self.global_names) |n| {
+            try writer.writeIntBig(u8, @as(u8, @intCast(n.len)));
+            try writer.writeAll(n);
+        }
+        for (self.global_indexes) |i| {
+            try writer.writeIntBig(OpCode.Size(.get_global), i);
+        }
     }
 
     pub fn deserialize(reader: anytype, allocator: std.mem.Allocator) !ByteCode {
@@ -37,10 +50,24 @@ pub const ByteCode = struct {
         for (0..constant_count) |i| {
             constants[i] = try Value.deserialize(reader, allocator);
         }
+        var globals_count = try reader.readIntBig(u64);
+        var names = try allocator.alloc([]const u8, globals_count);
+        var indexes = try allocator.alloc(OpCode.Size(.get_global), globals_count);
+        var count: usize = 0;
+        while (count < globals_count) : (count += 1) {
+            var length = try reader.readIntBig(u8);
+            var buf = try allocator.alloc(u8, length);
+            try reader.readNoEof(buf);
+            names[count] = buf;
+            indexes[count] = try reader.readIntBig(OpCode.Size(.get_global));
+        }
         return .{
             .instructions = instructions,
             .constants = constants,
             .tokens = &[_]DebugToken{},
+            .global_names = names,
+            .global_indexes = indexes,
+            .locals_count = 0,
         };
     }
 
@@ -57,12 +84,30 @@ pub const ByteCode = struct {
             writer.print("{s: <16} ", .{op.toString()});
             i += 1;
             switch (op) {
-                .jump, .jump_if_false, .set_global, .get_global, .list, .map, .set, .choice, .backup => {
+                .decl_global,
+                .get_local,
+                .set_local,
+                .jump,
+                .jump_if_false,
+                .set_global,
+                .get_global,
+                .list,
+                .map,
+                .set,
+                .choice,
+                .backup,
+                => {
                     var dest = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
                     writer.print("{d: >8}", .{dest});
                     i += 2;
                 },
-                .get_local, .set_local, .get_free, .set_free, .call, .class, .instance, .get_builtin => {
+                .call,
+                .class,
+                .instance,
+                .get_builtin,
+                .get_free,
+                .set_free,
+                => {
                     var dest = std.mem.readIntSliceBig(u8, instructions[i..(i + 1)]);
                     writer.print("{d: >8}", .{dest});
                     i += 1;
@@ -92,7 +137,7 @@ pub const ByteCode = struct {
                     writer.print("   = ", .{});
                     if (constants) |c| {
                         var value = c[index];
-                        value.print(writer, c);
+                        value.print(writer, constants);
                     }
                 },
                 .prong => {

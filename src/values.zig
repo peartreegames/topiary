@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("./ast.zig");
 const Gc = @import("./gc.zig").Gc;
+const ID = @import("./utils/uuid.zig").ID;
 const ByteCode = @import("./bytecode.zig").ByteCode;
 const Builtin = @import("./builtins.zig").Builtin;
 const OpCode = @import("./opcode.zig").OpCode;
@@ -39,14 +40,16 @@ pub const Value = union(Type) {
         start: i32,
         end: i32,
     },
+    obj: *Obj,
     map_pair: struct {
         key: *Value,
         value: *Value,
     },
-    obj: *Obj,
 
     pub const Obj = struct {
         is_marked: bool = false,
+        // used for serializing references
+        id: ?ID = null,
         next: ?*Obj = null,
         data: Data,
 

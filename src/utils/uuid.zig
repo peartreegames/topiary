@@ -2,14 +2,18 @@ const std = @import("std");
 
 const chars: []const u8 = "0123456789ABCDEF";
 
+pub const ID = [UUID.Size]u8;
+
 pub const UUID = struct {
     const Self = @This();
-    id: [36]u8,
+    pub const Size: usize = 36;
+    pub const Empty: ID = undefined;
+    id: ID,
 
-    pub fn create() ![36]u8 {
-        return UUID.new(@intCast(u64, std.time.milliTimestamp()));
+    pub fn create() !ID {
+        return UUID.new(@intCast(std.time.milliTimestamp()));
     }
-    pub fn new(seed: u64) ![36]u8 {
+    pub fn new(seed: u64) !ID {
         var r = std.rand.DefaultPrng.init(seed);
         var uu = try std.heap.page_allocator.create(Self);
 

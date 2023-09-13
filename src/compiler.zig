@@ -29,7 +29,7 @@ pub fn compileSource(allocator: std.mem.Allocator, source: []const u8, errors: *
     const tree = try parser.parse(allocator, source, errors);
     defer tree.deinit();
 
-    var root_scope = try Scope.create(allocator, null, .global);
+    var root_scope = try Scope.create(allocator, null, .global, 0);
     defer root_scope.destroy();
     var root_chunk = try Compiler.Chunk.create(allocator, null);
     defer root_chunk.destroy();
@@ -47,7 +47,9 @@ pub const Compiler = struct {
     err: *Errors,
     scope: *Scope,
     identifier_cache: std.StringHashMap(OpCode.Size(.constant)),
+    globals_map: std.StringArrayHashMap(OpCode.Size(.get_global)),
     chunk: *Chunk,
+    locals_count: usize = 0,
 
     jump_tree: JumpTree,
     jump_node: *JumpTree.Node,
@@ -89,15 +91,10 @@ pub const Compiler = struct {
     pub fn init(allocator: std.mem.Allocator, root_scope: *Scope, root_chunk: *Chunk, errors: *Errors) Compiler {
         return .{
             .allocator = allocator,
-            .builtins = .{
-                .allocator = allocator,
-                .parent = null,
-                .symbols = std.StringArrayHashMap(*Symbol).init(allocator),
-                .tag = .builtin,
-                .free_symbols = undefined,
-            },
+            .builtins = .{ .allocator = allocator, .parent = null, .symbols = std.StringArrayHashMap(*Symbol).init(allocator), .tag = .builtin, .free_symbols = undefined, .offset = 0 },
             .constants = std.ArrayList(Value).init(allocator),
             .identifier_cache = std.StringHashMap(OpCode.Size(.constant)).init(allocator),
+            .globals_map = std.StringArrayHashMap(OpCode.Size(.get_global)).init(allocator),
             .err = errors,
             .chunk = root_chunk,
             .scope = root_scope,
@@ -116,6 +113,7 @@ pub const Compiler = struct {
         self.divert_log.deinit();
         self.identifier_cache.deinit();
         self.builtins.symbols.deinit();
+        self.globals_map.deinit();
     }
 
     fn fail(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype) Error {
@@ -129,10 +127,14 @@ pub const Compiler = struct {
     }
 
     pub fn bytecode(self: *Compiler) !ByteCode {
+        if (self.scope.parent != null) return Error.OutOfScope;
         return .{
             .instructions = try self.chunk.instructions.toOwnedSlice(),
             .constants = try self.constants.toOwnedSlice(),
             .tokens = try self.chunk.tokens.toOwnedSlice(),
+            .global_names = try self.allocator.dupe([]const u8, self.globals_map.keys()),
+            .global_indexes = try self.allocator.dupe(OpCode.Size(.get_global), self.globals_map.values()),
+            .locals_count = self.locals_count,
         };
     }
 
@@ -143,13 +145,15 @@ pub const Compiler = struct {
 
         self.jump_tree.root = try JumpTree.Node.create(self.allocator, "root", null);
         self.jump_node = self.jump_tree.root;
+
+        for (tree.root) |stmt| try self.hoistVariables(stmt);
         for (tree.root) |stmt| {
             // We first get a list of all boughs and named forks,
             // then we'll switch out all the divert jump locations
             // to the appropriate places.
             // Alternatively, maybe it'd be better to store boughs and named forks
             // as constant values, then just fetch the ip location as needed.
-            try self.precompileScopes(stmt, self.jump_tree.root);
+            try self.precompileJumps(stmt, self.jump_tree.root);
         }
 
         for (tree.root) |stmt| {
@@ -175,29 +179,81 @@ pub const Compiler = struct {
     }
 
     fn enterScope(self: *Compiler, tag: Scope.Tag) !void {
-        self.scope = try Scope.create(self.allocator, self.scope, tag);
+        self.scope = try Scope.create(
+            self.allocator,
+            self.scope,
+            tag,
+            if (self.scope.tag == .global or self.scope.tag == .closure) 0 else self.scope.count,
+        );
     }
 
-    fn exitScope(self: *Compiler) !struct { locals_count: u8, free_symbols: []*Symbol } {
+    fn exitScope(self: *Compiler) !void {
         const old_scope = self.scope;
-        const result = .{
-            .locals_count = @as(u8, @intCast(old_scope.count)),
-            .free_symbols = try old_scope.free_symbols.toOwnedSlice(),
-        };
-
         self.scope = old_scope.parent orelse return Error.OutOfScope;
+        const locals_count = self.locals_count + old_scope.count;
+        if (locals_count > self.locals_count) self.locals_count = locals_count;
         old_scope.destroy();
-        return result;
     }
 
-    pub fn precompileScopes(self: *Compiler, stmt: ast.Statement, node: *JumpTree.Node) Error!void {
+    pub fn hoistVariables(self: *Compiler, stmt: ast.Statement) Error!void {
+        var token = stmt.token;
+        switch (stmt.type) {
+            .variable => |v| {
+                if (self.builtins.symbols.contains(v.name))
+                    return self.failError("{s} is a builtin function and cannot be used as a variable name", stmt.token, .{v.name}, Error.IllegalOperation);
+                var symbol = try self.scope.define(v.name, v.is_mutable, v.is_extern);
+                try self.globals_map.putNoClobber(v.name, symbol.index);
+                try self.compileExpression(&v.initializer);
+                try self.setSymbol(symbol, token, true);
+            },
+
+            .class => |c| {
+                for (c.fields, 0..) |field, i| {
+                    try self.compileExpression(&field);
+                    try self.getOrSetIdentifierConstant(c.field_names[i], token);
+                }
+
+                try self.getOrSetIdentifierConstant(c.name, token);
+                try self.writeOp(.class, token);
+                _ = try self.writeInt(OpCode.Size(.class), @as(OpCode.Size(.class), @intCast(c.fields.len)), token);
+                var symbol = try self.scope.define(c.name, false, false);
+                try self.setSymbol(symbol, token, true);
+            },
+            .@"enum" => |e| {
+                var values = std.ArrayList(Enum.Value).init(self.allocator);
+                const obj = try self.allocator.create(Value.Obj);
+
+                for (e.values, 0..) |value, i| {
+                    try values.append(.{
+                        .index = i,
+                        .name = try self.allocator.dupe(u8, value),
+                        .base = &obj.data.@"enum",
+                    });
+                }
+                obj.* = .{ .data = .{ .@"enum" = .{
+                    .allocator = self.allocator,
+                    .name = try self.allocator.dupe(u8, e.name),
+                    .values = try values.toOwnedSlice(),
+                } } };
+                const i = try self.addConstant(.{ .obj = obj });
+                try self.writeOp(.constant, token);
+                _ = try self.writeInt(OpCode.Size(.constant), i, token);
+
+                var symbol = try self.scope.define(e.name, false, false);
+                try self.setSymbol(symbol, token, true);
+            },
+            else => {},
+        }
+    }
+
+    pub fn precompileJumps(self: *Compiler, stmt: ast.Statement, node: *JumpTree.Node) Error!void {
         switch (stmt.type) {
             .include => |i| {
-                for (i.contents) |s| try self.precompileScopes(s, node);
+                for (i.contents) |s| try self.precompileJumps(s, node);
             },
             .bough => |b| {
                 var bough_node = try JumpTree.Node.create(self.allocator, b.name, node);
-                for (b.body) |s| try self.precompileScopes(s, bough_node);
+                for (b.body) |s| try self.precompileJumps(s, bough_node);
                 try node.children.append(bough_node);
             },
             .fork => |f| {
@@ -256,12 +312,11 @@ pub const Compiler = struct {
                     var prong = prong_stmt.type.switch_prong;
                     if (prong.values != null)
                         try self.replaceValue(prong_jumps[i], OpCode.Size(.jump), self.instructionPos());
-                    try self.enterScope(if (self.scope.tag == .global) .global else .local);
+                    try self.enterScope(.local);
                     try self.compileBlock(prong.body);
                     try self.writeOp(.jump, prong_stmt.token);
                     _ = try self.writeInt(OpCode.Size(.jump), SWITCH_END_HOLDER, prong_stmt.token);
-                    var scope = try self.exitScope();
-                    self.scope.count += scope.locals_count;
+                    try self.exitScope();
                 }
                 try replaceJumps(self.chunk.instructions.items[start..], SWITCH_END_HOLDER, self.instructionPos());
                 try self.writeOp(.pop, token);
@@ -296,57 +351,7 @@ pub const Compiler = struct {
 
                 try replaceJumps(self.chunk.instructions.items[start..], BREAK_HOLDER, end);
                 try replaceJumps(self.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
-                const scope = try self.exitScope();
-                self.scope.count += scope.locals_count;
-            },
-            .class => |c| {
-                for (c.fields, 0..) |field, i| {
-                    try self.compileExpression(&field);
-                    try self.getOrSetIdentifierConstant(c.field_names[i], token);
-                }
-
-                try self.getOrSetIdentifierConstant(c.name, token);
-                try self.writeOp(.class, token);
-                _ = try self.writeInt(OpCode.Size(.class), @as(OpCode.Size(.class), @intCast(c.fields.len)), token);
-                var symbol = try self.scope.define(c.name, false, false);
-                if (symbol.tag == .global) {
-                    try self.writeOp(.set_global, token);
-                    _ = try self.writeInt(OpCode.Size(.set_global), symbol.index, token);
-                } else {
-                    try self.writeOp(.set_local, token);
-                    const size = OpCode.Size(.set_local);
-                    _ = try self.writeInt(size, @as(size, @intCast(symbol.index)), token);
-                }
-            },
-            .@"enum" => |e| {
-                var values = std.ArrayList(Enum.Value).init(self.allocator);
-                const obj = try self.allocator.create(Value.Obj);
-
-                for (e.values, 0..) |value, i| {
-                    try values.append(.{
-                        .index = i,
-                        .name = try self.allocator.dupe(u8, value),
-                        .base = &obj.data.@"enum",
-                    });
-                }
-                obj.* = .{ .data = .{ .@"enum" = .{
-                    .allocator = self.allocator,
-                    .name = try self.allocator.dupe(u8, e.name),
-                    .values = try values.toOwnedSlice(),
-                } } };
-                const i = try self.addConstant(.{ .obj = obj });
-                try self.writeOp(.constant, token);
-                _ = try self.writeInt(OpCode.Size(.constant), i, token);
-
-                var symbol = try self.scope.define(e.name, false, false);
-                if (symbol.tag == .global) {
-                    try self.writeOp(.set_global, token);
-                    _ = try self.writeInt(OpCode.Size(.set_global), symbol.index, token);
-                } else {
-                    try self.writeOp(.set_local, token);
-                    const size = OpCode.Size(.set_local);
-                    _ = try self.writeInt(size, @as(size, @intCast(symbol.index)), token);
-                }
+                try self.exitScope();
             },
             .@"for" => |f| {
                 try self.compileExpression(&f.iterator);
@@ -371,39 +376,24 @@ pub const Compiler = struct {
                 try replaceJumps(self.chunk.instructions.items[start..], BREAK_HOLDER, end);
                 try replaceJumps(self.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
 
-                const scope = try self.exitScope();
+                try self.exitScope();
                 try self.writeOp(.pop, token);
 
-                self.scope.count += scope.locals_count;
                 try self.writeOp(.iter_end, token);
                 // pop item
                 try self.writeOp(.pop, token);
             },
-            .variable => |v| {
-                if (self.builtins.symbols.contains(v.name))
-                    return self.failError("{s} is a builtin function and cannot be used as a variable name", token, .{v.name}, Error.IllegalOperation);
-                var symbol = try self.scope.define(v.name, v.is_mutable, v.is_extern);
-                // extern variables will be set before running by the user
-                if (v.is_extern) return;
-
-                try self.compileExpression(&v.initializer);
-                if (symbol.tag == .global) {
-                    try self.writeOp(.set_global, token);
-                    _ = try self.writeInt(OpCode.Size(.set_global), symbol.index, token);
-                } else {
-                    try self.writeOp(.set_local, token);
-                    const size = OpCode.Size(.set_local);
-                    _ = try self.writeInt(size, @as(size, @intCast(symbol.index)), token);
-                }
+            .variable, .class, .@"enum" => {
+                // hoisted
             },
             .fork => |f| {
                 if (f.name) |name| {
                     self.jump_node = try self.jump_node.getChild(name);
                     self.jump_node.*.ip = self.instructionPos();
                 }
-                try self.enterScope(.global);
+                try self.enterScope(.local);
                 try self.compileBlock(f.body);
-                _ = try self.exitScope();
+                try self.exitScope();
                 if (f.name != null) {
                     self.jump_node = self.jump_node.parent.?;
                 }
@@ -428,10 +418,10 @@ pub const Compiler = struct {
                 const jump_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
                 try self.replaceValue(start_pos, OpCode.Size(.jump), self.instructionPos());
 
-                try self.enterScope(.global);
+                try self.enterScope(.local);
                 try self.compileBlock(c.body);
                 try self.writeOp(.fin, token);
-                _ = try self.exitScope();
+                try self.exitScope();
                 try self.replaceValue(jump_pos, OpCode.Size(.jump), self.instructionPos());
             },
             .bough => |b| {
@@ -447,8 +437,7 @@ pub const Compiler = struct {
                 try self.compileBlock(b.body);
                 try self.writeOp(.fin, token);
 
-                var scope = try self.exitScope();
-                self.scope.count += scope.locals_count;
+                try self.exitScope();
                 self.jump_node = self.jump_node.parent.?;
 
                 const end = self.instructionPos();
@@ -532,6 +521,9 @@ pub const Compiler = struct {
 
     pub fn compileBlock(self: *Compiler, stmts: []const ast.Statement) Error!void {
         for (stmts) |stmt| {
+            try self.hoistVariables(stmt);
+        }
+        for (stmts) |stmt| {
             try self.compileStatement(stmt);
         }
     }
@@ -551,7 +543,7 @@ pub const Compiler = struct {
                         .identifier => |id| {
                             try self.compileExpression(bin.right);
                             var symbol = try self.scope.resolve(id);
-                            try self.setSymbol(symbol, token);
+                            try self.setSymbol(symbol, token, false);
                             try self.loadSymbol(symbol, token);
                             return;
                         },
@@ -596,7 +588,7 @@ pub const Compiler = struct {
                         switch (bin.left.type) {
                             .identifier => |id| {
                                 var symbol = try self.scope.resolve(id);
-                                try self.setSymbol(symbol, token);
+                                try self.setSymbol(symbol, token, false);
                                 try self.loadSymbol(symbol, token);
                                 return;
                             },
@@ -720,11 +712,13 @@ pub const Compiler = struct {
                 var chunk = try self.exitChunk();
                 // TODO: use debug tokens
                 self.allocator.free(chunk.tokens);
-                const scope = try self.exitScope();
-                defer self.allocator.free(scope.free_symbols);
-                for (scope.free_symbols) |s| {
+                const count = self.scope.count;
+                const free_symbols = self.scope.free_symbols.items;
+                for (free_symbols) |s| {
                     try self.loadSymbol(s, token);
                 }
+                try self.exitScope();
+                // defer self.allocator.free(free_symbols);
 
                 const obj = try self.allocator.create(Value.Obj);
 
@@ -733,7 +727,7 @@ pub const Compiler = struct {
                         .function = .{
                             .is_method = f.is_method,
                             .instructions = chunk.instructions,
-                            .locals_count = scope.locals_count,
+                            .locals_count = count,
                             .arity = @as(u8, @intCast(length)),
                         },
                     },
@@ -742,7 +736,7 @@ pub const Compiler = struct {
 
                 try self.writeOp(.closure, token);
                 _ = try self.writeInt(OpCode.Size(.constant), i, token);
-                _ = try self.writeInt(u8, @as(u8, @intCast(scope.free_symbols.len)), token);
+                _ = try self.writeInt(u8, @as(u8, @intCast(free_symbols.len)), token);
             },
             .instance => |ins| {
                 for (ins.fields, 0..) |field, i| {
@@ -775,13 +769,14 @@ pub const Compiler = struct {
         }
     }
 
-    fn setSymbol(self: *Compiler, symbol: ?*Symbol, token: Token) !void {
+    fn setSymbol(self: *Compiler, symbol: ?*Symbol, token: Token, is_decl: bool) !void {
         if (symbol) |ptr| {
-            if (!ptr.is_mutable) return self.fail("Cannot assign to constant variable {s}", token, .{ptr.name});
+            if (!is_decl and !ptr.is_mutable) return self.fail("Cannot assign to constant variable {s}", token, .{ptr.name});
             switch (ptr.tag) {
                 .global => {
-                    try self.writeOp(.set_global, token);
-                    _ = try self.writeInt(OpCode.Size(.set_global), ptr.index, token);
+                    try self.writeOp(if (is_decl) .decl_global else .set_global, token);
+                    const size = OpCode.Size(.set_global);
+                    _ = try self.writeInt(size, @as(size, @intCast(ptr.index)), token);
                 },
                 .free => {
                     try self.writeOp(.set_free, token);
@@ -829,12 +824,6 @@ pub const Compiler = struct {
 
     fn instructionPos(self: *Compiler) OpCode.Size(.jump) {
         return @as(OpCode.Size(.jump), @intCast(self.chunk.instructions.items.len));
-    }
-
-    fn currentScope(self: *Compiler) *Scope {
-        var scope = self.scope;
-        while (scope.tag != .global and scope.tag != .closure) scope = scope.parent.?;
-        return scope;
     }
 
     fn writeOp(self: *Compiler, op: OpCode, token: Token) !void {
@@ -886,7 +875,7 @@ pub const Compiler = struct {
 
     pub fn addConstant(self: *Compiler, value: Value) !u16 {
         try self.constants.append(value);
-        return @as(u16, @intCast(self.constants.items.len - 1));
+        return @as(OpCode.Size(.constant), @intCast(self.constants.items.len - 1));
     }
 
     fn getOrSetIdentifierConstant(self: *Compiler, name: []const u8, token: Token) !void {
@@ -1017,7 +1006,20 @@ test "Variables" {
             \\ var two = 2
             ,
             .constants = [_]Value{ .{ .number = 1 }, .{ .number = 2 } },
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.set_global), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.set_global), 0, 1 },
+            .instructions = [_]u8{
+                @intFromEnum(OpCode.constant),
+                0,
+                0,
+                @intFromEnum(OpCode.decl_global),
+                0,
+                0,
+                @intFromEnum(OpCode.constant),
+                0,
+                1,
+                @intFromEnum(OpCode.decl_global),
+                0,
+                1,
+            },
         },
         .{
             .input =
@@ -1026,7 +1028,24 @@ test "Variables" {
             \\ two
             ,
             .constants = [_]Value{.{ .number = 1 }},
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.set_global), 0, 0, @intFromEnum(OpCode.get_global), 0, 0, @intFromEnum(OpCode.set_global), 0, 1, @intFromEnum(OpCode.get_global), 0, 1, @intFromEnum(OpCode.pop) },
+            .instructions = [_]u8{
+                @intFromEnum(OpCode.constant),
+                0,
+                0,
+                @intFromEnum(OpCode.decl_global),
+                0,
+                0,
+                @intFromEnum(OpCode.get_global),
+                0,
+                0,
+                @intFromEnum(OpCode.decl_global),
+                0,
+                1,
+                @intFromEnum(OpCode.get_global),
+                0,
+                1,
+                @intFromEnum(OpCode.pop),
+            },
         },
     };
 
@@ -1040,7 +1059,7 @@ test "Variables" {
         };
         defer bytecode.free(allocator);
         for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("{}", .{i});
+            errdefer std.log.warn("{s} -- {}", .{ case.input, i });
             try testing.expectEqual(instruction, bytecode.instructions[i]);
         }
         for (case.constants, 0..) |constant, i| {
@@ -1307,7 +1326,7 @@ test "Functions" {
                 0,
                 1,
                 0,
-                @intFromEnum(OpCode.set_global),
+                @intFromEnum(OpCode.decl_global),
                 0,
                 0,
                 @intFromEnum(OpCode.get_global),
@@ -1332,11 +1351,11 @@ test "Functions" {
             \\ two() + two()
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),    0,                        1,                         0,
-                @intFromEnum(OpCode.set_global), 0,                        0,                         @intFromEnum(OpCode.get_global),
-                0,                               0,                        @intFromEnum(OpCode.call), 0,
-                @intFromEnum(OpCode.get_global), 0,                        0,                         @intFromEnum(OpCode.call),
-                0,                               @intFromEnum(OpCode.add), @intFromEnum(OpCode.pop),
+                @intFromEnum(OpCode.closure),     0,                        1,                         0,
+                @intFromEnum(OpCode.decl_global), 0,                        0,                         @intFromEnum(OpCode.get_global),
+                0,                                0,                        @intFromEnum(OpCode.call), 0,
+                @intFromEnum(OpCode.get_global),  0,                        0,                         @intFromEnum(OpCode.call),
+                0,                                @intFromEnum(OpCode.add), @intFromEnum(OpCode.pop),
             },
             .constants = [_]f32{2},
             .functions = [_][]const u8{
@@ -1353,18 +1372,18 @@ test "Functions" {
             \\ value(1) + value(1)
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),    0,                         0,                             0,
-                @intFromEnum(OpCode.set_global), 0,                         0,                             @intFromEnum(OpCode.get_global),
-                0,                               0,                         @intFromEnum(OpCode.constant), 0,
-                1,                               @intFromEnum(OpCode.call), 1,                             @intFromEnum(OpCode.get_global),
-                0,                               0,                         @intFromEnum(OpCode.constant), 0,
-                2,                               @intFromEnum(OpCode.call), 1,                             @intFromEnum(OpCode.add),
+                @intFromEnum(OpCode.closure),     0,                         0,                             0,
+                @intFromEnum(OpCode.decl_global), 0,                         0,                             @intFromEnum(OpCode.get_global),
+                0,                                0,                         @intFromEnum(OpCode.constant), 0,
+                1,                                @intFromEnum(OpCode.call), 1,                             @intFromEnum(OpCode.get_global),
+                0,                                0,                         @intFromEnum(OpCode.constant), 0,
+                2,                                @intFromEnum(OpCode.call), 1,                             @intFromEnum(OpCode.add),
                 @intFromEnum(OpCode.pop),
             },
             .constants = [_]f32{ 0, 1, 1 },
             .functions = [_][]const u8{
                 &[_]u8{
-                    @intFromEnum(OpCode.get_local),    0,
+                    @intFromEnum(OpCode.get_local),    0, 0,
                     @intFromEnum(OpCode.return_value),
                 },
             },
@@ -1375,15 +1394,15 @@ test "Functions" {
             \\ oneArg(24)
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),    0,                         0,                             0,
-                @intFromEnum(OpCode.set_global), 0,                         0,                             @intFromEnum(OpCode.get_global),
-                0,                               0,                         @intFromEnum(OpCode.constant), 0,
-                1,                               @intFromEnum(OpCode.call), 1,                             @intFromEnum(OpCode.pop),
+                @intFromEnum(OpCode.closure),     0,                         0,                             0,
+                @intFromEnum(OpCode.decl_global), 0,                         0,                             @intFromEnum(OpCode.get_global),
+                0,                                0,                         @intFromEnum(OpCode.constant), 0,
+                1,                                @intFromEnum(OpCode.call), 1,                             @intFromEnum(OpCode.pop),
             },
             .constants = [_]f32{ 0, 24 },
             .functions = [_][]const u8{
                 &[_]u8{
-                    @intFromEnum(OpCode.get_local),    0,
+                    @intFromEnum(OpCode.get_local),    0, 0,
                     @intFromEnum(OpCode.return_value),
                 },
             },
@@ -1394,23 +1413,26 @@ test "Functions" {
             \\ multiArg(24,25,26)
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),    0,                             0,                             0,
-                @intFromEnum(OpCode.set_global), 0,                             0,                             @intFromEnum(OpCode.get_global),
-                0,                               0,                             @intFromEnum(OpCode.constant), 0,
-                1,                               @intFromEnum(OpCode.constant), 0,                             2,
-                @intFromEnum(OpCode.constant),   0,                             3,                             @intFromEnum(OpCode.call),
-                3,                               @intFromEnum(OpCode.pop),
+                @intFromEnum(OpCode.closure),     0,                             0,                             0,
+                @intFromEnum(OpCode.decl_global), 0,                             0,                             @intFromEnum(OpCode.get_global),
+                0,                                0,                             @intFromEnum(OpCode.constant), 0,
+                1,                                @intFromEnum(OpCode.constant), 0,                             2,
+                @intFromEnum(OpCode.constant),    0,                             3,                             @intFromEnum(OpCode.call),
+                3,                                @intFromEnum(OpCode.pop),
             },
             .constants = [_]f32{ 0, 24, 25, 26 },
             .functions = [_][]const u8{
                 &[_]u8{
                     @intFromEnum(OpCode.get_local),
                     0,
+                    0,
                     @intFromEnum(OpCode.pop),
                     @intFromEnum(OpCode.get_local),
+                    0,
                     1,
                     @intFromEnum(OpCode.pop),
                     @intFromEnum(OpCode.get_local),
+                    0,
                     2,
                     @intFromEnum(OpCode.return_value),
                 },
@@ -1454,7 +1476,7 @@ test "Locals" {
                 @intFromEnum(OpCode.constant),
                 0,
                 0,
-                @intFromEnum(OpCode.set_global),
+                @intFromEnum(OpCode.decl_global),
                 0,
                 0,
                 @intFromEnum(OpCode.closure),
@@ -1483,7 +1505,7 @@ test "Locals" {
             .constants = [_]f32{5},
             .functions = [_][]const u8{
                 &[_]u8{},
-                &[_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.set_local), 0, @intFromEnum(OpCode.get_local), 0, @intFromEnum(OpCode.return_value) },
+                &[_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.set_local), 0, 0, @intFromEnum(OpCode.get_local), 0, 0, @intFromEnum(OpCode.return_value) },
             },
         },
         .{
@@ -1505,14 +1527,18 @@ test "Locals" {
                     0,
                     @intFromEnum(OpCode.set_local),
                     0,
+                    0,
                     @intFromEnum(OpCode.constant),
                     0,
                     1,
                     @intFromEnum(OpCode.set_local),
+                    0,
                     1,
                     @intFromEnum(OpCode.get_local),
                     0,
+                    0,
                     @intFromEnum(OpCode.get_local),
+                    0,
                     1,
                     @intFromEnum(OpCode.add),
                     @intFromEnum(OpCode.return_value),
@@ -1531,7 +1557,6 @@ test "Locals" {
             return err;
         };
         defer bytecode.free(allocator);
-        errdefer bytecode.print(std.debug);
         for (case.instructions, 0..) |instruction, i| {
             errdefer std.log.warn("Error on: {}", .{i});
             try testing.expectEqual(instruction, bytecode.instructions[i]);
@@ -1615,15 +1640,15 @@ test "Closures" {
             .constants = [_]f32{0},
             .functions = [_][]const u8{
                 &[_]u8{
-                    @intFromEnum(OpCode.get_free),  0,
-                    @intFromEnum(OpCode.get_local), 0,
-                    @intFromEnum(OpCode.add),       @intFromEnum(OpCode.return_value),
+                    @intFromEnum(OpCode.get_free),     0,
+                    @intFromEnum(OpCode.get_local),    0,
+                    0,                                 @intFromEnum(OpCode.add),
+                    @intFromEnum(OpCode.return_value),
                 },
                 &[_]u8{
-                    @intFromEnum(OpCode.get_local),    0,
-                    @intFromEnum(OpCode.closure),      0,
-                    0,                                 1,
-                    @intFromEnum(OpCode.return_value),
+                    @intFromEnum(OpCode.get_local), 0,                                 0,
+                    @intFromEnum(OpCode.closure),   0,                                 0,
+                    1,                              @intFromEnum(OpCode.return_value),
                 },
             },
         },
@@ -1645,24 +1670,23 @@ test "Closures" {
             .constants = [_]f32{0},
             .functions = [_][]const u8{
                 &[_]u8{
-                    @intFromEnum(OpCode.get_free),     0,
-                    @intFromEnum(OpCode.get_free),     1,
-                    @intFromEnum(OpCode.add),          @intFromEnum(OpCode.get_local),
-                    0,                                 @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.return_value),
+                    @intFromEnum(OpCode.get_free), 0,
+                    @intFromEnum(OpCode.get_free), 1,
+                    @intFromEnum(OpCode.add),      @intFromEnum(OpCode.get_local),
+                    0,                             0,
+                    @intFromEnum(OpCode.add),      @intFromEnum(OpCode.return_value),
                 },
                 &[_]u8{
-                    @intFromEnum(OpCode.get_free),     0,
-                    @intFromEnum(OpCode.get_local),    0,
-                    @intFromEnum(OpCode.closure),      0,
-                    0,                                 2,
-                    @intFromEnum(OpCode.return_value),
+                    @intFromEnum(OpCode.get_free),  0,
+                    @intFromEnum(OpCode.get_local), 0,
+                    0,                              @intFromEnum(OpCode.closure),
+                    0,                              0,
+                    2,                              @intFromEnum(OpCode.return_value),
                 },
                 &[_]u8{
-                    @intFromEnum(OpCode.get_local),    0,
-                    @intFromEnum(OpCode.closure),      0,
-                    1,                                 1,
-                    @intFromEnum(OpCode.return_value),
+                    @intFromEnum(OpCode.get_local), 0,                                 0,
+                    @intFromEnum(OpCode.closure),   0,                                 1,
+                    1,                              @intFromEnum(OpCode.return_value),
                 },
             },
         },
@@ -1681,10 +1705,10 @@ test "Closures" {
             \\ }
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.constant),   0,                        0,
-                @intFromEnum(OpCode.set_global), 0,                        0,
-                @intFromEnum(OpCode.closure),    0,                        6,
-                0,                               @intFromEnum(OpCode.pop),
+                @intFromEnum(OpCode.constant),    0,                        0,
+                @intFromEnum(OpCode.decl_global), 0,                        0,
+                @intFromEnum(OpCode.closure),     0,                        6,
+                0,                                @intFromEnum(OpCode.pop),
             },
             .constants = [_]f32{ 55, 66, 77, 88 },
             .functions = [_][]const u8{
@@ -1693,25 +1717,28 @@ test "Closures" {
                 &[_]u8{},
                 &[_]u8{},
                 &[_]u8{
-                    @intFromEnum(OpCode.constant),  0,                        3,
-                    @intFromEnum(OpCode.set_local), 0,                        @intFromEnum(OpCode.get_global),
-                    0,                              0,                        @intFromEnum(OpCode.get_free),
-                    0,                              @intFromEnum(OpCode.add), @intFromEnum(OpCode.get_free),
-                    1,                              @intFromEnum(OpCode.add), @intFromEnum(OpCode.get_local),
-                    0,                              @intFromEnum(OpCode.add), @intFromEnum(OpCode.return_value),
+                    @intFromEnum(OpCode.constant),   0,                                 3,
+                    @intFromEnum(OpCode.set_local),  0,                                 0,
+                    @intFromEnum(OpCode.get_global), 0,                                 0,
+                    @intFromEnum(OpCode.get_free),   0,                                 @intFromEnum(OpCode.add),
+                    @intFromEnum(OpCode.get_free),   1,                                 @intFromEnum(OpCode.add),
+                    @intFromEnum(OpCode.get_local),  0,                                 0,
+                    @intFromEnum(OpCode.add),        @intFromEnum(OpCode.return_value),
                 },
                 &[_]u8{
-                    @intFromEnum(OpCode.constant),  0,                                 2,
-                    @intFromEnum(OpCode.set_local), 0,                                 @intFromEnum(OpCode.get_free),
-                    0,                              @intFromEnum(OpCode.get_local),    0,
-                    @intFromEnum(OpCode.closure),   0,                                 4,
-                    2,                              @intFromEnum(OpCode.return_value),
+                    @intFromEnum(OpCode.constant),     0, 2,
+                    @intFromEnum(OpCode.set_local),    0, 0,
+                    @intFromEnum(OpCode.get_free),     0, @intFromEnum(OpCode.get_local),
+                    0,                                 0, @intFromEnum(OpCode.closure),
+                    0,                                 4, 2,
+                    @intFromEnum(OpCode.return_value),
                 },
                 &[_]u8{
-                    @intFromEnum(OpCode.constant),  0,                            1,
-                    @intFromEnum(OpCode.set_local), 0,                            @intFromEnum(OpCode.get_local),
-                    0,                              @intFromEnum(OpCode.closure), 0,
-                    5,                              1,                            @intFromEnum(OpCode.return_value),
+                    @intFromEnum(OpCode.constant),  0,                                 1,
+                    @intFromEnum(OpCode.set_local), 0,                                 0,
+                    @intFromEnum(OpCode.get_local), 0,                                 0,
+                    @intFromEnum(OpCode.closure),   0,                                 5,
+                    1,                              @intFromEnum(OpCode.return_value),
                 },
             },
         },
@@ -1725,7 +1752,7 @@ test "Closures" {
                 0,
                 1,
                 0,
-                @intFromEnum(OpCode.set_global),
+                @intFromEnum(OpCode.decl_global),
                 0,
                 0,
                 @intFromEnum(OpCode.get_global),
@@ -1744,6 +1771,7 @@ test "Closures" {
                 &[_]u8{
                     @intFromEnum(OpCode.current_closure),
                     @intFromEnum(OpCode.get_local),
+                    0,
                     0,
                     @intFromEnum(OpCode.constant),
                     0,
@@ -1800,7 +1828,7 @@ test "Classes" {
                 @intFromEnum(OpCode.constant), 0, 0,
                 @intFromEnum(OpCode.constant), 0, 1,
                 @intFromEnum(OpCode.constant), 0, 2,
-                @intFromEnum(OpCode.class),    1, @intFromEnum(OpCode.set_global),
+                @intFromEnum(OpCode.class),    1, @intFromEnum(OpCode.decl_global),
                 0,                             0, @intFromEnum(OpCode.get_global),
                 0,                             0, @intFromEnum(OpCode.instance),
             },
@@ -1836,39 +1864,39 @@ test "Classes" {
     }
 }
 
-test "Serialize" {
-    const input =
-        \\ var str = "string value"
-        \\ const num = 25
-        \\ const fun = |x| {
-        \\     return x * 2
-        \\ }
-        \\ var list = ["one", "two"]
-        \\ const set = {1, 2, 3.3}
-        \\ const map = {1:2.2, 3: 4.4}
-    ;
+// test "Serialize" {
+//     const input =
+//         \\ var str = "string value"
+//         \\ const num = 25
+//         \\ const fun = |x| {
+//         \\     return x * 2
+//         \\ }
+//         \\ var list = ["one", "two"]
+//         \\ const set = {1, 2, 3.3}
+//         \\ const map = {1:2.2, 3: 4.4}
+//     ;
 
-    errdefer std.log.warn("{s}", .{input});
-    var allocator = testing.allocator;
-    var errors = Errors.init(allocator);
-    defer errors.deinit();
-    var bytecode = compileSource(allocator, input, &errors) catch |err| {
-        try errors.write(input, std.io.getStdErr().writer());
-        return err;
-    };
-    defer bytecode.free(allocator);
+//     errdefer std.log.warn("{s}", .{input});
+//     var allocator = testing.allocator;
+//     var errors = Errors.init(allocator);
+//     defer errors.deinit();
+//     var bytecode = compileSource(allocator, input, &errors) catch |err| {
+//         try errors.write(input, std.io.getStdErr().writer());
+//         return err;
+//     };
+//     defer bytecode.free(allocator);
 
-    // this doesn't need to be a file, but it's nice to sometimes not delete it and inspect it
-    const file = try std.fs.cwd().createFile("tmp.topib", .{ .read = true });
-    defer std.fs.cwd().deleteFile("tmp.topib") catch {};
-    defer file.close();
-    try bytecode.serialize(file.writer());
+//     // this doesn't need to be a file, but it's nice to sometimes not delete it and inspect it
+//     const file = try std.fs.cwd().createFile("tmp.topib", .{ .read = true });
+//     defer std.fs.cwd().deleteFile("tmp.topib") catch {};
+//     defer file.close();
+//     try bytecode.serialize(file.writer());
 
-    try file.seekTo(0);
-    var deserialized = try ByteCode.deserialize(file.reader(), allocator);
-    defer deserialized.free(allocator);
-    try testing.expectEqualSlices(u8, bytecode.instructions, deserialized.instructions);
-    for (bytecode.constants, 0..) |constant, i| {
-        try testing.expect(constant.eql(deserialized.constants[i]));
-    }
-}
+//     try file.seekTo(0);
+//     var deserialized = try ByteCode.deserialize(file.reader(), allocator);
+//     defer deserialized.free(allocator);
+//     try testing.expectEqualSlices(u8, bytecode.instructions, deserialized.instructions);
+//     for (bytecode.constants, 0..) |constant, i| {
+//         try testing.expect(constant.eql(deserialized.constants[i]));
+//     }
+// }

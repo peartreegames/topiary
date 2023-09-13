@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("./ast.zig");
 const values = @import("./values.zig");
 const DebugToken = @import("./debug.zig").DebugToken;
+const OpCode = @import("./opcode.zig").OpCode;
 
 pub const Symbol = struct {
     index: u16,
@@ -19,6 +20,7 @@ pub const Scope = struct {
     count: u16 = 0,
     symbols: std.StringArrayHashMap(*Symbol),
     free_symbols: std.ArrayList(*Symbol),
+    offset: OpCode.Size(.get_global),
 
     pub const Tag = union(enum(u4)) {
         global,
@@ -29,7 +31,7 @@ pub const Scope = struct {
         local,
     };
 
-    pub fn create(allocator: std.mem.Allocator, parent: ?*Scope, tag: Tag) !*Scope {
+    pub fn create(allocator: std.mem.Allocator, parent: ?*Scope, tag: Tag, offset: u16) !*Scope {
         var scope = try allocator.create(Scope);
         scope.* = .{
             .allocator = allocator,
@@ -37,6 +39,7 @@ pub const Scope = struct {
             .symbols = std.StringArrayHashMap(*Symbol).init(allocator),
             .free_symbols = std.ArrayList(*Symbol).init(allocator),
             .tag = tag,
+            .offset = offset,
         };
         return scope;
     }
@@ -58,7 +61,7 @@ pub const Scope = struct {
 
         symbol.* = .{
             .name = name,
-            .index = self.count,
+            .index = self.count + self.offset,
             .tag = self.tag,
             .is_mutable = is_mutable,
             .is_extern = is_extern,
