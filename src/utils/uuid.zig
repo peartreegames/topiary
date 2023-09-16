@@ -7,7 +7,7 @@ pub const ID = [UUID.Size]u8;
 pub const UUID = struct {
     const Self = @This();
     pub const Size: usize = 36;
-    pub const Empty: ID = undefined;
+    pub const Empty: ID = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 45, 0, 0, 0, 0, 45, 4, 0, 0, 0, 45, 0, 0, 0, 0, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     id: ID,
 
     pub fn create() !ID {

@@ -3,75 +3,89 @@ const Value = @import("./values.zig").Value;
 const ByteCode = @import("./bytecode.zig").ByteCode;
 const Vm = @import("./vm.zig").Vm;
 
-const StateMap = std.json.ArrayHashMap(Value);
 const testing = std.testing;
 
-/// Add the current state to the StateMap
-pub fn save(state: StateMap, vm: *Vm) !void {
-    const count = vm.bytecode.global_symbol.count();
-    if (count == 0) return;
+pub const StateMap = struct {
+    allocator: std.mem.Allocator,
+    map: Map,
 
-    for (vm.bytecode.global_symbols) |s| {
-        if (s.is_extern) continue;
-        try state.map.put(try vm.allocator.dupe(u8, s.name), vm.globals[s.index]);
+    const Map = std.StringHashMap([]u8);
+
+    pub fn init(allocator: std.mem.Allocator) StateMap {
+        return .{
+            .allocator = allocator,
+            .map = Map.init(allocator),
+        };
     }
-}
 
-/// Load the StateMap into the globals list
-pub fn load(state: StateMap, vm: *Vm) !void {
-    for (vm.bytecode.global_symbols) |s| {
-        var value = state.map.get(s.name);
-        if (value) |v| vm.globals[s.index] = v;
+    pub fn deinit(self: *StateMap) void {
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.map.deinit();
     }
-}
 
-/// Write the given state to a JSON string
-pub fn serialize(state: StateMap, writer: anytype) !void {
-    try std.json.stringify(state, .{}, writer);
-}
+    pub fn put(self: *StateMap, name: []const u8, value: Value) !void {
+        var data = std.ArrayList(u8).init(self.allocator);
+        errdefer data.deinit();
+        try value.serialize(data.writer());
+        try self.map.put(try self.allocator.dupe(u8, name), try data.toOwnedSlice());
+    }
 
-/// Parse a JSON state back into a StateMap
-pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !StateMap {
-    _ = reader;
-    _ = allocator;
-}
+    pub fn get(self: *StateMap, name: []const u8) !?Value {
+        var item = self.map.get(name);
+        if (item) |i| {
+            var buf = std.io.fixedBufferStream(i);
+            var value = try Value.deserialize(buf.reader(), self.allocator);
+            return value;
+        }
+        return null;
+    }
 
-/// Consolidate all serialized states into one file
-/// reader2 states will override reader1 states
-pub fn consolidate(allocator: std.mem.Allocator, reader1: anytype, reader2: anytype, writer: anytype) !void {
-    var all = try std.StringHashMap(Value).init(allocator);
-    for (.{ reader1, reader2 }) |reader| {
-        const count = try reader.readIntBig(u64);
-        var i: usize = 0;
-        while (i < count) : (i += 1) {
-            const length = try reader.readIntBig(u16);
-            var name = try allocator.alloc(u8, length);
-            try reader.readNoEof(name);
-            var value = Value.deserialize(reader, allocator);
-            try all.put(name, value);
+    /// Write the given StateMap to a string
+    pub fn serialize(self: *StateMap, writer: anytype) !void {
+        try writer.writeIntBig(u64, @as(u64, @intCast(self.map.count())));
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            try writer.writeIntBig(u16, @as(u8, @intCast(entry.key_ptr.*.len)));
+            try writer.writeAll(entry.key_ptr.*);
+            try writer.writeIntBig(u32, @as(u32, @intCast(entry.value_ptr.*.len)));
+            try writer.writeAll(entry.value_ptr.*);
         }
     }
-    try writer.writeIntBig(u64, all.count());
 
-    var it = all.iterator();
-    while (it.next()) |entry| {
-        var name = entry.key_ptr.*;
-        var value = entry.value_ptr.*;
-        try writer.writeIntBig(u8, name.len);
-        try writer.writeAll(name);
-        try value.serialize(writer);
+    /// Parse a serialized state back into a StateMap
+    pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !StateMap {
+        var size = try reader.readIntBig(u64);
+        var state = StateMap.init(allocator);
+        var count: usize = 0;
+        while (count < size) : (count += 1) {
+            var length = try reader.readIntBig(u16);
+            var buf = try allocator.alloc(u8, length);
+            try reader.readNoEof(buf);
+            var value_length = try reader.readIntBig(u32);
+            var value = try allocator.alloc(u8, value_length);
+            try reader.readNoEof(value);
+            try state.map.put(buf, value);
+        }
+        return state;
     }
-}
+};
 
 test "Stringify" {
-    var map = StateMap{};
-    defer map.deinit(testing.allocator);
-    try map.map.put(testing.allocator, "a", .{ .number = 1.0 });
-    const doc = try std.json.stringifyAlloc(
-        testing.allocator,
-        map,
-        .{ .whitespace = .indent_2 },
-    );
-    defer testing.allocator.free(doc);
-    std.debug.print("{s}", .{doc});
+    var alloc = testing.allocator;
+    var map = StateMap.init(alloc);
+    defer map.deinit();
+    try map.put("a", .{ .number = 1.0 });
+    var data = std.ArrayList(u8).init(testing.allocator);
+    defer data.deinit();
+    try map.serialize(data.writer());
+
+    var buf = std.io.fixedBufferStream(data.items);
+    var copy = try StateMap.deserialize(alloc, buf.reader());
+    defer copy.deinit();
+    try testing.expect(copy.map.contains("a"));
+    try testing.expect((try copy.get("a")).?.eql(.{ .number = 1.0 }));
 }

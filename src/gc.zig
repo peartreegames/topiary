@@ -1,6 +1,7 @@
 const std = @import("std");
 const Vm = @import("./vm.zig").Vm;
 const Value = @import("./values.zig").Value;
+const UUID = @import("./utils/uuid.zig").UUID;
 
 const Obj = Value.Obj;
 
@@ -34,6 +35,7 @@ pub const Gc = struct {
     pub fn create(self: *Gc, root_ctx: anytype, data: Obj.Data) !Value {
         var obj = try self.allocator.create(Obj);
         obj.* = .{
+            .id = try UUID.create(),
             .data = data,
             .next = self.stack,
         };

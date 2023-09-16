@@ -1,13 +1,16 @@
 const std = @import("std");
 const ast = @import("./ast.zig");
 const Gc = @import("./gc.zig").Gc;
-const ID = @import("./utils/uuid.zig").ID;
+const uuid = @import("./utils/uuid.zig");
 const ByteCode = @import("./bytecode.zig").ByteCode;
 const Builtin = @import("./builtins.zig").Builtin;
 const OpCode = @import("./opcode.zig").OpCode;
 const Enum = @import("./enum.zig").Enum;
 const Class = @import("./class.zig").Class;
+
 const Allocator = std.mem.Allocator;
+const ID = uuid.ID;
+const UUID = uuid.UUID;
 
 pub const True = Value{ .bool = true };
 pub const False = Value{ .bool = false };
@@ -49,7 +52,7 @@ pub const Value = union(Type) {
     pub const Obj = struct {
         is_marked: bool = false,
         // used for serializing references
-        id: ?ID = null,
+        id: ID = UUID.Empty,
         next: ?*Obj = null,
         data: Data,
 
@@ -198,6 +201,7 @@ pub const Value = union(Type) {
             },
             .obj => |o| {
                 try writer.writeByte(@intFromEnum(@as(Obj.DataType, o.data)));
+                try writer.writeAll(&o.id);
                 switch (o.data) {
                     .string => |s| {
                         try writer.writeIntBig(u16, @as(u16, @intCast(s.len)));
@@ -248,13 +252,15 @@ pub const Value = union(Type) {
             },
             .obj => {
                 var data_type: Obj.DataType = @enumFromInt(try reader.readByte());
+                var id: ID = undefined;
+                try reader.readNoEof(id[0..]);
                 switch (data_type) {
                     .string => {
                         const length = try reader.readIntBig(u16);
                         var buf = try allocator.alloc(u8, length);
                         try reader.readNoEof(buf);
                         const obj = try allocator.create(Value.Obj);
-                        obj.* = .{ .data = .{ .string = buf } };
+                        obj.* = .{ .id = id, .data = .{ .string = buf } };
                         return .{ .obj = obj };
                     },
                     .list => {
@@ -265,7 +271,7 @@ pub const Value = union(Type) {
                             list.items[i] = try Value.deserialize(reader, allocator);
                         }
                         const obj = try allocator.create(Value.Obj);
-                        obj.* = .{ .data = .{ .list = list } };
+                        obj.* = .{ .id = id, .data = .{ .list = list } };
                         return .{ .obj = obj };
                     },
                     .map => {
@@ -278,7 +284,7 @@ pub const Value = union(Type) {
                             try map.put(key, value);
                         }
                         const obj = try allocator.create(Value.Obj);
-                        obj.* = .{ .data = .{ .map = map } };
+                        obj.* = .{ .id = id, .data = .{ .map = map } };
                         return .{ .obj = obj };
                     },
                     .set => {
@@ -290,7 +296,7 @@ pub const Value = union(Type) {
                             try set.put(key, {});
                         }
                         const obj = try allocator.create(Value.Obj);
-                        obj.* = .{ .data = .{ .set = set } };
+                        obj.* = .{ .id = id, .data = .{ .set = set } };
                         return .{ .obj = obj };
                     },
                     .function => {
@@ -301,7 +307,7 @@ pub const Value = union(Type) {
                         var buf = try allocator.alloc(u8, instructions_count);
                         try reader.readNoEof(buf);
                         const obj = try allocator.create(Value.Obj);
-                        obj.* = .{ .data = .{
+                        obj.* = .{ .id = id, .data = .{
                             .function = .{
                                 .arity = arity,
                                 .is_method = is_method,
@@ -515,5 +521,9 @@ test "Serialize" {
     var value = Value{ .number = 15 };
     try value.serialize(data.writer());
 
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x03, 0x00, 0x08, 0x31, 0x35, 0x2e, 0x30, 0x30, 0x30, 0x30, 0x30 }, data.items);
+    try std.testing.expectEqualSlices(
+        u8,
+        &[_]u8{ 0x03, 0x00, 0x08, 0x31, 0x35, 0x2e, 0x30, 0x30, 0x30, 0x30, 0x30 },
+        data.items,
+    );
 }

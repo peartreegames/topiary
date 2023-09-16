@@ -8,6 +8,7 @@ const Scope = @import("./scope.zig").Scope;
 const compiler = @import("./compiler.zig");
 const Value = @import("./values.zig").Value;
 const Errors = @import("./error.zig").Errors;
+const StateMap = @import("./state.zig").StateMap;
 
 const Compiler = compiler.Compiler;
 const compileSource = compiler.compileSource;
@@ -998,4 +999,34 @@ test "Externs" {
         try vm.interpret();
         try testing.expect(case.value == vm.stack.previous().number);
     }
+}
+
+test "Save and Load State" {
+    const test_case =
+        \\ var value = 0
+        \\ value += 1
+    ;
+    var alloc = testing.allocator;
+
+    var vm = try initTestVm(test_case, false);
+    defer vm.deinit();
+    try vm.interpret();
+
+    var save = StateMap.init(alloc);
+    defer save.deinit();
+    try vm.saveState(&save);
+
+    const second_case =
+        \\ var value = 10
+        \\ value += 5
+    ;
+
+    var vm2 = try initTestVm(second_case, false);
+    defer vm2.deinit();
+    try vm2.loadState(&save);
+    try testing.expectEqual(vm2.globals.items[0].number, 1);
+
+    try vm2.interpret();
+
+    try testing.expectEqual(vm2.globals.items[0].number, 6);
 }

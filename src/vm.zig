@@ -15,6 +15,7 @@ const builtins = @import("./builtins.zig");
 const Rnd = @import("./builtins.zig").Rnd;
 const DebugToken = @import("./debug.zig").DebugToken;
 const Extern = @import("./extern.zig").Extern;
+const StateMap = @import("./state.zig").StateMap;
 
 test {
     _ = @import("./vm.test.zig");
@@ -126,6 +127,25 @@ pub const Vm = struct {
         for (self.externs.items) |*ext| ext.*.deinit();
         self.externs.deinit();
         self.bytecode.free(self.allocator);
+    }
+
+    /// Add the current state to a StateMap
+    pub fn saveState(self: *Vm, state: *StateMap) !void {
+        const count: usize = self.bytecode.global_symbols.len;
+        if (count == 0) return;
+
+        for (self.bytecode.global_symbols) |s| {
+            if (s.is_extern or self.globals.items[s.index] == .void) continue;
+            try state.put(s.name, self.globals.items[s.index]);
+        }
+    }
+
+    /// Load the StateMap into the globals list
+    pub fn loadState(self: *Vm, state: *StateMap) !void {
+        for (self.bytecode.global_symbols) |s| {
+            var value = try state.get(s.name);
+            if (value) |v| self.globals.items[s.index] = v;
+        }
     }
 
     pub fn roots(self: *Vm) []const []Value {
@@ -325,10 +345,11 @@ pub const Vm = struct {
                 .decl_global => {
                     const index = self.readInt(OpCode.Size(.get_global));
                     if (index > globals_size) return Error.RuntimeError;
-                    // global already set from loaded state
                     var value = self.pop();
-                    if (self.globals.items[index] != .void) continue;
-
+                    // global already set from loaded state
+                    if (self.globals.items[index] != .void) {
+                        continue;
+                    }
                     self.globals.items[index] = value;
                 },
                 .set_global => {
