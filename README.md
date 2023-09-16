@@ -1,6 +1,6 @@
 # Topiary
 
-Topiary is a narrative scripting tool which uses the in the Topi language to write interactive stories.
+Topiary is a narrative scripting tool which uses the Topi language to write interactive stories.
 It is designed to be integrated into video games which require a large amount of state and control flow in their narrative.
 
 It is written in [Zig](https://ziglang.org).
@@ -41,7 +41,7 @@ and [LoLa](https://github.com/MasterQ32/LoLa/tree/master) both of which are cred
 
 ## Contributing
 
-Download and install [Zig](https://ziglang.org). Currently Topiary uses version `0.11.0-dev.4191+1bf16b172`
+Download and install [Zig](https://ziglang.org). Currently Topiary uses version `0.12.0-dev.297+d2014fe97`
 
 ```
 git clone https://github.com/peartreegames/topiary
