@@ -47,7 +47,6 @@ pub const Compiler = struct {
     err: *Errors,
     scope: *Scope,
     identifier_cache: std.StringHashMap(OpCode.Size(.constant)),
-    globals_map: std.StringArrayHashMap(OpCode.Size(.get_global)),
     chunk: *Chunk,
     locals_count: usize = 0,
 
@@ -94,7 +93,6 @@ pub const Compiler = struct {
             .builtins = .{ .allocator = allocator, .parent = null, .symbols = std.StringArrayHashMap(*Symbol).init(allocator), .tag = .builtin, .free_symbols = undefined, .offset = 0 },
             .constants = std.ArrayList(Value).init(allocator),
             .identifier_cache = std.StringHashMap(OpCode.Size(.constant)).init(allocator),
-            .globals_map = std.StringArrayHashMap(OpCode.Size(.get_global)).init(allocator),
             .err = errors,
             .chunk = root_chunk,
             .scope = root_scope,
@@ -113,7 +111,6 @@ pub const Compiler = struct {
         self.divert_log.deinit();
         self.identifier_cache.deinit();
         self.builtins.symbols.deinit();
-        self.globals_map.deinit();
     }
 
     fn fail(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype) Error {
@@ -128,12 +125,19 @@ pub const Compiler = struct {
 
     pub fn bytecode(self: *Compiler) !ByteCode {
         if (self.scope.parent != null) return Error.OutOfScope;
+        var global_symbols = try self.allocator.alloc(ByteCode.GlobalSymbol, self.scope.symbols.count());
+        for (self.scope.symbols.values(), 0..) |s, i| {
+            global_symbols[i] = ByteCode.GlobalSymbol{
+                .name = try self.allocator.dupe(u8, s.name),
+                .index = s.index,
+                .is_extern = s.is_extern,
+            };
+        }
         return .{
             .instructions = try self.chunk.instructions.toOwnedSlice(),
             .constants = try self.constants.toOwnedSlice(),
             .tokens = try self.chunk.tokens.toOwnedSlice(),
-            .global_names = try self.allocator.dupe([]const u8, self.globals_map.keys()),
-            .global_indexes = try self.allocator.dupe(OpCode.Size(.get_global), self.globals_map.values()),
+            .global_symbols = global_symbols,
             .locals_count = self.locals_count,
         };
     }
@@ -201,17 +205,20 @@ pub const Compiler = struct {
             .variable => |v| {
                 if (self.builtins.symbols.contains(v.name))
                     return self.failError("{s} is a builtin function and cannot be used as a variable name", stmt.token, .{v.name}, Error.IllegalOperation);
+                if (self.scope.parent != null and v.is_extern)
+                    return self.failError("Only global variables can be extern.", token, .{}, Error.IllegalOperation);
                 var symbol = try self.scope.define(v.name, v.is_mutable, v.is_extern);
-                try self.globals_map.putNoClobber(v.name, symbol.index);
                 try self.compileExpression(&v.initializer);
                 try self.setSymbol(symbol, token, true);
             },
 
             .class => |c| {
+                try self.enterScope(.local);
                 for (c.fields, 0..) |field, i| {
                     try self.compileExpression(&field);
                     try self.getOrSetIdentifierConstant(c.field_names[i], token);
                 }
+                try self.exitScope();
 
                 try self.getOrSetIdentifierConstant(c.name, token);
                 try self.writeOp(.class, token);
@@ -432,7 +439,7 @@ pub const Compiler = struct {
                 self.jump_node = try self.jump_node.getChild(b.name);
                 self.jump_node.*.ip = self.instructionPos();
 
-                try self.enterScope(.global);
+                try self.enterScope(.local);
 
                 try self.compileBlock(b.body);
                 try self.writeOp(.fin, token);
@@ -1864,39 +1871,39 @@ test "Classes" {
     }
 }
 
-// test "Serialize" {
-//     const input =
-//         \\ var str = "string value"
-//         \\ const num = 25
-//         \\ const fun = |x| {
-//         \\     return x * 2
-//         \\ }
-//         \\ var list = ["one", "two"]
-//         \\ const set = {1, 2, 3.3}
-//         \\ const map = {1:2.2, 3: 4.4}
-//     ;
+test "Serialize" {
+    const input =
+        \\ var str = "string value"
+        \\ const num = 25
+        \\ const fun = |x| {
+        \\     return x * 2
+        \\ }
+        \\ var list = ["one", "two"]
+        \\ const set = {1, 2, 3.3}
+        \\ const map = {1:2.2, 3: 4.4}
+    ;
 
-//     errdefer std.log.warn("{s}", .{input});
-//     var allocator = testing.allocator;
-//     var errors = Errors.init(allocator);
-//     defer errors.deinit();
-//     var bytecode = compileSource(allocator, input, &errors) catch |err| {
-//         try errors.write(input, std.io.getStdErr().writer());
-//         return err;
-//     };
-//     defer bytecode.free(allocator);
+    errdefer std.log.warn("{s}", .{input});
+    var allocator = testing.allocator;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    var bytecode = compileSource(allocator, input, &errors) catch |err| {
+        try errors.write(input, std.io.getStdErr().writer());
+        return err;
+    };
+    defer bytecode.free(allocator);
 
-//     // this doesn't need to be a file, but it's nice to sometimes not delete it and inspect it
-//     const file = try std.fs.cwd().createFile("tmp.topib", .{ .read = true });
-//     defer std.fs.cwd().deleteFile("tmp.topib") catch {};
-//     defer file.close();
-//     try bytecode.serialize(file.writer());
+    // this doesn't need to be a file, but it's nice to sometimes not delete it and inspect it
+    const file = try std.fs.cwd().createFile("tmp.topib", .{ .read = true });
+    defer std.fs.cwd().deleteFile("tmp.topib") catch {};
+    defer file.close();
+    try bytecode.serialize(file.writer());
 
-//     try file.seekTo(0);
-//     var deserialized = try ByteCode.deserialize(file.reader(), allocator);
-//     defer deserialized.free(allocator);
-//     try testing.expectEqualSlices(u8, bytecode.instructions, deserialized.instructions);
-//     for (bytecode.constants, 0..) |constant, i| {
-//         try testing.expect(constant.eql(deserialized.constants[i]));
-//     }
-// }
+    try file.seekTo(0);
+    var deserialized = try ByteCode.deserialize(file.reader(), allocator);
+    defer deserialized.free(allocator);
+    try testing.expectEqualSlices(u8, bytecode.instructions, deserialized.instructions);
+    for (bytecode.constants, 0..) |constant, i| {
+        try testing.expect(constant.eql(deserialized.constants[i]));
+    }
+}

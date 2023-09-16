@@ -5,8 +5,12 @@ const Dialogue = @import("./vm.zig").Dialogue;
 const Choice = @import("./vm.zig").Choice;
 const parser = @import("./parser.zig");
 const Scope = @import("./scope.zig").Scope;
-const Compiler = @import("./compiler.zig").Compiler;
+const compiler = @import("./compiler.zig");
 const Value = @import("./values.zig").Value;
+const Errors = @import("./error.zig").Errors;
+
+const Compiler = compiler.Compiler;
+const compileSource = compiler.compileSource;
 
 const TestRunner = struct {
     pub fn on_dialogue(vm: *Vm, dialogue: Dialogue) void {
@@ -30,6 +34,23 @@ const TestRunner = struct {
     }
 };
 
+pub fn initTestVm(source: []const u8, debug: bool) !Vm {
+    var alloc = std.testing.allocator;
+    var errors = Errors.init(alloc);
+    defer errors.deinit();
+    var bytecode = compileSource(alloc, source, &errors) catch |err| {
+        errors.write(source, std.io.getStdErr().writer()) catch {};
+        return err;
+    };
+    errdefer bytecode.free(alloc);
+    if (debug) {
+        bytecode.print(std.debug);
+    }
+
+    var vm = try Vm.init(alloc, bytecode, TestRunner, &errors);
+    return vm;
+}
+
 test "Basics" {
     const test_cases = .{
         .{ .input = "1", .value = 1.0, .type = f32 },
@@ -52,10 +73,9 @@ test "Basics" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        try vm.interpretSource(case.input);
+        try vm.interpret();
         switch (case.type) {
             f32 => try testing.expect(case.value == vm.stack.previous().number),
             bool => try testing.expect(case.value == vm.stack.previous().bool),
@@ -78,10 +98,9 @@ test "Conditionals" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator, TestRunner);
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        errdefer vm.bytecode.?.print(std.debug);
-        try vm.interpretSource(case.input);
+        try vm.interpret();
         switch (case.type) {
             .number => {
                 errdefer std.debug.print("{any} == {any}", .{ case.value, vm.stack.previous().number });
@@ -104,12 +123,10 @@ test "Variables" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator, TestRunner);
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        // vm.debug = true;
-        try vm.interpretSource(case.input);
+        try vm.interpret();
         var value = vm.stack.previous().number;
-        errdefer std.log.warn("\n{s}\n ==== {} != {}", .{ case.input, case.value, value });
         try testing.expect(case.value == value);
     }
 }
@@ -121,11 +138,8 @@ test "Constant Variables" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        defer vm.deinit();
-        vm.interpretSource(case) catch |err| {
-            try testing.expect(Vm.Error.CompilerError == err);
-        };
+        var err = initTestVm(case, false);
+        try testing.expect(Vm.Error.CompilerError == err);
     }
 }
 
@@ -144,11 +158,9 @@ test "Strings" {
     };
 
     inline for (test_cases) |case| {
-        errdefer std.log.warn("{s}", .{case.input});
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        try vm.interpretSource(case.input);
+        try vm.interpret();
         switch (@TypeOf(case.value)) {
             []const u8 => try testing.expectEqualStrings(case.value, vm.stack.previous().obj.data.string),
             bool => try testing.expect(case.value == vm.stack.previous().bool),
@@ -169,10 +181,9 @@ test "Lists" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        try vm.interpretSource(case.input);
+        try vm.interpret();
         var prev = vm.stack.previous();
         for (case.value, 0..) |v, i| {
             try testing.expect(v == prev.obj.data.list.items[i].number);
@@ -190,10 +201,9 @@ test "Maps" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        try vm.interpretSource(case.input);
+        try vm.interpret();
         const map = vm.stack.previous().obj.data.map;
         try testing.expect(map.keys().len == case.keys.len);
         if (case.keys.len > 0) {
@@ -216,10 +226,9 @@ test "Sets" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        try vm.interpretSource(case.input);
+        try vm.interpret();
         const set = vm.stack.previous().obj.data.set;
         try testing.expect(set.keys().len == case.values.len);
         if (case.values.len > 0) {
@@ -248,10 +257,9 @@ test "Index" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        try vm.interpretSource(case.input);
+        try vm.interpret();
         const value = vm.stack.previous();
         switch (@TypeOf(case.value)) {
             comptime_float => try testing.expect(case.value == value.number),
@@ -310,10 +318,9 @@ test "Functions" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        try vm.interpretSource(case.input);
+        try vm.interpret();
         const value = vm.stack.previous();
         switch (@TypeOf(case.value)) {
             comptime_float => try testing.expect(case.value == value.number),
@@ -379,10 +386,9 @@ test "Locals" {
     };
 
     inline for (test_cases) |case| {
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        try vm.interpretSource(case.input);
+        try vm.interpret();
         const value = vm.stack.previous();
         errdefer std.log.warn("{s}:: {any} == {any}", .{ case.input, case.value, value });
         switch (@TypeOf(case.value)) {
@@ -440,11 +446,9 @@ test "Function Arguments" {
         , .value = 50.0 },
     };
     inline for (test_cases) |case| {
-        errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        try vm.interpretSource(case.input);
+        try vm.interpret();
         const value = vm.stack.previous();
         switch (@TypeOf(case.value)) {
             comptime_float => try testing.expect(case.value == value.number),
@@ -465,11 +469,9 @@ test "Builtin Functions" {
         },
     };
     inline for (test_cases) |case| {
-        errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        vm.interpretSource(case.input) catch |err| {
+        vm.interpret() catch |err| {
             try vm.err.write(case.input, std.io.getStdErr().writer());
             return err;
         };
@@ -537,11 +539,9 @@ test "Closures" {
         },
     };
     inline for (test_cases) |case| {
-        errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        try vm.interpretSource(case.input);
+        try vm.interpret();
         const value = vm.stack.previous();
         try testing.expectEqual(value.number, case.value);
     }
@@ -617,11 +617,9 @@ test "Loops" {
         , .value = 15 },
     };
     inline for (test_cases) |case| {
-        errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        vm.interpretSource(case.input) catch |err| {
+        vm.interpret() catch |err| {
             try vm.err.write(case.input, std.io.getStdErr().writer());
             return err;
         };
@@ -636,12 +634,9 @@ test "Classes" {
         \\    value = 0
         \\ }
     ;
-    errdefer std.log.warn("\n======\n{s}\n======\n", .{input});
-    var vm = try Vm.init(testing.allocator, TestRunner);
-    // vm.debug = true;
-    std.debug.print("\n======\n", .{});
+    var vm = try initTestVm(input, false);
     defer vm.deinit();
-    try vm.interpretSource(input);
+    try vm.interpret();
     var value = vm.stack.previous();
     try testing.expect(value.obj.data == .class);
     try testing.expectEqualStrings("Test", value.obj.data.class.name);
@@ -664,13 +659,9 @@ test "Instance" {
         \\ test.incr(1)
         \\ print(test.value)
     ;
-    errdefer std.log.warn("\n======\n{s}\n======\n", .{input});
-    var vm = try Vm.init(testing.allocator, TestRunner);
-    errdefer vm.deinit();
-    // vm.debug = true;
-    std.debug.print("\n======\n", .{});
-    try vm.interpretSource(input);
+    var vm = try initTestVm(input, false);
     defer vm.deinit();
+    try vm.interpret();
 }
 
 test "Boughs" {
@@ -753,12 +744,10 @@ test "Boughs" {
     };
 
     inline for (test_cases) |case| {
-        errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
-        defer vm.deinit();
         std.debug.print("\n======\n", .{});
-        try vm.interpretSource(case.input);
+        var vm = try initTestVm(case.input, false);
+        defer vm.deinit();
+        try vm.interpret();
     }
 }
 
@@ -805,12 +794,10 @@ test "Forks" {
     };
 
     inline for (test_cases) |case| {
-        errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
         std.debug.print("\n======\n", .{});
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        try vm.interpretSource(case.input);
+        try vm.interpret();
     }
 }
 
@@ -876,12 +863,10 @@ test "Jump Backups" {
     };
 
     inline for (test_cases) |case| {
-        errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
         std.debug.print("\n======\n", .{});
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        try vm.interpretSource(case.input);
+        try vm.interpret();
     }
 }
 
@@ -982,59 +967,35 @@ test "Switch" {
         },
     };
     inline for (test_cases) |case| {
-        errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
-        var vm = try Vm.init(testing.allocator, TestRunner);
-        // vm.debug = true;
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
-        try vm.interpretSource(case.input);
+        try vm.interpret();
     }
 }
 
-// test "Externs" {
-//     const test_cases = .{
-//         .{ .input =
-//         \\ extern const value = 1
-//         \\ value
-//         , .value = 2.0 },
-//         .{ .input =
-//         \\ extern var value = 1
-//         \\ value = 5
-//         , .value = 5.0 },
-//     };
+test "Externs" {
+    const test_cases = .{
+        .{ .input = 
+        \\ extern const value = 1
+        \\ value
+        , .value = 2.0 },
+        .{ .input = 
+        \\ extern var value = 1
+        \\ value = 5
+        , .value = 5.0 },
+    };
 
-//     inline for (test_cases) |case| {
-//         const allocator = testing.allocator;
-//         errdefer std.log.warn("\n======\n{s}\n======\n", .{case.input});
-//         var vm = try Vm.init(testing.allocator, TestRunner);
-//         // vm.debug = true;
-//         std.debug.print("\n======\n", .{});
-
-//         const tree = try parser.parse(allocator, case.input, &vm.err);
-//         defer tree.deinit();
-
-//         var root_scope = try Scope.create(allocator, null, .global, 0);
-//         defer root_scope.destroy();
-//         var root_chunk = try Compiler.Chunk.create(allocator, null);
-//         defer root_chunk.destroy();
-//         var compiler = Compiler.init(allocator, root_scope, root_chunk, &vm.err);
-//         defer compiler.deinit();
-
-//         try compiler.compile(tree);
-//         for (root_scope.symbols.values()) |sym| {
-//             if (sym.is_extern) {
-//                 try vm.externs.append(sym.name, sym.index);
-//             }
-//         }
-//         const Listener = struct {
-//             pub fn onChange(value: Value) void {
-//                 std.debug.print("Listener::{}\n", .{value});
-//             }
-//         };
-//         const bytecode = try compiler.bytecode();
-//         try vm.setExternNumber("value", 2);
-//         try vm.subscribe("value", Listener.onChange);
-//         defer vm.deinit();
-//         try vm.interpret(bytecode);
-//         try testing.expect(case.value == vm.stack.previous().number);
-//     }
-// }
+    inline for (test_cases) |case| {
+        var vm = try initTestVm(case.input, false);
+        defer vm.deinit();
+        const Listener = struct {
+            pub fn onChange(value: Value) void {
+                std.debug.print("\nListener::{}\n", .{value});
+            }
+        };
+        try vm.setExternNumber("value", 2);
+        try vm.subscribe("value", Listener.onChange);
+        try vm.interpret();
+        try testing.expect(case.value == vm.stack.previous().number);
+    }
+}

@@ -1,32 +1,27 @@
 const std = @import("std");
 const Value = @import("./values.zig").Value;
 const ByteCode = @import("./bytecode.zig").ByteCode;
+const Vm = @import("./vm.zig").Vm;
 
 const StateMap = std.json.ArrayHashMap(Value);
 const testing = std.testing;
 
 /// Add the current state to the StateMap
-pub fn save(state: StateMap, globals: std.ArrayList(Value), bytecode: ByteCode) !void {
-    const count = bytecode.globals_map.count();
+pub fn save(state: StateMap, vm: *Vm) !void {
+    const count = vm.bytecode.global_symbol.count();
     if (count == 0) return;
 
-    var it = bytecode.globals_map.iterator();
-    while (it.next()) |entry| {
-        var name = entry.key_ptr.*;
-        var value = globals[entry.value_ptr.*];
-        try state.put(name, value);
+    for (vm.bytecode.global_symbols) |s| {
+        if (s.is_extern) continue;
+        try state.map.put(try vm.allocator.dupe(u8, s.name), vm.globals[s.index]);
     }
 }
 
 /// Load the StateMap into the globals list
-pub fn load(state: StateMap, globals: std.ArrayList(Value), bytecode: ByteCode) !void {
-    var it = bytecode.globals_map.iterator();
-    while (it.next()) |entry| {
-        const index = entry.value_ptr.*;
-        var value = state.get(entry.key_ptr.*);
-        if (value) |val| {
-            globals[index] = val;
-        }
+pub fn load(state: StateMap, vm: *Vm) !void {
+    for (vm.bytecode.global_symbols) |s| {
+        var value = state.map.get(s.name);
+        if (value) |v| vm.globals[s.index] = v;
     }
 }
 
@@ -37,7 +32,8 @@ pub fn serialize(state: StateMap, writer: anytype) !void {
 
 /// Parse a JSON state back into a StateMap
 pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !StateMap {
-
+    _ = reader;
+    _ = allocator;
 }
 
 /// Consolidate all serialized states into one file

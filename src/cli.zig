@@ -19,26 +19,28 @@ pub fn main() !void {
     }
     var allocator = arena.allocator();
     var vm_alloc = arena.allocator();
+    var err = Errors.init(vm_alloc);
+    errdefer err.deinit();
 
-    var vm = try Vm.init(vm_alloc, CliRunner);
     var dir = try std.fs.cwd().openDir(std.fs.path.dirname(file_path.?).?, .{});
     var file_name = std.fs.path.basename(file_path.?);
-    var tree = try parseFile(allocator, dir, file_name, &vm.err);
+    var tree = try parseFile(allocator, dir, file_name, &err);
     defer tree.deinit();
     defer allocator.free(tree.source);
 
-    var root_scope = try Scope.create(allocator, null, .global);
+    var root_scope = try Scope.create(allocator, null, .global, 0);
     defer root_scope.destroy();
     var root_chunk = try Compiler.Chunk.create(allocator, null);
     defer root_chunk.destroy();
-    var compiler = Compiler.init(allocator, root_scope, root_chunk, &vm.err);
+    var compiler = Compiler.init(allocator, root_scope, root_chunk, &err);
     defer compiler.deinit();
 
     try compiler.compile(tree);
     var bytecode = try compiler.bytecode();
+    var vm = try Vm.init(vm_alloc, bytecode, CliRunner, &err);
 
-    vm.interpret(bytecode) catch {
-        try vm.err.write(tree.source, std.io.getStdErr().writer());
+    vm.interpret() catch {
+        try err.write(tree.source, std.io.getStdErr().writer());
     };
 }
 

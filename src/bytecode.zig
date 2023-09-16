@@ -7,9 +7,14 @@ pub const ByteCode = struct {
     instructions: []u8,
     constants: []Value,
     tokens: []DebugToken,
-    global_names: [][]const u8,
-    global_indexes: []OpCode.Size(.get_global),
+    global_symbols: []GlobalSymbol,
     locals_count: usize,
+
+    pub const GlobalSymbol = struct {
+        name: []const u8,
+        index: OpCode.Size(.get_global),
+        is_extern: bool,
+    };
 
     pub fn free(self: *const ByteCode, allocator: std.mem.Allocator) void {
         allocator.free(self.instructions);
@@ -20,8 +25,8 @@ pub const ByteCode = struct {
         }
         allocator.free(self.constants);
         allocator.free(self.tokens);
-        allocator.free(self.global_names);
-        allocator.free(self.global_indexes);
+        for (self.global_symbols) |s| allocator.free(s.name);
+        allocator.free(self.global_symbols);
     }
 
     pub fn serialize(self: *ByteCode, writer: anytype) !void {
@@ -31,13 +36,12 @@ pub const ByteCode = struct {
         try writer.writeAll(self.instructions);
         try writer.writeIntBig(u64, @as(u64, @intCast(self.constants.len)));
         for (self.constants) |constant| try constant.serialize(writer);
-        try writer.writeIntBig(u64, @as(u64, @intCast(self.global_names.len)));
-        for (self.global_names) |n| {
-            try writer.writeIntBig(u8, @as(u8, @intCast(n.len)));
-            try writer.writeAll(n);
-        }
-        for (self.global_indexes) |i| {
-            try writer.writeIntBig(OpCode.Size(.get_global), i);
+        try writer.writeIntBig(u64, @as(u64, @intCast(self.global_symbols.len)));
+        for (self.global_symbols) |sym| {
+            try writer.writeIntBig(u8, @as(u8, @intCast(sym.name.len)));
+            try writer.writeAll(sym.name);
+            try writer.writeIntBig(OpCode.Size(.get_global), @as(OpCode.Size(.get_global), @intCast(sym.index)));
+            try writer.writeByte(if (sym.is_extern) 1 else 0);
         }
     }
 
@@ -51,22 +55,25 @@ pub const ByteCode = struct {
             constants[i] = try Value.deserialize(reader, allocator);
         }
         var globals_count = try reader.readIntBig(u64);
-        var names = try allocator.alloc([]const u8, globals_count);
-        var indexes = try allocator.alloc(OpCode.Size(.get_global), globals_count);
+        var global_symbols = try allocator.alloc(GlobalSymbol, globals_count);
         var count: usize = 0;
         while (count < globals_count) : (count += 1) {
             var length = try reader.readIntBig(u8);
             var buf = try allocator.alloc(u8, length);
             try reader.readNoEof(buf);
-            names[count] = buf;
-            indexes[count] = try reader.readIntBig(OpCode.Size(.get_global));
+            const index = try reader.readIntBig(OpCode.Size(.get_global));
+            const is_extern = if (try reader.readByte() == 1) true else false;
+            global_symbols[count] = GlobalSymbol{
+                .name = buf,
+                .index = index,
+                .is_extern = is_extern,
+            };
         }
         return .{
             .instructions = instructions,
             .constants = constants,
             .tokens = &[_]DebugToken{},
-            .global_names = names,
-            .global_indexes = indexes,
+            .global_symbols = global_symbols,
             .locals_count = 0,
         };
     }

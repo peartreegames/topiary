@@ -62,8 +62,8 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     // Creates a step for unit testing.
-    const exe_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/main.zig" },
+    const tests = b.addTest(.{
+        .root_source_file = .{ .path = "src/vm.zig" },
         .target = target,
         .optimize = optimize,
     });
@@ -72,5 +72,5 @@ pub fn build(b: *std.Build) void {
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&exe_tests.step);
+    test_step.dependOn(&tests.step);
 }

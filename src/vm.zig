@@ -14,7 +14,12 @@ const Class = @import("./class.zig").Class;
 const builtins = @import("./builtins.zig");
 const Rnd = @import("./builtins.zig").Rnd;
 const DebugToken = @import("./debug.zig").DebugToken;
-const externals = @import("./extern.zig");
+const Extern = @import("./extern.zig").Extern;
+
+test {
+    _ = @import("./vm.test.zig");
+    std.testing.refAllDeclsRecursive(@This());
+}
 
 const stack_size = 4096;
 const frame_size = 1023;
@@ -23,8 +28,6 @@ const globals_size = 65535;
 const Value = values.Value;
 const Iterator = values.Iterator;
 const adapter = values.adapter;
-const ExternList = externals.ExternList;
-const Extern = externals.Extern;
 
 const input_buf: [2]u8 = undefined;
 
@@ -48,17 +51,18 @@ pub const Choice = struct {
 pub const Vm = struct {
     allocator: std.mem.Allocator,
     frames: Stack(Frame),
-    err: Errors,
+    err: *Errors,
     gc: Gc,
     globals: std.ArrayList(Value),
-    globals_map: std.StringArrayHashMap(usize),
+    externs: std.ArrayList(Extern),
+
     stack: Stack(Value),
     /// Current iterators to allow easy nesting
     iterators: Stack(Iterator),
     /// List of positions to jump back to using `^`
     jump_backups: std.ArrayList(OpCode.Size(.jump)),
 
-    bytecode: ?ByteCode = null,
+    bytecode: ByteCode,
     /// Current instruction position
     ip: usize = 0,
     debug: bool = false,
@@ -78,16 +82,29 @@ pub const Vm = struct {
     pub const Error = error{
         RuntimeError,
         InvalidChoice,
+        Uninitialized,
     } || Compiler.Error;
 
-    pub fn init(allocator: std.mem.Allocator, runner: anytype) !Vm {
+    pub fn init(allocator: std.mem.Allocator, bytecode: ByteCode, runner: anytype, errors: *Errors) !Vm {
         if (!std.meta.trait.hasFunctions(runner, .{ "on_dialogue", "on_choices" }))
             return error.RuntimeError;
+
+        var globals = try std.ArrayList(Value).initCapacity(allocator, bytecode.global_symbols.len);
+        var externs = try std.ArrayList(Extern).initCapacity(allocator, bytecode.global_symbols.len);
+        try globals.resize(bytecode.global_symbols.len);
+        try externs.resize(bytecode.global_symbols.len);
+
+        for (bytecode.global_symbols, 0..) |sym, i| {
+            globals.items[i] = .void;
+            externs.items[i] = Extern.init(allocator, sym.is_extern);
+        }
         return .{
             .allocator = allocator,
-            .err = Errors.init(allocator),
+            .bytecode = bytecode,
+            .err = errors,
             .frames = try Stack(Frame).init(allocator, frame_size),
-            .globals = try std.ArrayList(Value).initCapacity(allocator, 1024),
+            .globals = globals,
+            .externs = externs,
             .gc = Gc.init(allocator),
             .stack = try Stack(Value).init(allocator, stack_size),
             .iterators = try Stack(Iterator).init(allocator, iterator_size),
@@ -105,9 +122,10 @@ pub const Vm = struct {
         self.jump_backups.deinit();
         self.globals.deinit();
         self.frames.deinit();
-        self.err.deinit();
         self.gc.deinit();
-        if (self.bytecode) |bc| bc.free(self.allocator);
+        for (self.externs.items) |*ext| ext.*.deinit();
+        self.externs.deinit();
+        self.bytecode.free(self.allocator);
     }
 
     pub fn roots(self: *Vm) []const []Value {
@@ -132,45 +150,47 @@ pub const Vm = struct {
         self.allocator.free(self.current_choices);
     }
 
+    fn getExternIndex(self: *Vm, name: []const u8) !usize {
+        for (self.bytecode.global_symbols) |s| {
+            if (!std.mem.eql(u8, name, s.name)) continue;
+            if (!s.is_extern) return error.IllegalOperation;
+            return s.index;
+        }
+        return error.SymbolNotFound;
+    }
+
     pub fn setExternNumber(self: *Vm, name: []const u8, value: f32) !void {
-        return self.setExtern(name, f32, value);
+        return self.setExtern(try self.getExternIndex(name), f32, value);
     }
 
     pub fn setExternBool(self: *Vm, name: []const u8, value: bool) !void {
-        return self.setExtern(name, bool, value);
+        return self.setExtern(try self.getExternIndex(name), bool, value);
     }
 
-    pub fn setExternNil(self: *Vm, name: []const u8, value: null) !void {
-        return self.setExtern(name, null, value);
+    pub fn setExternNil(self: *Vm, name: []const u8) !void {
+        return self.setExtern(try self.getExternIndex(name), @TypeOf(null), null);
     }
 
-    pub fn setExtern(self: *Vm, name: []const u8, comptime T: type, value: T) !void {
-        if (self.externs.getByName(name)) |ext| {
-            try ext.setWithoutNotify(&self.globals, Value.createFrom(T, value));
-        } else return error.SymbolNotFound;
+    pub fn setExtern(self: *Vm, index: usize, comptime T: type, value: T) !void {
+        self.globals.items[index] = Value.createFrom(T, value);
     }
 
     pub fn subscribe(self: *Vm, name: []const u8, callback: Extern.OnValueChanged) !void {
-        if (self.externs.getByName(name)) |ext| {
-            try ext.subscribe(callback);
-        } else return error.SymbolNotFound;
+        try self.externs.items[try self.getExternIndex(name)].subscribe(callback);
     }
 
     pub fn unsubscribe(self: *Vm, name: []const u8, callback: Extern.OnValueChanged) !void {
-        if (self.externs.getByName(name)) |ext| {
-            ext.unsubscribe(callback);
-        } else return error.SymbolNotFound;
+        self.externs.items[try self.getExternIndex(name)].unsubscribe(callback);
     }
 
-    pub fn interpret(self: *Vm, bytecode: ByteCode) !void {
-        self.bytecode = bytecode;
+    pub fn interpret(self: *Vm) !void {
         var root_frame = try self.allocator.create(Value.Obj.Data);
         var root_closure = try self.allocator.create(Value.Obj);
         defer self.allocator.destroy(root_frame);
         defer self.allocator.destroy(root_closure);
         root_frame.* = .{
             .function = .{
-                .instructions = bytecode.instructions,
+                .instructions = self.bytecode.instructions,
                 .locals_count = 0,
                 .arity = 0,
             },
@@ -183,28 +203,17 @@ pub const Vm = struct {
                 },
             },
         };
-        self.stack.resize(bytecode.locals_count);
-        self.frames.push(try Frame.create(root_closure, 0, bytecode.locals_count));
+        self.stack.resize(self.bytecode.locals_count);
+        self.frames.push(try Frame.create(root_closure, 0, 0));
+
         try self.run();
-        if (self.stack.count > bytecode.locals_count) {
+        if (self.stack.count > self.bytecode.locals_count) {
             std.log.warn("Completed run but still had {} items on stack.", .{self.stack.count});
         }
     }
 
-    pub fn interpretSource(self: *Vm, source: []const u8) !void {
-        var bytecode = compileSource(self.allocator, source, &self.err) catch |err| {
-            self.err.write(source, std.io.getStdErr().writer()) catch {};
-            return err;
-        };
-        if (self.debug) {
-            bytecode.print(std.debug);
-        }
-
-        try self.interpret(bytecode);
-    }
-
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {
-        var token = DebugToken.get(self.bytecode.?.tokens, self.ip) orelse undefined;
+        var token = DebugToken.get(self.bytecode.tokens, self.ip) orelse undefined;
         try self.err.add(msg, token, .err, args);
         return Error.RuntimeError;
     }
@@ -231,7 +240,7 @@ pub const Vm = struct {
             switch (op) {
                 .constant => {
                     var index = self.readInt(u16);
-                    var value = self.bytecode.?.constants[index];
+                    var value = self.bytecode.constants[index];
                     try self.push(value);
                 },
                 .pop => _ = self.pop(),
@@ -314,33 +323,22 @@ pub const Vm = struct {
                     }
                 },
                 .decl_global => {
-                    const index = self.readInt(OpCode.Size(.decl_global));
+                    const index = self.readInt(OpCode.Size(.get_global));
                     if (index > globals_size) return Error.RuntimeError;
-                    if (index >= self.globals.items.len) {
-                        try self.globals.resize(@intCast((index + 1) * 2 + 1));
-                    }
                     // global already set from loaded state
-                    // else if (self.globals.items[index] != .void) continue;
+                    var value = self.pop();
+                    if (self.globals.items[index] != .void) continue;
 
-                    // if it's an extern we need to make sure we let subscribers know
-                    // if (self.externs.getByIndex(index)) |ext| {
-                    //     ext.set(&self.globals, self.pop());
-                    //     continue;
-                    // }
-                    const value = self.pop();
                     self.globals.items[index] = value;
                 },
                 .set_global => {
                     const index = self.readInt(OpCode.Size(.set_global));
                     if (index > globals_size) return Error.RuntimeError;
                     if (index >= self.globals.items.len) return Error.RuntimeError;
-                    // if it's an extern we need to make sure we let subscribers know
-                    if (self.externs.getByIndex(index)) |ext| {
-                        ext.set(&self.globals, self.pop());
-                        continue;
-                    }
                     const value = self.pop();
                     self.globals.items[index] = value;
+                    var ext = self.externs.items[index];
+                    if (ext.isExtern()) ext.invoke(value);
                 },
                 .get_global => {
                     const index = self.readInt(OpCode.Size(.get_global));
@@ -384,7 +382,7 @@ pub const Vm = struct {
                 },
                 .string => {
                     var index = self.readInt(u16);
-                    var value = self.bytecode.?.constants[index];
+                    var value = self.bytecode.constants[index];
                     var count = self.readInt(u8);
                     var args = try std.ArrayList(Value).initCapacity(self.allocator, count);
                     defer args.deinit();
@@ -699,7 +697,7 @@ pub const Vm = struct {
                 .closure => {
                     const index = self.readInt(u16);
                     const count = self.readInt(u8);
-                    var value = self.bytecode.?.constants[index];
+                    var value = self.bytecode.constants[index];
                     var free_values = try self.allocator.alloc(Value, count);
                     for (0..count) |i| {
                         free_values[i] = self.stack.items[self.stack.count - count + i];
@@ -794,7 +792,7 @@ pub const Vm = struct {
     }
 
     fn push(self: *Vm, value: Value) !void {
-        errdefer value.print(std.debug, self.bytecode.?.constants);
+        errdefer value.print(std.debug, self.bytecode.constants);
         if (self.stack.items.len >= stack_size) return error.OutOfMemory;
         self.stack.push(value);
     }

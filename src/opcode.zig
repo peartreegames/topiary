@@ -112,7 +112,6 @@ pub const OpCode = enum(u8) {
         return switch (self) {
             .constant => u16,
             .jump, .jump_if_false, .backup => u16,
-            .decl_global,
             .set_global,
             .get_global,
             .get_local,
@@ -127,7 +126,7 @@ pub const OpCode = enum(u8) {
             .get_free,
             .set_free,
             => u8,
-            .string, .closure, .prong => u24, // u16 for constant location, u8 for expressions count
+            .decl_global, .string, .closure, .prong => u24, // u16 for constant location, u8 for expressions count
             else => void,
         };
     }
