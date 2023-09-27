@@ -45,7 +45,7 @@ pub const ByteCode = struct {
         }
     }
 
-    pub fn deserialize(reader: anytype, allocator: std.mem.Allocator) !ByteCode {
+    pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !ByteCode {
         const instruction_count = try reader.readIntBig(u64);
         var instructions = try allocator.alloc(u8, instruction_count);
         try reader.readNoEof(instructions);

@@ -1,20 +1,33 @@
 const std = @import("std");
 const Vm = @import("./vm.zig").Vm;
 const testing = std.testing;
-const Dialogue = @import("./vm.zig").Dialogue;
-const Choice = @import("./vm.zig").Choice;
 const parser = @import("./parser.zig");
 const Scope = @import("./scope.zig").Scope;
 const compiler = @import("./compiler.zig");
 const Value = @import("./values.zig").Value;
 const Errors = @import("./error.zig").Errors;
 const StateMap = @import("./state.zig").StateMap;
+const runners = @import("./runner.zig");
+const Runner = runners.Runner;
+const Dialogue = runners.Dialogue;
+const Choice = runners.Choice;
 
 const Compiler = compiler.Compiler;
 const compileSource = compiler.compileSource;
 
-const TestRunner = struct {
-    pub fn on_dialogue(vm: *Vm, dialogue: Dialogue) void {
+pub const TestRunner = struct {
+    runner: Runner,
+
+    pub fn init() TestRunner {
+        return .{
+            .runner = .{
+                .onDialogueFn = TestRunner.onDialogue,
+                .onChoicesFn = TestRunner.onChoices,
+            },
+        };
+    }
+
+    pub fn onDialogue(_: *Runner, vm: *Vm, dialogue: Dialogue) void {
         if (dialogue.speaker) |speaker| {
             std.debug.print("{s}: ", .{speaker});
         }
@@ -22,7 +35,7 @@ const TestRunner = struct {
         vm.selectContinue();
     }
 
-    pub fn on_choices(vm: *Vm, choices: []Choice) void {
+    pub fn onChoices(_: *Runner, vm: *Vm, choices: []Choice) void {
         for (choices, 0..) |choice, i| {
             std.debug.print("[{d}] {s}\n", .{ i, choice.content });
         }
@@ -48,7 +61,8 @@ pub fn initTestVm(source: []const u8, debug: bool) !Vm {
         bytecode.print(std.debug);
     }
 
-    var vm = try Vm.init(alloc, bytecode, TestRunner, &errors);
+    var test_runner = TestRunner.init();
+    var vm = try Vm.init(alloc, bytecode, &test_runner.runner, &errors);
     return vm;
 }
 

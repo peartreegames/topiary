@@ -1,13 +1,14 @@
 const std = @import("std");
-const _vm = @import("./vm.zig");
+const Vm = @import("./vm.zig").Vm;
 const parseFile = @import("./parser.zig").parseFile;
 const Scope = @import("./scope.zig").Scope;
 const Compiler = @import("./compiler.zig").Compiler;
 const Errors = @import("./error.zig").Errors;
+const runners = @import("./runner.zig");
 
-const Vm = _vm.Vm;
-const Dialogue = _vm.Dialogue;
-const Choice = _vm.Choice;
+const Runner = runners.Runner;
+const Dialogue = runners.Dialogue;
+const Choice = runners.Choice;
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -37,7 +38,8 @@ pub fn main() !void {
 
     try compiler.compile(tree);
     var bytecode = try compiler.bytecode();
-    var vm = try Vm.init(vm_alloc, bytecode, CliRunner, &err);
+    var cli_runner = CliRunner.init();
+    var vm = try Vm.init(vm_alloc, bytecode, &cli_runner.runner, &err);
 
     vm.interpret() catch {
         try err.write(tree.source, std.io.getStdErr().writer());
@@ -51,7 +53,18 @@ fn getFilePath(allocator: std.mem.Allocator) !?[]const u8 {
 }
 
 const CliRunner = struct {
-    pub fn on_dialogue(vm: *Vm, dialogue: Dialogue) void {
+    runner: Runner,
+
+    pub fn init() CliRunner {
+        return .{
+            .runner = .{
+                .onDialogueFn = onDialogue,
+                .onChoicesFn = onChoices,
+            },
+        };
+    }
+
+    pub fn onDialogue(_: *Runner, vm: *Vm, dialogue: Dialogue) void {
         if (dialogue.speaker) |speaker| {
             std.debug.print("{s}: ", .{speaker});
         }
@@ -63,7 +76,7 @@ const CliRunner = struct {
         }
     }
 
-    pub fn on_choices(vm: *Vm, choices: []Choice) void {
+    pub fn onChoices(_: *Runner, vm: *Vm, choices: []Choice) void {
         const stdin = std.io.getStdIn().reader();
         var index: ?usize = null;
         while (index == null) {

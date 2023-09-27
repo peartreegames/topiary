@@ -16,6 +16,10 @@ const Rnd = @import("./builtins.zig").Rnd;
 const DebugToken = @import("./debug.zig").DebugToken;
 const Extern = @import("./extern.zig").Extern;
 const StateMap = @import("./state.zig").StateMap;
+const runners = @import("./runner.zig");
+const Runner = runners.Runner;
+const Dialogue = runners.Dialogue;
+const Choice = runners.Choice;
 
 test {
     _ = @import("./vm.test.zig");
@@ -23,7 +27,7 @@ test {
 }
 
 const stack_size = 4096;
-const frame_size = 1023;
+const frame_size = 255;
 const iterator_size = 255;
 const globals_size = 65535;
 const Value = values.Value;
@@ -35,18 +39,6 @@ const input_buf: [2]u8 = undefined;
 const InterpretResult = union(enum) {
     Completed,
     Paused,
-};
-
-pub const Dialogue = struct {
-    speaker: ?[]const u8,
-    content: []const u8,
-    tags: [][]const u8,
-};
-
-pub const Choice = struct {
-    content: []const u8,
-    count: usize,
-    ip: u16,
 };
 
 pub const Vm = struct {
@@ -68,17 +60,13 @@ pub const Vm = struct {
     ip: usize = 0,
     debug: bool = false,
 
-    on_dialogue: OnDialogue,
-    on_choices: OnChoices,
     /// Used to cache the choices
     choices_list: std.ArrayList(Choice),
     /// Used to send to the on_choices method
     current_choices: []Choice = undefined,
     /// Determines if the vm is waiting on input
     is_waiting: bool = false,
-
-    pub const OnDialogue = *const fn (vm: *Vm, dialogue: Dialogue) void;
-    pub const OnChoices = *const fn (vm: *Vm, choices: []Choice) void;
+    runner: *Runner,
 
     pub const Error = error{
         RuntimeError,
@@ -87,9 +75,6 @@ pub const Vm = struct {
     } || Compiler.Error;
 
     pub fn init(allocator: std.mem.Allocator, bytecode: ByteCode, runner: anytype, errors: *Errors) !Vm {
-        if (!std.meta.trait.hasFunctions(runner, .{ "on_dialogue", "on_choices" }))
-            return error.RuntimeError;
-
         var globals = try std.ArrayList(Value).initCapacity(allocator, bytecode.global_symbols.len);
         var externs = try std.ArrayList(Extern).initCapacity(allocator, bytecode.global_symbols.len);
         try globals.resize(bytecode.global_symbols.len);
@@ -106,12 +91,11 @@ pub const Vm = struct {
             .frames = try Stack(Frame).init(allocator, frame_size),
             .globals = globals,
             .externs = externs,
+            .runner = runner,
             .gc = Gc.init(allocator),
             .stack = try Stack(Value).init(allocator, stack_size),
             .iterators = try Stack(Iterator).init(allocator, iterator_size),
             .jump_backups = std.ArrayList(OpCode.Size(.jump)).init(allocator),
-            .on_dialogue = runner.on_dialogue,
-            .on_choices = runner.on_choices,
             .choices_list = std.ArrayList(Choice).init(allocator),
         };
     }
@@ -126,7 +110,6 @@ pub const Vm = struct {
         self.gc.deinit();
         for (self.externs.items) |*ext| ext.*.deinit();
         self.externs.deinit();
-        self.bytecode.free(self.allocator);
     }
 
     /// Add the current state to a StateMap
@@ -193,6 +176,11 @@ pub const Vm = struct {
 
     pub fn setExtern(self: *Vm, index: usize, comptime T: type, value: T) !void {
         self.globals.items[index] = Value.createFrom(T, value);
+    }
+
+    pub fn getExtern(self: *Vm, name: []const u8) Value {
+        var index = self.getExternIndex(name) catch return .{.nil};
+        return self.globals.items[index];
     }
 
     pub fn subscribe(self: *Vm, name: []const u8, callback: Extern.OnValueChanged) !void {
@@ -680,7 +668,7 @@ pub const Vm = struct {
                         .speaker = speaker,
                         .tags = try tags.toOwnedSlice(),
                     };
-                    self.on_dialogue(self, result);
+                    self.runner.onDialogue(self, result);
                 },
                 .call => {
                     const arg_count = self.readInt(OpCode.Size(.call));
@@ -751,7 +739,7 @@ pub const Vm = struct {
                 .fork => {
                     self.is_waiting = true;
                     self.current_choices = try self.choices_list.toOwnedSlice();
-                    self.on_choices(self, self.current_choices);
+                    self.runner.onChoices(self, self.current_choices);
                     self.choices_list.clearRetainingCapacity();
                 },
                 .choice => {

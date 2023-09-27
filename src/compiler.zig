@@ -1900,7 +1900,7 @@ test "Serialize" {
     try bytecode.serialize(file.writer());
 
     try file.seekTo(0);
-    var deserialized = try ByteCode.deserialize(file.reader(), allocator);
+    var deserialized = try ByteCode.deserialize(allocator, file.reader());
     defer deserialized.free(allocator);
     try testing.expectEqualSlices(u8, bytecode.instructions, deserialized.instructions);
     for (bytecode.constants, 0..) |constant, i| {

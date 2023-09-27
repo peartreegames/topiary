@@ -15,9 +15,9 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = b.addStaticLibrary(.{
+    const lib = b.addSharedLibrary(.{
         .name = "topi",
-        .root_source_file = .{ .path = "src/vm.zig" },
+        .root_source_file = .{ .path = "src/exports.zig" },
         .target = target,
         .optimize = optimize,
     });
