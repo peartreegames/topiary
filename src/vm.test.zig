@@ -48,6 +48,7 @@ pub const TestRunner = struct {
     }
 };
 
+var test_runner = TestRunner.init();
 pub fn initTestVm(source: []const u8, debug: bool) !Vm {
     var alloc = std.testing.allocator;
     var errors = Errors.init(alloc);
@@ -61,7 +62,6 @@ pub fn initTestVm(source: []const u8, debug: bool) !Vm {
         bytecode.print(std.debug);
     }
 
-    var test_runner = TestRunner.init();
     var vm = try Vm.init(alloc, bytecode, &test_runner.runner, &errors);
     return vm;
 }
@@ -988,7 +988,7 @@ test "Switch" {
     }
 }
 
-test "Externs" {
+test "Externs and Subscribers" {
     const test_cases = .{
         .{ .input = 
         \\ extern const value = 1
@@ -1004,12 +1004,12 @@ test "Externs" {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
         const Listener = struct {
-            pub fn onChange(value: Value) void {
+            pub fn onChange(_: usize, value: Value) void {
                 std.debug.print("\nListener::{}\n", .{value});
             }
         };
         try vm.setExternNumber("value", 2);
-        try vm.subscribe("value", Listener.onChange);
+        try vm.subscribeCallback("value", Listener.onChange);
         try vm.interpret();
         try testing.expect(case.value == vm.stack.previous().number);
     }
@@ -1038,9 +1038,9 @@ test "Save and Load State" {
     var vm2 = try initTestVm(second_case, false);
     defer vm2.deinit();
     try vm2.loadState(&save);
-    try testing.expectEqual(vm2.globals.items[0].number, 1);
+    try testing.expectEqual(vm2.globals[0].number, 1);
 
     try vm2.interpret();
 
-    try testing.expectEqual(vm2.globals.items[0].number, 6);
+    try testing.expectEqual(vm2.globals[0].number, 6);
 }

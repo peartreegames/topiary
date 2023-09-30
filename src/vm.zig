@@ -14,7 +14,7 @@ const Class = @import("./class.zig").Class;
 const builtins = @import("./builtins.zig");
 const Rnd = @import("./builtins.zig").Rnd;
 const DebugToken = @import("./debug.zig").DebugToken;
-const Extern = @import("./extern.zig").Extern;
+const Subscriber = @import("./subscriber.zig").Subscriber;
 const StateMap = @import("./state.zig").StateMap;
 const runners = @import("./runner.zig");
 const Runner = runners.Runner;
@@ -46,8 +46,8 @@ pub const Vm = struct {
     frames: Stack(Frame),
     err: *Errors,
     gc: Gc,
-    globals: std.ArrayList(Value),
-    externs: std.ArrayList(Extern),
+    globals: []Value,
+    subscribers: []Subscriber,
 
     stack: Stack(Value),
     /// Current iterators to allow easy nesting
@@ -75,22 +75,22 @@ pub const Vm = struct {
     } || Compiler.Error;
 
     pub fn init(allocator: std.mem.Allocator, bytecode: ByteCode, runner: anytype, errors: *Errors) !Vm {
-        var globals = try std.ArrayList(Value).initCapacity(allocator, bytecode.global_symbols.len);
-        var externs = try std.ArrayList(Extern).initCapacity(allocator, bytecode.global_symbols.len);
-        try globals.resize(bytecode.global_symbols.len);
-        try externs.resize(bytecode.global_symbols.len);
+        var globals = try allocator.alloc(Value, bytecode.global_symbols.len);
+        var subs = try allocator.alloc(Subscriber, bytecode.global_symbols.len);
 
-        for (bytecode.global_symbols, 0..) |sym, i| {
-            globals.items[i] = .void;
-            externs.items[i] = Extern.init(allocator, sym.is_extern);
+        var i: usize = 0;
+        while (i < bytecode.global_symbols.len) : (i += 1) {
+            globals[i] = .void;
+            subs[i] = Subscriber.init(allocator);
         }
+
         return .{
             .allocator = allocator,
             .bytecode = bytecode,
             .err = errors,
             .frames = try Stack(Frame).init(allocator, frame_size),
             .globals = globals,
-            .externs = externs,
+            .subscribers = subs,
             .runner = runner,
             .gc = Gc.init(allocator),
             .stack = try Stack(Value).init(allocator, stack_size),
@@ -105,11 +105,12 @@ pub const Vm = struct {
         self.stack.deinit();
         self.iterators.deinit();
         self.jump_backups.deinit();
-        self.globals.deinit();
         self.frames.deinit();
         self.gc.deinit();
-        for (self.externs.items) |*ext| ext.*.deinit();
-        self.externs.deinit();
+        for (self.subscribers) |*sub| sub.deinit();
+        self.allocator.free(self.subscribers);
+        self.allocator.free(self.globals);
+        self.bytecode.free(self.allocator);
     }
 
     /// Add the current state to a StateMap
@@ -118,8 +119,8 @@ pub const Vm = struct {
         if (count == 0) return;
 
         for (self.bytecode.global_symbols) |s| {
-            if (s.is_extern or self.globals.items[s.index] == .void) continue;
-            try state.put(s.name, self.globals.items[s.index]);
+            if (s.is_extern or self.globals[s.index] == .void) continue;
+            try state.put(s.name, self.globals[s.index]);
         }
     }
 
@@ -127,12 +128,12 @@ pub const Vm = struct {
     pub fn loadState(self: *Vm, state: *StateMap) !void {
         for (self.bytecode.global_symbols) |s| {
             var value = try state.get(s.name);
-            if (value) |v| self.globals.items[s.index] = v;
+            if (value) |v| self.globals[s.index] = v;
         }
     }
 
     pub fn roots(self: *Vm) []const []Value {
-        return &([_][]Value{ self.globals.items, self.stack.backing });
+        return &([_][]Value{ self.globals, self.stack.backing });
     }
 
     fn currentFrame(self: *Vm) *Frame {
@@ -153,13 +154,24 @@ pub const Vm = struct {
         self.allocator.free(self.current_choices);
     }
 
-    fn getExternIndex(self: *Vm, name: []const u8) !usize {
+    pub fn getGlobalsIndex(self: *Vm, name: []const u8) !usize {
         for (self.bytecode.global_symbols) |s| {
             if (!std.mem.eql(u8, name, s.name)) continue;
-            if (!s.is_extern) return error.IllegalOperation;
             return s.index;
         }
         return error.SymbolNotFound;
+    }
+
+    fn getExternIndex(self: *Vm, name: []const u8) !usize {
+        var index = try self.getGlobalsIndex(name);
+        if (!self.bytecode.global_symbols[index].is_extern) return error.IllegalOperation;
+        return index;
+    }
+
+    pub fn setExternString(self: *Vm, name: []const u8, value: []const u8) !void {
+        const index = try self.getExternIndex(name);
+        var str = try self.gc.create(self, .{ .string = try self.allocator.dupe(u8, value) });
+        self.globals[index] = str;
     }
 
     pub fn setExternNumber(self: *Vm, name: []const u8, value: f32) !void {
@@ -175,20 +187,31 @@ pub const Vm = struct {
     }
 
     pub fn setExtern(self: *Vm, index: usize, comptime T: type, value: T) !void {
-        self.globals.items[index] = Value.createFrom(T, value);
+        self.globals[index] = Value.createFrom(T, value);
     }
 
-    pub fn getExtern(self: *Vm, name: []const u8) Value {
-        var index = self.getExternIndex(name) catch return .{.nil};
-        return self.globals.items[index];
+    pub fn getExtern(self: *Vm, name: []const u8) !Value {
+        var index = self.getExternIndex(name) catch |err| {
+            if (err == Error.IllegalOperation) return err;
+            return values.Nil;
+        };
+        return self.globals[index];
     }
 
-    pub fn subscribe(self: *Vm, name: []const u8, callback: Extern.OnValueChanged) !void {
-        try self.externs.items[try self.getExternIndex(name)].subscribe(callback);
+    pub fn subscribeCallback(self: *Vm, name: []const u8, callback: Subscriber.OnValueChanged) !void {
+        try self.subscribers[try self.getGlobalsIndex(name)].subscribe(.{ .callback = callback });
     }
 
-    pub fn unsubscribe(self: *Vm, name: []const u8, callback: Extern.OnValueChanged) !void {
-        self.externs.items[try self.getExternIndex(name)].unsubscribe(callback);
+    pub fn subscribeDelegate(self: *Vm, name: []const u8, delegate: Subscriber.Delegate) !void {
+        try self.subscribers[try self.getGlobalsIndex(name)].subscribe(delegate);
+    }
+
+    pub fn unsubscribeCallback(self: *Vm, name: []const u8, callback: Subscriber.OnValueChanged) !void {
+        self.subscribers[try self.getGlobalsIndex(name)].unsubscribe(.{ .callback = callback });
+    }
+
+    pub fn unsubscribeDelegate(self: *Vm, name: []const u8, delegate: Subscriber.Delegate) !void {
+        self.subscribers[try self.getGlobalsIndex(name)].unsubscribe(delegate);
     }
 
     pub fn interpret(self: *Vm) !void {
@@ -335,23 +358,22 @@ pub const Vm = struct {
                     if (index > globals_size) return Error.RuntimeError;
                     var value = self.pop();
                     // global already set from loaded state
-                    if (self.globals.items[index] != .void) {
+                    if (self.globals[index] != .void) {
                         continue;
                     }
-                    self.globals.items[index] = value;
+                    self.globals[index] = value;
                 },
                 .set_global => {
                     const index = self.readInt(OpCode.Size(.set_global));
                     if (index > globals_size) return Error.RuntimeError;
-                    if (index >= self.globals.items.len) return Error.RuntimeError;
+                    if (index >= self.globals.len) return Error.RuntimeError;
                     const value = self.pop();
-                    self.globals.items[index] = value;
-                    var ext = self.externs.items[index];
-                    if (ext.isExtern()) ext.invoke(value);
+                    self.globals[index] = value;
+                    self.subscribers[index].invoke(value);
                 },
                 .get_global => {
                     const index = self.readInt(OpCode.Size(.get_global));
-                    const value = self.globals.items[index];
+                    const value = self.globals[index];
                     try self.push(value);
                 },
                 .set_local => {

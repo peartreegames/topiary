@@ -1,10 +1,12 @@
 const std = @import("std");
-const Vm = @import("vm.zig").Vm;
+const Vm = @import("./vm.zig").Vm;
+const values = @import("./values.zig");
 const Value = @import("./values.zig").Value;
-const Errors = @import("error.zig").Errors;
-const compileSource = @import("compiler.zig").compileSource;
-const ByteCode = @import("bytecode.zig").ByteCode;
+const Errors = @import("./error.zig").Errors;
+const compileSource = @import("./compiler.zig").compileSource;
+const ByteCode = @import("./bytecode.zig").ByteCode;
 const runners = @import("./runner.zig");
+const Subscriber = @import("./subscriber.zig").Subscriber;
 const Runner = runners.Runner;
 const Dialogue = runners.Dialogue;
 const Choice = runners.Choice;
@@ -12,23 +14,57 @@ const Choice = runners.Choice;
 // const alloc = std.testing.allocator;
 const alloc = std.heap.page_allocator;
 
-const ExternDialogue = struct {
+const ExportDialogue = extern struct {
     content: [*c]const u8,
     speaker: [*c]const u8,
     tags: [*][*c]const u8,
     tags_length: u8,
 };
 
-const ExternChoice = struct {
+const ExportChoice = extern struct {
     content: [*c]const u8,
     count: u8,
     ip: u32,
 };
 
-const OnExternDialogue = *const fn (vm_ptr: usize, dialogue: *ExternDialogue) void;
-const OnExternChoices = *const fn (vm_ptr: usize, choices: [*]*ExternChoice, choices_len: u8) void;
+const Tag = enum(u8) {
+    nil,
+    bool,
+    number,
+    string,
+};
 
-export fn compile(path_ptr: [*]const u8, length: usize) void {
+const ExportValue = extern struct {
+    tag: Tag,
+    data: extern union {
+        nil: void,
+        bool: bool,
+        number: f32,
+        string: [*c]const u8,
+    },
+
+    pub const Nil: ExportValue = .{ .tag = Tag.nil, .data = .{ .nil = {} } };
+    pub const True: ExportValue = .{ .tag = Tag.bool, .data = .{ .bool = true } };
+    pub const False: ExportValue = .{ .tag = Tag.bool, .data = .{ .bool = false } };
+
+    pub fn fromValue(value: Value) ExportValue {
+        return switch (value) {
+            .bool => |b| if (b) True else False,
+            .number => |n| .{ .tag = Tag.number, .data = .{ .number = n } },
+            .obj => |o| switch (o.data) {
+                .string => |s| .{ .tag = Tag.string, .data = .{ .string = s.ptr } },
+                else => Nil,
+            },
+            else => Nil,
+        };
+    }
+};
+
+const OnExportValueChanged = *const fn (value: *ExportValue) void;
+const OnExportDialogue = *const fn (vm_ptr: usize, dialogue: *ExportDialogue) void;
+const OnExportChoices = *const fn (vm_ptr: usize, choices: [*]*ExportChoice, choices_len: u8) void;
+
+export fn compile(path_ptr: [*c]const u8, length: usize) void {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
 
@@ -67,14 +103,73 @@ export fn selectChoice(vm_ptr: usize, index: usize) void {
     vm.selectChoice(index) catch @panic("Invalid choice");
 }
 
-export fn getVariable(vm_ptr: usize, name: [*c]const u8) Value {
+export fn tryGetVariable(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, out: *ExportValue) callconv(.C) bool {
     var vm: *Vm = @ptrFromInt(vm_ptr);
-    return vm.getExtern(name[0..]);
+
+    var index = vm.getGlobalsIndex(name_ptr[0..name_length]) catch {
+        out.* = .{ .tag = Tag.nil, .data = .{ .nil = {} } };
+        return false;
+    };
+    out.* = ExportValue.fromValue(vm.globals[index]);
+    return true;
+}
+
+const ExportCallback = struct {
+    callback: OnExportValueChanged,
+
+    pub fn init(callback: OnExportValueChanged) ExportCallback {
+        return .{
+            .callback = callback,
+        };
+    }
+
+    pub fn onValueChanged(context_ptr: usize, value: Value) void {
+        var self: *ExportCallback = @ptrFromInt(context_ptr);
+        var exp = alloc.create(ExportValue) catch @panic("Could not allocate ExportValue");
+        exp.* = ExportValue.fromValue(value);
+        self.callback(exp);
+        alloc.destroy(exp);
+    }
+
+    pub fn onUnsubscribe(context_ptr: usize, allocator: std.mem.Allocator) void {
+        var self: *ExportCallback = @ptrFromInt(context_ptr);
+        allocator.destroy(self);
+    }
+};
+
+export fn subscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, callback_ptr: usize) void {
+    var vm: *Vm = @ptrFromInt(vm_ptr);
+
+    const name = name_ptr[0..name_length];
+    var export_callback = vm.allocator.create(ExportCallback) catch @panic("Could not allocate ExportCallback");
+    export_callback.* = ExportCallback.init(@ptrFromInt(callback_ptr));
+
+    vm.subscribeDelegate(
+        name,
+        .{
+            .onUnsubscribe = &ExportCallback.onUnsubscribe,
+            .context_ptr = @intFromPtr(export_callback),
+            .callback = &ExportCallback.onValueChanged,
+        },
+    ) catch @panic("Could not subscribe to variable");
+}
+
+export fn unsubscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, callback_ptr: usize) void {
+    var vm: *Vm = @ptrFromInt(vm_ptr);
+
+    const name = name_ptr[0..name_length];
+    var callback: OnExportValueChanged = @ptrFromInt(callback_ptr);
+    const export_callback = @fieldParentPtr(ExportCallback, "callback", &callback);
+
+    vm.unsubscribeDelegate(name, .{
+        .context_ptr = @intFromPtr(export_callback),
+        .callback = &ExportCallback.onValueChanged,
+    }) catch @panic("Could not unsubscribe from variable");
 }
 
 export fn createVm(path_ptr: [*c]const u8, path_len: usize, on_dialogue_ptr: usize, on_choice_ptr: usize) usize {
-    const on_dialogue: OnExternDialogue = @ptrFromInt(on_dialogue_ptr);
-    const on_choices: OnExternChoices = @ptrFromInt(on_choice_ptr);
+    const on_dialogue: OnExportDialogue = @ptrFromInt(on_dialogue_ptr);
+    const on_choices: OnExportChoices = @ptrFromInt(on_choice_ptr);
 
     var path = path_ptr[0..path_len];
     const bytecode_file = std.fs.cwd().openFile(path, .{}) catch @panic("Could not open file for vm");
@@ -83,10 +178,13 @@ export fn createVm(path_ptr: [*c]const u8, path_len: usize, on_dialogue_ptr: usi
     var bytecode = ByteCode.deserialize(alloc, bytecode_file.reader()) catch @panic("Could not deserialize bytecode");
     var errors = alloc.create(Errors) catch @panic("Could not allocate errors");
     errors.* = Errors.init(alloc);
-    var extern_runner = alloc.create(ExternRunner) catch @panic("Could not allocate runner");
-    extern_runner.* = ExternRunner.init(alloc, on_dialogue, on_choices);
+
+    var extern_runner = alloc.create(ExportRunner) catch @panic("Could not allocate runner");
+    extern_runner.* = ExportRunner.init(alloc, on_dialogue, on_choices);
+
     var vm = alloc.create(Vm) catch @panic("Could not allocate vm");
     vm.* = Vm.init(alloc, bytecode, &extern_runner.runner, errors) catch @panic("Could not initialize Vm");
+
     return @intFromPtr(vm);
 }
 
@@ -94,27 +192,26 @@ export fn destroyVm(vm_ptr: usize) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     vm.err.deinit();
     alloc.destroy(vm.err);
-    vm.bytecode.free(alloc);
     vm.deinit();
-    var runner = @fieldParentPtr(ExternRunner, "runner", vm.runner);
+    var runner = @fieldParentPtr(ExportRunner, "runner", vm.runner);
     alloc.destroy(runner);
     alloc.destroy(vm);
 }
 
-const ExternRunner = struct {
-    onExternDialogue: OnExternDialogue,
-    onExternChoices: OnExternChoices,
+const ExportRunner = struct {
+    onExportDialogue: OnExportDialogue,
+    onExportChoices: OnExportChoices,
     allocator: std.mem.Allocator,
 
     runner: Runner,
     tags: [255][*c]const u8,
-    dialogue: ExternDialogue = undefined,
+    dialogue: ExportDialogue = undefined,
 
-    pub fn init(allocator: std.mem.Allocator, on_dialogue: OnExternDialogue, on_choices: OnExternChoices) ExternRunner {
+    pub fn init(allocator: std.mem.Allocator, on_dialogue: OnExportDialogue, on_choices: OnExportChoices) ExportRunner {
         return .{
             .allocator = allocator,
-            .onExternDialogue = on_dialogue,
-            .onExternChoices = on_choices,
+            .onExportDialogue = on_dialogue,
+            .onExportChoices = on_choices,
             .tags = [_][*c]const u8{0} ** 255,
             .runner = .{
                 .onDialogueFn = onDialogue,
@@ -124,7 +221,7 @@ const ExternRunner = struct {
     }
 
     pub fn onDialogue(runner: *Runner, vm: *Vm, dialogue: Dialogue) void {
-        var self = @fieldParentPtr(ExternRunner, "runner", runner);
+        var self = @fieldParentPtr(ExportRunner, "runner", runner);
 
         var i: usize = 0;
         while (i < dialogue.tags.len) : (i += 1) {
@@ -136,15 +233,15 @@ const ExternRunner = struct {
             .tags = &self.tags,
             .tags_length = @intCast(dialogue.tags.len),
         };
-        self.onExternDialogue(@intFromPtr(vm), &self.dialogue);
+        self.onExportDialogue(@intFromPtr(vm), &self.dialogue);
     }
 
     pub fn onChoices(runner: *Runner, vm: *Vm, choices: []Choice) void {
-        var self = @fieldParentPtr(ExternRunner, "runner", runner);
+        var self = @fieldParentPtr(ExportRunner, "runner", runner);
         var i: usize = 0;
-        var result = self.allocator.alloc(*ExternChoice, choices.len) catch @panic("Could not allocate choices");
+        var result = self.allocator.alloc(*ExportChoice, choices.len) catch @panic("Could not allocate choices");
         while (i < choices.len) : (i += 1) {
-            var choice = self.allocator.create(ExternChoice) catch @panic("Could not create Choice");
+            var choice = self.allocator.create(ExportChoice) catch @panic("Could not create Choice");
             choice.* = .{
                 .content = choices[i].content.ptr,
                 .count = @intCast(choices[i].count),
@@ -152,14 +249,14 @@ const ExternRunner = struct {
             };
             result[i] = choice;
         }
-        self.onExternChoices(@intFromPtr(vm), result.ptr, @intCast(result.len));
+        self.onExportChoices(@intFromPtr(vm), result.ptr, @intCast(result.len));
         for (result) |choice| self.allocator.destroy(choice);
         self.allocator.free(result);
     }
 };
 
 const TestRunner = struct {
-    pub fn onDialogue(vm_ptr: usize, dialogue: *ExternDialogue) void {
+    pub fn onDialogue(vm_ptr: usize, dialogue: *ExportDialogue) void {
         std.debug.print("{s}: {s}\n", .{
             dialogue.speaker,
             dialogue.content,
@@ -167,7 +264,7 @@ const TestRunner = struct {
         selectContinue(vm_ptr);
     }
 
-    pub fn onChoices(vm_ptr: usize, choices: [*]*ExternChoice, choices_len: u8) void {
+    pub fn onChoices(vm_ptr: usize, choices: [*]*ExportChoice, choices_len: u8) void {
         for (choices, 0..choices_len) |choice, i| {
             std.debug.print("[{d}] {s}\n", .{ i, choice.content });
         }
@@ -175,11 +272,17 @@ const TestRunner = struct {
     }
 };
 
+fn testSubscriber(value: ExportValue) void {
+    std.debug.print("ExportSubscriber: {s}\n", .{value.data.string});
+}
+
 test "Create and Destroy Vm" {
     const text =
+        \\ var value = "test 123"
         \\ === START {
         \\     :: "A person approaches."
         \\     :Stranger: "Hey there."
+        \\     value = "321 test"
         \\     fork^ {
         \\         ~ "Greet them." {
         \\             :Drew: "Oh, uh, nice to meet you. My name is Drew."
@@ -203,11 +306,32 @@ test "Create and Destroy Vm" {
     try file.writeAll(text);
     compile(path, path.len);
     var compiled_path = "./test.topib";
-    const on_dialogue: OnExternDialogue = TestRunner.onDialogue;
-    const on_choices: OnExternChoices = TestRunner.onChoices;
+    const on_dialogue: OnExportDialogue = TestRunner.onDialogue;
+    const on_choices: OnExportChoices = TestRunner.onChoices;
     var vm_ptr = createVm(compiled_path, compiled_path.len, @intFromPtr(on_dialogue), @intFromPtr(on_choices));
 
+    var val_name = "value";
+    subscribe(
+        vm_ptr,
+        val_name,
+        val_name.len,
+        @intFromPtr(&testSubscriber),
+    );
     run(vm_ptr);
+    unsubscribe(
+        vm_ptr,
+        val_name,
+        val_name.len,
+        @intFromPtr(&testSubscriber),
+    );
+
+    var out: ExportValue = undefined;
+    if (tryGetVariable(
+        vm_ptr,
+        val_name,
+        val_name.len,
+        &out,
+    )) std.debug.print("GETVARIALBE:: {s}\n", .{out.data.string});
     destroyVm(vm_ptr);
     try std.fs.cwd().deleteFile(path);
     try std.fs.cwd().deleteFile(compiled_path);
