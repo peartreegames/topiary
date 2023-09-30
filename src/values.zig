@@ -131,7 +131,7 @@ pub const Value = union(Type) {
 
     pub fn len(self: Value) usize {
         return switch (self) {
-            .range => |r| @as(usize, @intCast(std.math.absInt(r.end - r.start) catch 0)) + 1,
+            .range => |r| @as(usize, @intCast(@abs(r.end - r.start))) + 1,
             .obj => |o| switch (o.data) {
                 .string => |s| s.len,
                 .list => |l| l.items.len,
