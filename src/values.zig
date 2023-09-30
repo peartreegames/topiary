@@ -455,7 +455,7 @@ pub const Value = union(Type) {
             _ = self;
             if (@intFromEnum(a) != @intFromEnum(b)) return false;
             return switch (a) {
-                .number => |n| @fabs(n - b.number) < 0.00001,
+                .number => |n| @abs(n - b.number) < 0.00001,
                 .bool => |bl| bl == b.bool,
                 .nil => b == .nil,
                 .obj => |o| {
