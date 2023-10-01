@@ -64,27 +64,21 @@ const OnExportValueChanged = *const fn (value: *ExportValue) void;
 const OnExportDialogue = *const fn (vm_ptr: usize, dialogue: *ExportDialogue) void;
 const OnExportChoices = *const fn (vm_ptr: usize, choices: [*]*ExportChoice, choices_len: u8) void;
 
-export fn compile(path_ptr: [*c]const u8, length: usize) void {
+export fn compile(source_ptr: [*c]const u8, length: usize, out_ptr: [*c]u8, max: usize) void {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
-
-    var path = path_ptr[0..length];
-    const source_file = std.fs.cwd().openFile(path, .{}) catch @panic("Could not open file for compiler");
-    defer source_file.close();
-
-    var output_file_name = std.fmt.allocPrint(arena.allocator(), "{s}b", .{path}) catch @panic("Could not allocate new file name string.");
-    const output_file = std.fs.cwd().createFile(output_file_name, .{ .read = true }) catch @panic("Could not create new file.");
-    var writer = output_file.writer();
-    defer output_file.close();
-
-    var content_alloc = arena.allocator();
-    var source = source_file.reader().readAllAlloc(content_alloc, 10_000) catch @panic("Could not read file.");
-    defer content_alloc.free(source);
 
     var errors = Errors.init(arena.allocator());
     defer errors.deinit();
 
-    var bytecode = compileSource(arena.allocator(), source, &errors) catch @panic("Could not compile source");
+    var bytecode = compileSource(
+        arena.allocator(),
+        source_ptr[0..length],
+        &errors,
+    ) catch @panic("Could not compile source");
+
+    var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
+    var writer = fbs.writer();
     bytecode.serialize(writer) catch @panic("Could not serialize bytecode.");
 }
 
@@ -167,15 +161,12 @@ export fn unsubscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize,
     }) catch @panic("Could not unsubscribe from variable");
 }
 
-export fn createVm(path_ptr: [*c]const u8, path_len: usize, on_dialogue_ptr: usize, on_choice_ptr: usize) usize {
+export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_ptr: usize, on_choice_ptr: usize) usize {
     const on_dialogue: OnExportDialogue = @ptrFromInt(on_dialogue_ptr);
     const on_choices: OnExportChoices = @ptrFromInt(on_choice_ptr);
 
-    var path = path_ptr[0..path_len];
-    const bytecode_file = std.fs.cwd().openFile(path, .{}) catch @panic("Could not open file for vm");
-    defer bytecode_file.close();
-
-    var bytecode = ByteCode.deserialize(alloc, bytecode_file.reader()) catch @panic("Could not deserialize bytecode");
+    var fbs = std.io.fixedBufferStream(source_ptr[0..source_len]);
+    var bytecode = ByteCode.deserialize(alloc, fbs.reader()) catch @panic("Could not deserialize bytecode");
     var errors = alloc.create(Errors) catch @panic("Could not allocate errors");
     errors.* = Errors.init(alloc);
 
@@ -299,16 +290,11 @@ test "Create and Destroy Vm" {
         \\ => START
     ;
 
-    const path = "./test.topi";
-    const file = try std.fs.cwd().createFile(path, .{});
-    defer file.close();
-
-    try file.writeAll(text);
-    compile(path, path.len);
-    var compiled_path = "./test.topib";
+    var buf: [1028]u8 = undefined;
+    compile(text.ptr, text.len, &buf, buf.len);
     const on_dialogue: OnExportDialogue = TestRunner.onDialogue;
     const on_choices: OnExportChoices = TestRunner.onChoices;
-    var vm_ptr = createVm(compiled_path, compiled_path.len, @intFromPtr(on_dialogue), @intFromPtr(on_choices));
+    var vm_ptr = createVm(&buf, buf.len, @intFromPtr(on_dialogue), @intFromPtr(on_choices));
 
     var val_name = "value";
     subscribe(
@@ -333,6 +319,4 @@ test "Create and Destroy Vm" {
         &out,
     )) std.debug.print("GETVARIALBE:: {s}\n", .{out.data.string});
     destroyVm(vm_ptr);
-    try std.fs.cwd().deleteFile(path);
-    try std.fs.cwd().deleteFile(compiled_path);
 }
