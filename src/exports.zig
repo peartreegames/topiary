@@ -2,6 +2,7 @@ const std = @import("std");
 const Vm = @import("./vm.zig").Vm;
 const values = @import("./values.zig");
 const Value = @import("./values.zig").Value;
+const ExportValue = @import("./export-value.zig").ExportValue;
 const Errors = @import("./error.zig").Errors;
 const compileSource = @import("./compiler.zig").compileSource;
 const ByteCode = @import("./bytecode.zig").ByteCode;
@@ -25,39 +26,6 @@ const ExportChoice = extern struct {
     content: [*c]const u8,
     count: u8,
     ip: u32,
-};
-
-const Tag = enum(u8) {
-    nil,
-    bool,
-    number,
-    string,
-};
-
-const ExportValue = extern struct {
-    tag: Tag,
-    data: extern union {
-        nil: void,
-        bool: bool,
-        number: f32,
-        string: [*c]const u8,
-    },
-
-    pub const Nil: ExportValue = .{ .tag = Tag.nil, .data = .{ .nil = {} } };
-    pub const True: ExportValue = .{ .tag = Tag.bool, .data = .{ .bool = true } };
-    pub const False: ExportValue = .{ .tag = Tag.bool, .data = .{ .bool = false } };
-
-    pub fn fromValue(value: Value) ExportValue {
-        return switch (value) {
-            .bool => |b| if (b) True else False,
-            .number => |n| .{ .tag = Tag.number, .data = .{ .number = n } },
-            .obj => |o| switch (o.data) {
-                .string => |s| .{ .tag = Tag.string, .data = .{ .string = s.ptr } },
-                else => Nil,
-            },
-            else => Nil,
-        };
-    }
 };
 
 const OnExportValueChanged = *const fn (value: *ExportValue) void;
@@ -97,15 +65,19 @@ export fn selectChoice(vm_ptr: usize, index: usize) void {
     vm.selectChoice(index) catch @panic("Invalid choice");
 }
 
-export fn tryGetVariable(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, out: *ExportValue) callconv(.C) bool {
+export fn tryGetValue(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, out: *ExportValue) callconv(.C) bool {
     var vm: *Vm = @ptrFromInt(vm_ptr);
 
     var index = vm.getGlobalsIndex(name_ptr[0..name_length]) catch {
-        out.* = .{ .tag = Tag.nil, .data = .{ .nil = {} } };
+        out.* = ExportValue.Nil;
         return false;
     };
-    out.* = ExportValue.fromValue(vm.globals[index]);
+    out.* = ExportValue.fromValue(vm.globals[index], alloc);
     return true;
+}
+
+export fn destroyValue(value: *ExportValue) void {
+    value.deinit(alloc);
 }
 
 const ExportCallback = struct {
@@ -120,7 +92,7 @@ const ExportCallback = struct {
     pub fn onValueChanged(context_ptr: usize, value: Value) void {
         var self: *ExportCallback = @ptrFromInt(context_ptr);
         var exp = alloc.create(ExportValue) catch @panic("Could not allocate ExportValue");
-        exp.* = ExportValue.fromValue(value);
+        exp.* = ExportValue.fromValue(value, alloc);
         self.callback(exp);
         alloc.destroy(exp);
     }
@@ -270,6 +242,7 @@ fn testSubscriber(value: ExportValue) void {
 test "Create and Destroy Vm" {
     const text =
         \\ var value = "test 123"
+        \\ var list = [1,2,3,4]
         \\ === START {
         \\     :: "A person approaches."
         \\     :Stranger: "Hey there."
@@ -290,7 +263,7 @@ test "Create and Destroy Vm" {
         \\ => START
     ;
 
-    var buf: [1028]u8 = undefined;
+    var buf: [4096]u8 = undefined;
     compile(text.ptr, text.len, &buf, buf.len);
     const on_dialogue: OnExportDialogue = TestRunner.onDialogue;
     const on_choices: OnExportChoices = TestRunner.onChoices;
@@ -311,12 +284,16 @@ test "Create and Destroy Vm" {
         @intFromPtr(&testSubscriber),
     );
 
+    var list_name = "list";
     var out: ExportValue = undefined;
-    if (tryGetVariable(
+    if (tryGetValue(
         vm_ptr,
-        val_name,
-        val_name.len,
+        list_name,
+        list_name.len,
         &out,
-    )) std.debug.print("GETVARIALBE:: {s}\n", .{out.data.string});
+    )) {
+       std.debug.print("GETVARIALBE:: {any}\n", .{out.data.list.items[0..out.data.list.count]});
+       destroyValue(&out);
+    }
     destroyVm(vm_ptr);
 }
