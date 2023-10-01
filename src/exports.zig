@@ -243,6 +243,8 @@ test "Create and Destroy Vm" {
     const text =
         \\ var value = "test 123"
         \\ var list = [1,2,3,4]
+        \\ var set = {"some", "string", "values"}
+        \\ var map = {0: 0.0001, 1: 1.1111, 2: 2.222 }
         \\ === START {
         \\     :: "A person approaches."
         \\     :Stranger: "Hey there."
@@ -285,15 +287,45 @@ test "Create and Destroy Vm" {
     );
 
     var list_name = "list";
-    var out: ExportValue = undefined;
+    var list_value: ExportValue = undefined;
     if (tryGetValue(
         vm_ptr,
         list_name,
         list_name.len,
-        &out,
+        &list_value,
     )) {
-       std.debug.print("GETVARIALBE:: {any}\n", .{out.data.list.items[0..out.data.list.count]});
-       destroyValue(&out);
+        for (list_value.data.list.items[0..list_value.data.list.count]) |item| {
+            std.debug.print("List Item: {d}\n", .{item.data.number});
+        }
+        destroyValue(&list_value);
+    }
+
+    var set_name = "set";
+    var set_value: ExportValue = undefined;
+    if (tryGetValue(
+        vm_ptr,
+        set_name,
+        set_name.len,
+        &set_value,
+    )) {
+        for (set_value.data.list.items[0..set_value.data.list.count]) |item| {
+            std.debug.print("Set Item: {s}\n", .{item.data.string});
+        }
+        destroyValue(&set_value);
+    }
+
+    var map_name = "map";
+    var map_value: ExportValue = undefined;
+    if (tryGetValue(
+        vm_ptr,
+        map_name,
+        map_name.len,
+        &map_value,
+    )) {
+        for (map_value.data.list.items[0 .. map_value.data.list.count * 2]) |item| {
+            std.debug.print("Map Item: {d}\n", .{item.data.number});
+        }
+        destroyValue(&map_value);
     }
     destroyVm(vm_ptr);
 }
