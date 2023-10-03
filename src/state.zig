@@ -2,6 +2,7 @@ const std = @import("std");
 const Value = @import("./values.zig").Value;
 const ByteCode = @import("./bytecode.zig").ByteCode;
 const Vm = @import("./vm.zig").Vm;
+const UUID = @import("./utils/uuid.zig").UUID;
 
 const testing = std.testing;
 
@@ -51,8 +52,10 @@ pub const StateMap = struct {
         while (it.next()) |entry| {
             try writer.writeIntBig(u16, @as(u8, @intCast(entry.key_ptr.*.len)));
             try writer.writeAll(entry.key_ptr.*);
+            try writer.writeAll(":");
             try writer.writeIntBig(u32, @as(u32, @intCast(entry.value_ptr.*.len)));
             try writer.writeAll(entry.value_ptr.*);
+            try writer.writeAll("\n");
         }
     }
 
@@ -65,10 +68,12 @@ pub const StateMap = struct {
             var length = try reader.readIntBig(u16);
             var buf = try allocator.alloc(u8, length);
             try reader.readNoEof(buf);
+            _ = try reader.readByte();
             var value_length = try reader.readIntBig(u32);
             var value = try allocator.alloc(u8, value_length);
             try reader.readNoEof(value);
             try state.map.put(buf, value);
+            _ = try reader.readByte();
         }
         return state;
     }
@@ -78,7 +83,25 @@ test "Stringify" {
     var alloc = testing.allocator;
     var map = StateMap.init(alloc);
     defer map.deinit();
-    try map.put("a", .{ .number = 1.0 });
+    try map.put("a", .{ .number = 71.005 });
+
+    var str = try alloc.create(Value.Obj);
+    defer alloc.destroy(str);
+    str.* = .{ .data = .{ .string = "some text value" } };
+    str.*.id = UUID.new();
+    try map.put("b", .{ .obj = str });
+
+    try map.put("c", .{ .bool = true });
+
+    var list_obj = try alloc.create(Value.Obj);
+    defer alloc.destroy(list_obj);
+    var list = std.ArrayList(Value).init(alloc);
+    defer list.deinit();
+    try list.append(.{ .number = 5 });
+    try list.append(.{ .number = 6 });
+    list_obj.* = .{ .data = .{ .list = list } };
+    try map.put("d", .{ .obj = list_obj });
+
     var data = std.ArrayList(u8).init(testing.allocator);
     defer data.deinit();
     try map.serialize(data.writer());
@@ -87,5 +110,6 @@ test "Stringify" {
     var copy = try StateMap.deserialize(alloc, buf.reader());
     defer copy.deinit();
     try testing.expect(copy.map.contains("a"));
-    try testing.expect((try copy.get("a")).?.eql(.{ .number = 1.0 }));
+    try testing.expect((try copy.get("a")).?.eql(.{ .number = 71.005 }));
+    std.log.warn("\n{s}\n", .{data.items});
 }

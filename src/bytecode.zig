@@ -2,12 +2,14 @@ const std = @import("std");
 const Value = @import("./values.zig").Value;
 const OpCode = @import("./opcode.zig").OpCode;
 const DebugToken = @import("./debug.zig").DebugToken;
+const UUID = @import("./utils/uuid.zig").UUID;
 
 pub const ByteCode = struct {
     instructions: []u8,
     constants: []Value,
     tokens: []DebugToken,
     global_symbols: []GlobalSymbol,
+    uuids: []UUID.ID,
     locals_count: usize,
 
     pub const GlobalSymbol = struct {
@@ -25,6 +27,7 @@ pub const ByteCode = struct {
         }
         allocator.free(self.constants);
         allocator.free(self.tokens);
+        allocator.free(self.uuids);
         for (self.global_symbols) |s| allocator.free(s.name);
         allocator.free(self.global_symbols);
     }
@@ -36,6 +39,8 @@ pub const ByteCode = struct {
         try writer.writeAll(self.instructions);
         try writer.writeIntBig(u64, @as(u64, @intCast(self.constants.len)));
         for (self.constants) |constant| try constant.serialize(writer);
+        try writer.writeIntBig(u64, @as(u64, @intCast(self.uuids.len)));
+        for (self.uuids) |uuid| try writer.writeAll(&uuid);
         try writer.writeIntBig(u64, @as(u64, @intCast(self.global_symbols.len)));
         for (self.global_symbols) |sym| {
             try writer.writeIntBig(u8, @as(u8, @intCast(sym.name.len)));
@@ -54,9 +59,16 @@ pub const ByteCode = struct {
         for (0..constant_count) |i| {
             constants[i] = try Value.deserialize(reader, allocator);
         }
+        var uuid_count = try reader.readIntBig(u64);
+        var uuids = try allocator.alloc(UUID.ID, uuid_count);
+        var count: usize = 0;
+        while (count < uuid_count) : (count += 1) {
+            try reader.readNoEof(&uuids[count]);
+        }
+
         var globals_count = try reader.readIntBig(u64);
         var global_symbols = try allocator.alloc(GlobalSymbol, globals_count);
-        var count: usize = 0;
+        count = 0;
         while (count < globals_count) : (count += 1) {
             var length = try reader.readIntBig(u8);
             var buf = try allocator.alloc(u8, length);
@@ -74,6 +86,7 @@ pub const ByteCode = struct {
             .constants = constants,
             .tokens = &[_]DebugToken{},
             .global_symbols = global_symbols,
+            .uuids = uuids,
             .locals_count = 0,
         };
     }
@@ -101,10 +114,9 @@ pub const ByteCode = struct {
                 .list,
                 .map,
                 .set,
-                .choice,
                 .backup,
                 => {
-                    var dest = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
+                    const dest = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
                     writer.print("{d: >8}", .{dest});
                     i += 2;
                 },
@@ -130,11 +142,20 @@ pub const ByteCode = struct {
                     }
                 },
                 .dialogue => {
-                    var has_speaker = instructions[i] == 1;
-                    var tag_count = instructions[i + 1];
-                    i += 2;
+                    const has_speaker = instructions[i] == 1;
+                    const tag_count = instructions[i + 1];
+                    var id = std.mem.readIntSliceBig(u8, instructions[(i + 2)..(i + 4)]);
+                    i += 4;
                     writer.print("{: >8}", .{has_speaker});
                     writer.print("{d: >4}", .{tag_count});
+                    writer.print(" {d}", .{id});
+                },
+                .choice => {
+                    const dest = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
+                    const id = std.mem.readIntSliceBig(u8, instructions[(i + 2)..(i + 4)]);
+                    writer.print("{d: >8}", .{dest});
+                    writer.print(" {d}", .{id});
+                    i += 2;
                 },
                 .string, .closure => {
                     var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);

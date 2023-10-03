@@ -1,16 +1,15 @@
 const std = @import("std");
 const ast = @import("./ast.zig");
 const Gc = @import("./gc.zig").Gc;
-const uuid = @import("./utils/uuid.zig");
+const UUID = @import("./utils/uuid.zig").UUID;
 const ByteCode = @import("./bytecode.zig").ByteCode;
 const Builtin = @import("./builtins.zig").Builtin;
 const OpCode = @import("./opcode.zig").OpCode;
 const Enum = @import("./enum.zig").Enum;
 const Class = @import("./class.zig").Class;
 
+const ID = UUID.ID;
 const Allocator = std.mem.Allocator;
-const ID = uuid.ID;
-const UUID = uuid.UUID;
 
 pub const True = Value{ .bool = true };
 pub const False = Value{ .bool = false };
@@ -181,7 +180,7 @@ pub const Value = union(Type) {
     pub fn serialize(self: Value, writer: anytype) !void {
         try writer.writeByte(@intFromEnum(@as(Type, self)));
         switch (self) {
-            .bool => |b| try writer.writeByte(if (b) 1 else 0),
+            .bool => |b| try writer.writeByte(if (b) '1' else '0'),
             .number => |n| {
                 var buf: [512]u8 = undefined;
                 var buf_stream = std.io.fixedBufferStream(&buf);
@@ -242,7 +241,7 @@ pub const Value = union(Type) {
         var value_type: Type = @enumFromInt(try reader.readByte());
         return switch (value_type) {
             .nil => Nil,
-            .bool => if (try reader.readByte() == 1) True else False,
+            .bool => if (try reader.readByte() == '1') True else False,
             .number => {
                 var length = try reader.readIntBig(u16);
                 var buf = try allocator.alloc(u8, length);

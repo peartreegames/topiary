@@ -26,6 +26,7 @@ pub const JumpTree = struct {
             };
             return node;
         }
+
         pub fn destroy(self: *const Node, allocator: std.mem.Allocator) void {
             for (self.children.items) |child| {
                 child.destroy(allocator);
@@ -46,6 +47,21 @@ pub const JumpTree = struct {
                 if (std.mem.eql(u8, child.name, name)) return child;
             }
             return error.SymbolNotFound;
+        }
+
+        pub fn writePath(self: *const Node, writer: anytype) !void {
+            var node: ?*const Node = self;
+            var list = std.ArrayList(*const Node).init(std.heap.page_allocator);
+            defer list.deinit();
+            while (node) |n| {
+                try list.append(node.?);
+                node = n.parent;
+            }
+            std.mem.reverse(*const Node, list.items);
+            for (list.items) |n| {
+                writer.writeAll(n.name) catch break;
+                writer.writeAll(".") catch break;
+            }
         }
 
         pub fn print(self: *const Node, writer: anytype, depth: usize) void {

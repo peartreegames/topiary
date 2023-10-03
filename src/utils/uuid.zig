@@ -1,34 +1,28 @@
 const std = @import("std");
 
-const chars: []const u8 = "0123456789ABCDEF";
-
-pub const ID = [UUID.Size]u8;
-
 pub const UUID = struct {
-    const Self = @This();
-    pub const Size: usize = 36;
-    pub const Empty: ID = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 45, 0, 0, 0, 0, 45, 4, 0, 0, 0, 45, 0, 0, 0, 0, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    id: ID,
+    pub const ID = [Size]u8;
+    pub const Empty: ID = [_]u8{ '0', '0', '0', '0', '0', '0', '-', '0', '0', '0', '0', '0', '0' };
 
-    pub fn create() !ID {
-        return UUID.new(@intCast(std.time.milliTimestamp()));
+    const Self = @This();
+    const Size: usize = 13;
+    const chars: []const u8 = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
+    pub fn new() ID {
+        return create(@intCast(std.time.milliTimestamp()));
     }
-    pub fn new(seed: u64) !ID {
+
+    pub fn create(seed: u64) ID {
         var r = std.rand.DefaultPrng.init(seed);
-        var uu = try std.heap.page_allocator.create(Self);
+        var id: ID = undefined;
 
         var i: usize = 0;
-        while (i < 36) : (i += 1) {
-            var res: u8 = r.random().uintLessThanBiased(u8, 16);
-            uu.id[i] = chars[res];
+        while (i < Size) : (i += 1) {
+            var res: u8 = r.random().uintLessThanBiased(u8, chars.len);
+            id[i] = chars[res];
         }
 
-        uu.id[8] = '-';
-        uu.id[13] = '-';
-        uu.id[14] = '4';
-        uu.id[18] = '-';
-        uu.id[23] = '-';
-
-        return uu.id;
+        id[6] = '-';
+        return id;
     }
 };

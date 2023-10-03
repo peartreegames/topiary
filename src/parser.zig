@@ -784,8 +784,9 @@ pub const Parser = struct {
 
     fn forkStatement(self: *Parser) Error!Statement {
         const start = self.current_token;
-        var name: ?[]const u8 = null;
         self.next();
+
+        var name: ?[]const u8 = null;
         var is_backup: bool = false;
         if (self.currentIs(.caret)) {
             is_backup = true;
@@ -807,6 +808,9 @@ pub const Parser = struct {
 
     fn choiceStatement(self: *Parser) Error!Statement {
         const start = self.current_token;
+        const is_unique = self.peekIs(.star);
+        if (is_unique) self.next();
+
         self.next();
         var text = try self.stringExpression();
         self.next();
@@ -815,6 +819,7 @@ pub const Parser = struct {
             .type = .{
                 .choice = .{
                     .text = text,
+                    .is_unique = is_unique,
                     .body = try self.block(),
                 },
             },
@@ -841,7 +846,8 @@ pub const Parser = struct {
         var tags = std.ArrayList([]const u8).init(self.allocator);
         while (self.peekIs(.hash)) {
             self.next();
-            try tags.append(try self.getStringValue());
+            var tag = try self.getStringValue();
+            try tags.append(tag);
         }
 
         return .{

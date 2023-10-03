@@ -31,13 +31,18 @@ pub const TestRunner = struct {
         if (dialogue.speaker) |speaker| {
             std.debug.print("{s}: ", .{speaker});
         }
-        std.debug.print("{s}\n", .{dialogue.content});
+        std.debug.print("{s} ", .{dialogue.content});
+        for (dialogue.tags) |tag| {
+            std.debug.print("#{s} ", .{tag});
+        }
+        std.debug.print("    ID:{s}\n", .{dialogue.id});
         vm.selectContinue();
     }
 
     pub fn onChoices(_: *Runner, vm: *Vm, choices: []Choice) void {
         for (choices, 0..) |choice, i| {
-            std.debug.print("[{d}] {s}\n", .{ i, choice.content });
+            std.debug.print("[{d}] {s} ", .{ i, choice.content });
+            std.debug.print("    ID:{s}\n", .{choice.id});
         }
 
         var rnd = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
@@ -683,7 +688,7 @@ test "Boughs" {
     const test_cases = .{
         .{ .input = 
         \\ === START {
-        \\    :speaker: "Text goes here"
+        \\    :speaker: "Text goes here" #tag1 #tag2
         \\    :speaker: "More text here"
         \\ }
         \\ => START
@@ -760,7 +765,7 @@ test "Boughs" {
 
     inline for (test_cases) |case| {
         std.debug.print("\n======\n", .{});
-        var vm = try initTestVm(case.input, false);
+        var vm = try initTestVm(case.input, true);
         defer vm.deinit();
         try vm.interpret();
     }

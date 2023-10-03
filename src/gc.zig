@@ -35,7 +35,7 @@ pub const Gc = struct {
     pub fn create(self: *Gc, root_ctx: anytype, data: Obj.Data) !Value {
         var obj = try self.allocator.create(Obj);
         obj.* = .{
-            .id = try UUID.create(),
+            .id = UUID.new(),
             .data = data,
             .next = self.stack,
         };

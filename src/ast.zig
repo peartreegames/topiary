@@ -127,6 +127,7 @@ pub const Statement = struct {
         },
         choice: struct {
             text: Expression,
+            is_unique: bool,
             body: []const Statement,
         },
         dialogue: struct {

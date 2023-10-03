@@ -14,6 +14,7 @@ const builtins = @import("./builtins.zig").builtins;
 const ByteCode = @import("./bytecode.zig").ByteCode;
 const JumpTree = @import("./jump-tree.zig").JumpTree;
 const Enum = @import("./enum.zig").Enum;
+const UUID = @import("./utils/uuid.zig").UUID;
 
 const testing = std.testing;
 const BREAK_HOLDER = 9000;
@@ -44,6 +45,7 @@ pub const Compiler = struct {
     allocator: std.mem.Allocator,
     builtins: Scope,
     constants: std.ArrayList(Value),
+    uuids: std.ArrayList(UUID.ID),
     err: *Errors,
     scope: *Scope,
     identifier_cache: std.StringHashMap(OpCode.Size(.constant)),
@@ -92,6 +94,7 @@ pub const Compiler = struct {
             .allocator = allocator,
             .builtins = .{ .allocator = allocator, .parent = null, .symbols = std.StringArrayHashMap(*Symbol).init(allocator), .tag = .builtin, .free_symbols = undefined, .offset = 0 },
             .constants = std.ArrayList(Value).init(allocator),
+            .uuids = std.ArrayList(UUID.ID).init(allocator),
             .identifier_cache = std.StringHashMap(OpCode.Size(.constant)).init(allocator),
             .err = errors,
             .chunk = root_chunk,
@@ -139,6 +142,7 @@ pub const Compiler = struct {
             .tokens = try self.chunk.tokens.toOwnedSlice(),
             .global_symbols = global_symbols,
             .locals_count = self.locals_count,
+            .uuids = try self.uuids.toOwnedSlice(),
         };
     }
 
@@ -420,6 +424,8 @@ pub const Compiler = struct {
                 try self.compileExpression(&c.text);
                 try self.writeOp(.choice, token);
                 const start_pos = try self.writeInt(OpCode.Size(.jump), CHOICE_HOLDER, token);
+                _ = try self.writeInt(u8, if (c.is_unique) 1 else 0, token);
+                try self.writeId(c.text.type.string.value, token);
 
                 try self.writeOp(.jump, token);
                 const jump_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
@@ -451,6 +457,14 @@ pub const Compiler = struct {
                 try self.replaceValue(start_pos, OpCode.Size(.jump), end);
             },
             .dialogue => |d| {
+                for (d.tags) |tag| {
+                    const obj = try self.allocator.create(Value.Obj);
+                    obj.* = .{ .data = .{ .string = try self.allocator.dupe(u8, tag) } };
+                    const i = try self.addConstant(.{ .obj = obj });
+                    try self.writeOp(.constant, token);
+                    _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                }
+
                 try self.compileExpression(d.content);
                 if (d.speaker) |speaker| {
                     try self.getOrSetIdentifierConstant(speaker, token);
@@ -459,6 +473,7 @@ pub const Compiler = struct {
                 var has_speaker_value = if (d.speaker == null) @as(u8, 0) else @as(u8, 1);
                 _ = try self.writeInt(u8, has_speaker_value, token);
                 _ = try self.writeInt(u8, @as(u8, @intCast(d.tags.len)), token);
+                try self.writeId(d.content.type.string.value, token);
             },
             .divert => |d| {
                 var node = try self.getDivertNode(d.path);
@@ -855,6 +870,12 @@ pub const Compiler = struct {
         std.mem.writeIntBig(T, buf[0..], value);
         try self.writeValue(&buf, token);
         return start;
+    }
+
+    pub fn writeId(self: *Compiler, str: []const u8, token: Token) !void {
+        const id = UUID.create(std.hash.Wyhash.hash(0, str));
+        try self.uuids.append(id);
+        _ = try self.writeInt(OpCode.Size(.constant), @as(OpCode.Size(.constant), @intCast(self.uuids.items.len - 1)), token);
     }
 
     pub fn replaceValue(self: *Compiler, pos: usize, comptime T: type, value: T) !void {

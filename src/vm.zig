@@ -65,6 +65,7 @@ pub const Vm = struct {
     /// Used to send to the on_choices method
     current_choices: []Choice = undefined,
     /// Determines if the vm is waiting on input
+    /// hopefully will remove with async?
     is_waiting: bool = false,
     runner: *Runner,
 
@@ -270,7 +271,7 @@ pub const Vm = struct {
             const op: OpCode = @enumFromInt(instruction);
             switch (op) {
                 .constant => {
-                    var index = self.readInt(u16);
+                    var index = self.readInt(OpCode.Size(.constant));
                     var value = self.bytecode.constants[index];
                     try self.push(value);
                 },
@@ -679,16 +680,19 @@ pub const Vm = struct {
                     var dialogue_value = self.pop();
 
                     var tag_count = self.readInt(u8);
-                    var tags = try std.ArrayList([]const u8).initCapacity(self.allocator, tag_count);
+                    var tags = try self.allocator.alloc([]const u8, tag_count);
+                    defer self.allocator.free(tags);
                     var i: usize = 0;
                     while (i < tag_count) : (i += 1) {
                         const tag_value = self.pop();
-                        tags.items[tag_count - i] = tag_value.obj.data.string;
+                        tags[tag_count - i - 1] = tag_value.obj.data.string;
                     }
+                    var id_index = self.readInt(OpCode.Size(.constant));
                     var result = Dialogue{
                         .content = dialogue_value.obj.data.string,
                         .speaker = speaker,
-                        .tags = try tags.toOwnedSlice(),
+                        .tags = tags,
+                        .id = self.bytecode.uuids[id_index],
                     };
                     self.runner.onDialogue(self, result);
                 },
@@ -766,10 +770,14 @@ pub const Vm = struct {
                 },
                 .choice => {
                     const ip = self.readInt(OpCode.Size(.choice));
+                    const is_unique = self.readInt(u8) == 1;
+                    _ = is_unique;
+                    var id_index = self.readInt(OpCode.Size(.constant));
                     try self.choices_list.append(.{
                         .content = self.pop().obj.data.string,
                         .count = 0,
                         .ip = ip,
+                        .id = self.bytecode.uuids[id_index],
                     });
                 },
                 .backup => {
