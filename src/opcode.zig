@@ -50,6 +50,7 @@ pub const OpCode = enum(u8) {
     backup,
     return_void,
     return_value,
+    visit,
     fin,
 
     pub fn toString(self: OpCode) []const u8 {
@@ -103,6 +104,7 @@ pub const OpCode = enum(u8) {
             .backup => "OP_BACKUP",
             .return_void => "OP_RETURN_VOID",
             .return_value => "OP_RETURN_VALUE",
+            .visit => "OP_VISIT",
             .fin => "OP_FIN",
         };
     }

@@ -305,6 +305,7 @@ pub const Vm = struct {
                     switch (value) {
                         .bool => |b| try self.push(if (b) values.False else values.True),
                         .nil => try self.push(values.True),
+                        .number => |n| try self.push(if (@abs(n) < 0.00001) values.False else values.True),
                         else => try self.push(values.False),
                     }
                 },
@@ -779,6 +780,12 @@ pub const Vm = struct {
                         .ip = ip,
                         .id = self.bytecode.uuids[id_index],
                     });
+                },
+                .visit => {
+                    var value = self.pop();
+                    value.visit += 1;
+                    const index = self.readInt(OpCode.Size(.get_global));
+                    self.globals[index] = value;
                 },
                 .backup => {
                     const ip = self.readInt(OpCode.Size(.backup));

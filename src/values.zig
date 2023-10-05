@@ -24,6 +24,7 @@ pub const Type = enum(u8) {
     range,
     obj,
     map_pair,
+    visit,
 };
 
 pub const Iterator = struct {
@@ -47,6 +48,7 @@ pub const Value = union(Type) {
         key: *Value,
         value: *Value,
     },
+    visit: u32,
 
     pub const Obj = struct {
         is_marked: bool = false,
@@ -165,6 +167,7 @@ pub const Value = union(Type) {
             bool => if (value) True else False,
             @TypeOf(null) => Nil,
             f32 => .{ .number = value },
+            u32 => .{ .visit = value },
             else => unreachable,
         };
     }
@@ -173,6 +176,8 @@ pub const Value = union(Type) {
         return switch (self) {
             .bool => |b| b,
             .nil => false,
+            .number => |n| @abs(n) > 0.00001,
+            .visit => |v| v != 0,
             else => return error.InvalidType,
         };
     }
@@ -182,13 +187,16 @@ pub const Value = union(Type) {
         switch (self) {
             .bool => |b| try writer.writeByte(if (b) '1' else '0'),
             .number => |n| {
-                var buf: [512]u8 = undefined;
+                var buf: [128]u8 = undefined;
                 var buf_stream = std.io.fixedBufferStream(&buf);
                 try std.fmt.formatFloatDecimal(n, .{
                     .precision = 5,
                 }, buf_stream.writer());
                 try writer.writeIntBig(u16, @as(u16, @intCast(buf_stream.pos)));
                 try writer.writeAll(buf[0..buf_stream.pos]);
+            },
+            .visit => |v| {
+                try writer.writeIntBig(u32, v);
             },
             .range => |r| {
                 try writer.writeIntBig(i32, r.start);
@@ -248,6 +256,9 @@ pub const Value = union(Type) {
                 defer allocator.free(buf);
                 try reader.readNoEof(buf);
                 return .{ .number = try std.fmt.parseFloat(f32, buf) };
+            },
+            .visit => {
+                return .{ .visit = try reader.readIntBig(u32) };
             },
             .obj => {
                 var data_type: Obj.DataType = @enumFromInt(try reader.readByte());
