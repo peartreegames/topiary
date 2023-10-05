@@ -48,7 +48,9 @@ pub const Compiler = struct {
     uuids: std.ArrayList(UUID.ID),
     err: *Errors,
     scope: *Scope,
+    root_scope: *Scope,
     identifier_cache: std.StringHashMap(OpCode.Size(.constant)),
+    visit_list: std.ArrayList([]const u8),
     chunk: *Chunk,
     locals_count: usize = 0,
 
@@ -99,6 +101,8 @@ pub const Compiler = struct {
             .err = errors,
             .chunk = root_chunk,
             .scope = root_scope,
+            .root_scope = root_scope,
+            .visit_list = std.ArrayList([]const u8).init(allocator),
             .jump_tree = JumpTree.init(allocator),
             .jump_node = undefined,
             .divert_log = std.ArrayList(JumpTree.Entry).init(allocator),
@@ -114,6 +118,8 @@ pub const Compiler = struct {
         self.divert_log.deinit();
         self.identifier_cache.deinit();
         self.builtins.symbols.deinit();
+        for (self.visit_list.items) |v| self.allocator.free(v);
+        self.visit_list.deinit();
     }
 
     fn fail(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype) Error {
@@ -446,7 +452,6 @@ pub const Compiler = struct {
                 self.jump_node.*.ip = self.instructionPos();
 
                 try self.enterScope(.local);
-
                 try self.compileBlock(b.body);
                 try self.writeOp(.fin, token);
 
@@ -548,6 +553,22 @@ pub const Compiler = struct {
         for (stmts) |stmt| {
             try self.compileStatement(stmt);
         }
+    }
+
+    fn compileVisitDecl(self: *Compiler, token: Token) Error!void {
+        const i = try self.addConstant(.{ .visit = 0 });
+        try self.writeOp(.constant, token);
+        _ = try self.writeInt(OpCode.Size(.constant), i, token);
+        var path = try std.mem.join(self.allocator, ".", self.visit_list.items);
+        var symbol = try self.root_scope.define(path, true, false);
+        try self.setSymbol(symbol, token, true);
+    }
+
+    fn compileVisit(self: *Compiler, token: Token) Error!void {
+        var path = try std.mem.join(self.allocator, ".", self.visit_list.items);
+        var symbol = try self.root_scope.resolve(path);
+        try self.loadSymbol(symbol, token);
+        try self.writeOp(.visit, token);
     }
 
     pub fn compileExpression(self: *Compiler, expr: *const ast.Expression) Error!void {

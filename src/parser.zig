@@ -811,19 +811,38 @@ pub const Parser = struct {
         const is_unique = self.peekIs(.star);
         if (is_unique) self.next();
 
+        var name: ?[]const u8 = null;
+        if (self.peekIs(.identifier)) {
+            self.next();
+            name = try self.getStringValue();
+        }
+
         self.next();
         var text = try self.stringExpression();
+        var tags = try self.getTagsList();
         self.next();
         return .{
             .token = start,
             .type = .{
                 .choice = .{
+                    .name = name,
                     .text = text,
                     .is_unique = is_unique,
                     .body = try self.block(),
+                    .tags = tags,
                 },
             },
         };
+    }
+
+    fn getTagsList(self: *Parser) Error![][]const u8 {
+        var tags = std.ArrayList([]const u8).init(self.allocator);
+        while (self.peekIs(.hash)) {
+            self.next();
+            var tag = try self.getStringValue();
+            try tags.append(tag);
+        }
+        return tags.toOwnedSlice();
     }
 
     fn dialogueStatement(self: *Parser) Error!Statement {
@@ -843,20 +862,14 @@ pub const Parser = struct {
         try self.expectCurrent(.colon);
         self.next();
         var text = try self.stringExpression();
-        var tags = std.ArrayList([]const u8).init(self.allocator);
-        while (self.peekIs(.hash)) {
-            self.next();
-            var tag = try self.getStringValue();
-            try tags.append(tag);
-        }
-
+        var tags = try self.getTagsList();
         return .{
             .token = start_token,
             .type = .{
                 .dialogue = .{
                     .speaker = speaker,
                     .content = try self.allocate(text),
-                    .tags = try tags.toOwnedSlice(),
+                    .tags = tags,
                 },
             },
         };

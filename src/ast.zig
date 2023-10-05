@@ -126,9 +126,11 @@ pub const Statement = struct {
             body: []const Statement,
         },
         choice: struct {
+            name: ?[]const u8,
             text: Expression,
             is_unique: bool,
             body: []const Statement,
+            tags: [][]const u8,
         },
         dialogue: struct {
             speaker: ?[]const u8,
