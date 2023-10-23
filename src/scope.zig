@@ -5,7 +5,7 @@ const DebugToken = @import("./debug.zig").DebugToken;
 const OpCode = @import("./opcode.zig").OpCode;
 
 pub const Symbol = struct {
-    index: u16,
+    index: OpCode.Size(.get_global),
     name: []const u8,
     tag: Scope.Tag,
     is_mutable: bool,
@@ -17,7 +17,7 @@ pub const Scope = struct {
     parent: ?*Scope,
     tag: Tag,
 
-    count: u16 = 0,
+    count: u32 = 0,
     symbols: std.StringArrayHashMap(*Symbol),
     free_symbols: std.ArrayList(*Symbol),
     offset: OpCode.Size(.get_global),
@@ -31,7 +31,7 @@ pub const Scope = struct {
         local,
     };
 
-    pub fn create(allocator: std.mem.Allocator, parent: ?*Scope, tag: Tag, offset: u16) !*Scope {
+    pub fn create(allocator: std.mem.Allocator, parent: ?*Scope, tag: Tag, offset: u32) !*Scope {
         var scope = try allocator.create(Scope);
         scope.* = .{
             .allocator = allocator,
@@ -46,6 +46,7 @@ pub const Scope = struct {
 
     pub fn destroy(self: *Scope) void {
         for (self.symbols.values()) |s| {
+            self.allocator.free(s.name);
             self.allocator.destroy(s);
         }
         self.symbols.deinit();
@@ -58,39 +59,41 @@ pub const Scope = struct {
         if (is_extern and self.parent != null) {
             return error.ExternError;
         }
-
+        var name_copy = try self.allocator.dupe(u8, name);
         symbol.* = .{
-            .name = name,
+            .name = name_copy,
             .index = self.count + self.offset,
             .tag = self.tag,
             .is_mutable = is_mutable,
             .is_extern = is_extern,
         };
         self.count += 1;
-        try self.symbols.putNoClobber(name, symbol);
+        try self.symbols.putNoClobber(name_copy, symbol);
         return symbol;
     }
 
     pub fn defineFunction(self: *Scope, name: []const u8) !*Symbol {
         const symbol = try self.allocator.create(Symbol);
+        var name_copy = try self.allocator.dupe(u8, name);
         symbol.* = .{
-            .name = name,
+            .name = name_copy,
             .index = 0,
             .tag = .function,
             .is_mutable = false,
             .is_extern = false,
         };
-        try self.symbols.putNoClobber(name, symbol);
+        try self.symbols.putNoClobber(name_copy, symbol);
         return symbol;
     }
 
     pub fn defineFree(self: *Scope, original: *Symbol) !*Symbol {
-        const index = @as(u16, @intCast(self.free_symbols.items.len));
+        const index = @as(u32, @intCast(self.free_symbols.items.len));
         try self.free_symbols.append(original);
 
         const symbol = try self.allocator.create(Symbol);
+        var name = try self.allocator.dupe(u8, original.name);
         symbol.* = .{
-            .name = original.name,
+            .name = name,
             .index = index,
             .tag = .free,
             .is_mutable = original.is_mutable,
@@ -113,5 +116,12 @@ pub const Scope = struct {
             }
         }
         return null;
+    }
+
+    pub fn print(self: *Scope, writer: anytype) void {
+        writer.print("==SCOPE==\n", .{});
+        for (self.symbols.keys()) |k| {
+            writer.print("{s}\n", .{k});
+        }
     }
 };

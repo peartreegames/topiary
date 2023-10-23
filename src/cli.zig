@@ -29,11 +29,7 @@ pub fn main() !void {
     defer tree.deinit();
     defer allocator.free(tree.source);
 
-    var root_scope = try Scope.create(allocator, null, .global, 0);
-    defer root_scope.destroy();
-    var root_chunk = try Compiler.Chunk.create(allocator, null);
-    defer root_chunk.destroy();
-    var compiler = Compiler.init(allocator, root_scope, root_chunk, &err);
+    var compiler = try Compiler.init(allocator, &err);
     defer compiler.deinit();
 
     try compiler.compile(tree);

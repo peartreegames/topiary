@@ -50,13 +50,21 @@ pub const Errors = struct {
             };
             try writer.print("{s}error: \x1b[0m{s}\n", .{ color_prefix, err.fmt });
 
-            const start = @min(err.token.start, source.len - 1);
-            const end = @min(err.token.end, source.len);
+            var start = @min(err.token.start, source.len - 1);
+            var end = @min(err.token.end, source.len);
 
             try writer.print("type: {s}, line: {d}, column: {d}\n", .{ tok.toString(err.token.token_type), err.token.line, err.token.column });
-            try writer.print("{s}\n", .{source[start..end]});
-            try writer.writeByteNTimes('~', end - start);
-            try writer.writeAll("\x1b[0;35m^\n\x1b[0m");
+
+            var lines = std.mem.splitSequence(u8, source, "\n");
+            var lineNumber: usize = 1;
+            while (lines.next()) |line| : (lineNumber += 1) {
+                if (lineNumber < err.token.line) continue;
+                try writer.print("{s}\n", .{line});
+                try writer.writeByteNTimes(' ', err.token.column - 1);
+                try writer.writeByteNTimes('~', end - start);
+                try writer.writeAll("\x1b[0;35m^\n\x1b[0m");
+                break;
+            }
         }
     }
 };

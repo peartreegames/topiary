@@ -93,6 +93,11 @@ pub const Value = union(Type) {
             },
             class: Class,
             instance: Class.Instance,
+            // visit: struct {
+            //     name: []const u8,
+            //     count: u32 = 0,
+            //     children: std.ArrayList(Value),
+            // },
         };
         pub const MapType = std.ArrayHashMap(Value, Value, Adapter, true);
         pub const SetType = std.ArrayHashMap(Value, void, Adapter, true);
@@ -113,6 +118,7 @@ pub const Value = union(Type) {
                 .closure => |c| allocator.free(c.free_values),
                 .class => |c| c.deinit(),
                 .instance => obj.data.instance.fields.deinit(),
+                // .visit => |v| v.children.deinit(),
             }
             allocator.destroy(obj);
         }
@@ -195,9 +201,6 @@ pub const Value = union(Type) {
                 try writer.writeIntBig(u16, @as(u16, @intCast(buf_stream.pos)));
                 try writer.writeAll(buf[0..buf_stream.pos]);
             },
-            .visit => |v| {
-                try writer.writeIntBig(u32, v);
-            },
             .range => |r| {
                 try writer.writeIntBig(i32, r.start);
                 try writer.writeIntBig(i32, r.end);
@@ -205,6 +208,9 @@ pub const Value = union(Type) {
             .map_pair => |mp| {
                 try serialize(mp.key.*, writer);
                 try serialize(mp.value.*, writer);
+            },
+            .visit => |v| {
+                try writer.writeIntBig(u32, v);
             },
             .obj => |o| {
                 try writer.writeByte(@intFromEnum(@as(Obj.DataType, o.data)));
@@ -238,6 +244,15 @@ pub const Value = union(Type) {
                         try writer.writeIntBig(u16, @as(u16, @intCast(f.instructions.len)));
                         try writer.writeAll(f.instructions);
                     },
+                    // .visit => |v| {
+                    //     try writer.writeIntBig(u16, @as(u16, @intCast(v.name.len)));
+                    //     try writer.writeAll(v.name);
+                    //     try writer.writeIntBig(u32, v.count);
+                    //     try writer.writeIntBig(u16, @as(u16, @intCast(v.children.count())));
+                    //     for (v.children.items) |c| {
+                    //         try Value.serialize(c, writer);
+                    //     }
+                    // },
                     else => {},
                 }
             },
@@ -336,9 +351,10 @@ pub const Value = union(Type) {
 
     pub fn print(self: Value, writer: anytype, constants: ?[]Value) void {
         switch (self) {
-            .number => |n| writer.print("{d}", .{n}),
+            .number => |n| writer.print("{d:.5}", .{n}),
             .bool => |b| writer.print("{}", .{b}),
             .nil => writer.print("nil", .{}),
+            .visit => |v| writer.print("{d}", .{v}),
             .obj => |o| {
                 switch (o.data) {
                     .string => |s| writer.print("{s}", .{s}),
@@ -424,6 +440,7 @@ pub const Value = union(Type) {
             switch (v) {
                 .number => |n| hashFn(&hasher, @as(u32, @intFromFloat(n * 10000.0))),
                 .bool => |b| hashFn(&hasher, b),
+                .visit => |visit| hashFn(&hasher, visit),
                 .obj => |o| {
                     switch (o.data) {
                         .string => |s| hasher.update(s),
@@ -468,6 +485,7 @@ pub const Value = union(Type) {
                 .number => |n| @abs(n - b.number) < 0.00001,
                 .bool => |bl| bl == b.bool,
                 .nil => b == .nil,
+                .visit => |v| v == b.visit,
                 .obj => |o| {
                     const b_data = b.obj.data;
                     if (@intFromEnum(o.data) != @intFromEnum(b_data))

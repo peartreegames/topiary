@@ -7,6 +7,7 @@ const Lexer = @import("./lexer.zig").Lexer;
 const tok = @import("./token.zig");
 const ast = @import("./ast.zig");
 const Errors = @import("./error.zig").Errors;
+const UUID = @import("./utils/uuid.zig").UUID;
 const Tree = ast.Tree;
 const Statement = ast.Statement;
 const Expression = ast.Expression;
@@ -349,6 +350,7 @@ pub const Parser = struct {
             .token = start,
             .type = .{
                 .bough = .{
+                    .id = UUID.create(std.hash.Wyhash.hash(0, name)),
                     .name = name,
                     .body = body,
                 },
@@ -593,6 +595,7 @@ pub const Parser = struct {
             .token = token,
             .type = .{
                 .string = .{
+                    .raw = try self.allocator.dupe(u8, self.source[token.start..token.end]),
                     .value = value,
                     .expressions = try exprs.toOwnedSlice(),
                 },
@@ -825,6 +828,7 @@ pub const Parser = struct {
             .token = start,
             .type = .{
                 .choice = .{
+                    .id = UUID.create(std.hash.Wyhash.hash(0, text.type.string.raw)),
                     .name = name,
                     .text = text,
                     .is_unique = is_unique,
@@ -867,6 +871,7 @@ pub const Parser = struct {
             .token = start_token,
             .type = .{
                 .dialogue = .{
+                    .id = UUID.create(std.hash.Wyhash.hash(0, text.type.string.raw)),
                     .speaker = speaker,
                     .content = try self.allocate(text),
                     .tags = tags,
@@ -1487,6 +1492,29 @@ test "Parse While loop" {
     var loop = tree.root[0].type.@"while";
     try testing.expect(loop.condition.type.binary.operator == .less_than);
     try testing.expectEqualStrings("x", loop.body[0].type.expression.type.identifier);
+}
+
+test "Parse Indexing" {
+    const input =
+        \\ test.other.third.final
+    ;
+
+    const allocator = testing.allocator;
+    var errors = Errors.init(allocator);
+    defer errors.deinit();
+    const tree = parse(allocator, input, &errors) catch |err| {
+        try errors.write(input, std.io.getStdErr().writer());
+        return err;
+    };
+    defer tree.deinit();
+    var idx = tree.root[0].type.expression.type.indexer;
+    const values = [_][]const u8{ "final", "third", "other" };
+    inline for (values) |v| {
+        try testing.expectEqualStrings(v, idx.index.type.identifier);
+        if (idx.target.type == .indexer) {
+            idx = idx.target.type.indexer;
+        } else try testing.expectEqualStrings("test", idx.target.type.identifier);
+    }
 }
 
 test "Parse Bough" {

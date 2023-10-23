@@ -66,7 +66,7 @@ pub fn initTestVm(source: []const u8, debug: bool) !Vm {
     if (debug) {
         bytecode.print(std.debug);
     }
-
+    for (bytecode.global_symbols) |s| std.log.warn("SYM: {} {s}", .{ s.index, s.name });
     var vm = try Vm.init(alloc, bytecode, &test_runner.runner, &errors);
     return vm;
 }
@@ -765,7 +765,7 @@ test "Boughs" {
 
     inline for (test_cases) |case| {
         std.debug.print("\n======\n", .{});
-        var vm = try initTestVm(case.input, true);
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
         try vm.interpret();
     }
@@ -816,6 +816,81 @@ test "Forks" {
     inline for (test_cases) |case| {
         std.debug.print("\n======\n", .{});
         var vm = try initTestVm(case.input, false);
+        defer vm.deinit();
+        try vm.interpret();
+    }
+}
+
+test "Visits" {
+    const test_cases = .{
+        .{
+            .input =
+            \\ === START {
+            \\     :speaker: "Question"
+            \\    fork^ NAMED {
+            \\        ~* ONE "Answer one" {
+            \\            :speaker: "You chose one"
+            \\            => NAMED
+            \\        }
+            \\        ~ TWO "Answer two" {
+            \\            :speaker: "You chose two"
+            \\        }
+            \\    }
+            \\ }
+            \\ => START^
+            \\ print("START: {START}")
+            \\ print("START.NAMED: {START.NAMED}")
+            \\ print("START.NAMED.ONE: {START.NAMED.ONE}")
+            \\ print("START.NAMED.TWO: {START.NAMED.TWO}")
+            ,
+        },
+        .{
+            .input =
+            \\ === START {
+            \\     :speaker: "Question"
+            \\    fork^ {
+            \\        ~* ONE "Answer one" {
+            \\            :speaker: "You chose one"
+            \\        }
+            \\        ~ TWO "Answer two" {
+            \\            :speaker: "You chose two"
+            \\        }
+            \\    }
+            \\ }
+            \\ => START^
+            \\ print("START: {START}")
+            \\ print("START._0.ONE: {START._0.ONE}")
+            \\ print("START._0.TWO: {START._0.TWO}")
+            ,
+        },
+        .{
+            .input =
+            \\ === START {
+            \\     :speaker: "Starting"
+            \\    === INNER {
+            \\        :speaker: "Inside question"
+            \\        fork^ {
+            \\            ~* ONE "Answer one" {
+            \\                :speaker: "You chose one"
+            \\            }
+            \\            ~ TWO "Answer two" {
+            \\                :speaker: "You chose two"
+            \\            }
+            \\        }
+            \\    }
+            \\ }
+            \\ => START.INNER^
+            \\ print(START)
+            \\ print(START.INNER)
+            \\ print(START.INNER._0.ONE)
+            \\ print(START.INNER._0.TWO)
+            ,
+        },
+    };
+
+    inline for (test_cases) |case| {
+        std.debug.print("\n======\n", .{});
+        var vm = try initTestVm(case.input, true);
         defer vm.deinit();
         try vm.interpret();
     }

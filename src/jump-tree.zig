@@ -5,6 +5,7 @@ const OpCode = @import("./opcode.zig").OpCode;
 pub const JumpTree = struct {
     allocator: std.mem.Allocator,
     root: *Node,
+    current: *Node,
 
     pub const Entry = struct {
         node: *Node,
@@ -15,7 +16,7 @@ pub const JumpTree = struct {
         parent: ?*Node,
         name: []const u8,
         children: std.ArrayList(*Node),
-        ip: OpCode.Size(.jump) = 9999,
+        dest_ip: OpCode.Size(.jump) = 9999,
 
         pub fn create(allocator: std.mem.Allocator, name: []const u8, parent: ?*Node) !*Node {
             var node = try allocator.create(Node);
@@ -76,11 +77,19 @@ pub const JumpTree = struct {
         }
     };
 
-    pub fn init(allocator: std.mem.Allocator) JumpTree {
+    pub fn init(allocator: std.mem.Allocator) !JumpTree {
+        var root = try JumpTree.Node.create(allocator, "root", null);
         return .{
             .allocator = allocator,
-            .root = undefined,
+            .root = root,
+            .current = root,
         };
+    }
+
+    pub fn pop(self: *JumpTree) void {
+        if (self.current.parent) |p| {
+            self.current = p;
+        } else self.current = self.root;
     }
 
     pub fn deinit(self: *JumpTree) void {

@@ -104,17 +104,23 @@ pub const ByteCode = struct {
             writer.print("{s: <16} ", .{op.toString()});
             i += 1;
             switch (op) {
-                .decl_global,
-                .get_local,
-                .set_local,
                 .jump,
                 .jump_if_false,
+                .backup,
+                .decl_global,
                 .set_global,
                 .get_global,
+                .visit,
+                => {
+                    const dest = std.mem.readIntSliceBig(u32, instructions[i..(i + 4)]);
+                    writer.print("{d: >8}", .{dest});
+                    i += 4;
+                },
+                .get_local,
+                .set_local,
                 .list,
                 .map,
                 .set,
-                .backup,
                 => {
                     const dest = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
                     writer.print("{d: >8}", .{dest});
@@ -132,9 +138,9 @@ pub const ByteCode = struct {
                     i += 1;
                 },
                 .constant => {
-                    var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
+                    var index = std.mem.readIntSliceBig(u32, instructions[i..(i + 4)]);
                     writer.print("{d: >8} ", .{index});
-                    i += 2;
+                    i += 4;
                     if (constants) |c| {
                         var value = c[index];
                         writer.print("  = ", .{});
@@ -144,22 +150,29 @@ pub const ByteCode = struct {
                 .dialogue => {
                     const has_speaker = instructions[i] == 1;
                     const tag_count = instructions[i + 1];
-                    var id = std.mem.readIntSliceBig(u8, instructions[(i + 2)..(i + 4)]);
-                    i += 4;
+                    _ = tag_count;
+                    var id = std.mem.readIntSliceBig(u32, instructions[(i + 2)..(i + 6)]);
+                    i += 6;
                     writer.print("{: >8}", .{has_speaker});
-                    writer.print("{d: >4}", .{tag_count});
-                    writer.print(" {d}", .{id});
+                    writer.print("   = ", .{});
+                    writer.print("{}", .{id});
                 },
                 .choice => {
-                    const dest = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
-                    const id = std.mem.readIntSliceBig(u8, instructions[(i + 2)..(i + 4)]);
+                    const dest = std.mem.readIntSliceBig(u32, instructions[i..(i + 4)]);
+                    const is_unique = instructions[i + 4] == 1;
+                    i += 4;
+                    const id = std.mem.readIntSliceBig(u32, instructions[i..(i + 4)]);
+                    _ = id;
+                    i += 4;
+                    const visit_id = std.mem.readIntSliceBig(u32, instructions[i..(i + 4)]);
+                    i += 4;
+                    _ = visit_id;
                     writer.print("{d: >8}", .{dest});
-                    writer.print(" {d}", .{id});
-                    i += 2;
+                    writer.print(" {}", .{is_unique});
                 },
                 .string, .closure => {
-                    var index = std.mem.readIntSliceBig(u16, instructions[i..(i + 2)]);
-                    i += 2;
+                    var index = std.mem.readIntSliceBig(u32, instructions[i..(i + 4)]);
+                    i += 4;
                     writer.print("{d: >8}", .{index});
                     i += 1;
                     writer.print("   = ", .{});
