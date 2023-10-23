@@ -112,10 +112,8 @@ pub const OpCode = enum(u8) {
     pub fn Size(comptime self: OpCode) type {
         // kept separate to easily change if needed
         return switch (self) {
-            .constant => u16,
-            .jump, .jump_if_false, .backup => u16,
-            .set_global,
-            .get_global,
+            .constant, .get_global, .set_global => u32,
+            .jump, .jump_if_false, .backup, .visit => u32,
             .get_local,
             .set_local,
             .choice,
@@ -128,7 +126,8 @@ pub const OpCode = enum(u8) {
             .get_free,
             .set_free,
             => u8,
-            .decl_global, .string, .closure, .prong => u24, // u16 for constant location, u8 for expressions count
+            .string, .closure, .prong => u40, // u32 for constant, u8 for expressions count
+            .decl_global => u40, // u32 for location, u8 for expressions count,
             else => void,
         };
     }

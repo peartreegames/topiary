@@ -11,7 +11,7 @@ pub const Dialogue = struct {
 
 pub const Choice = struct {
     content: []const u8,
-    count: usize,
+    visit_count: u32,
     ip: u32,
     id: ID,
 };

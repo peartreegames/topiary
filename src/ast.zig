@@ -1,5 +1,6 @@
 const std = @import("std");
 const token = @import("./token.zig");
+const UUID = @import("./utils/uuid.zig").UUID;
 const Token = token.Token;
 const Allocator = std.mem.Allocator;
 
@@ -42,6 +43,7 @@ pub const Expression = struct {
         boolean: bool,
         number: f32,
         string: struct {
+            raw: []const u8,
             value: []const u8,
             expressions: []const Expression,
         },
@@ -122,10 +124,12 @@ pub const Statement = struct {
     pub const StatementValue = union(enum) {
         block: []const Statement,
         bough: struct {
+            id: UUID.ID,
             name: []const u8,
             body: []const Statement,
         },
         choice: struct {
+            id: UUID.ID,
             name: ?[]const u8,
             text: Expression,
             is_unique: bool,
@@ -133,6 +137,7 @@ pub const Statement = struct {
             tags: [][]const u8,
         },
         dialogue: struct {
+            id: UUID.ID,
             speaker: ?[]const u8,
             content: *Expression,
             tags: [][]const u8,

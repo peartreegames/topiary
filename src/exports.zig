@@ -24,7 +24,7 @@ const ExportDialogue = extern struct {
 
 const ExportChoice = extern struct {
     content: [*c]const u8,
-    count: u8,
+    visit_count: u32,
     ip: u32,
 };
 
@@ -207,7 +207,7 @@ const ExportRunner = struct {
             var choice = self.allocator.create(ExportChoice) catch @panic("Could not create Choice");
             choice.* = .{
                 .content = choices[i].content.ptr,
-                .count = @intCast(choices[i].count),
+                .visit_count = @intCast(choices[i].visit_count),
                 .ip = choices[i].ip,
             };
             result[i] = choice;

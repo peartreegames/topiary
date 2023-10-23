@@ -237,7 +237,6 @@ pub const Vm = struct {
         };
         self.stack.resize(self.bytecode.locals_count);
         self.frames.push(try Frame.create(root_closure, 0, 0));
-
         try self.run();
         if (self.stack.count > self.bytecode.locals_count) {
             std.log.warn("Completed run but still had {} items on stack.", .{self.stack.count});
@@ -414,7 +413,7 @@ pub const Vm = struct {
                     obj.data.closure.free_values[index] = self.pop();
                 },
                 .string => {
-                    var index = self.readInt(u16);
+                    var index = self.readInt(OpCode.Size(.constant));
                     var value = self.bytecode.constants[index];
                     var count = self.readInt(u8);
                     var args = try std.ArrayList(Value).initCapacity(self.allocator, count);
@@ -438,6 +437,7 @@ pub const Vm = struct {
                                 .number => |n| try std.fmt.formatFloatDecimal(n, std.fmt.FormatOptions{}, fbs.writer()),
                                 .bool => |b| try writer.writeAll(if (b) "true" else "false"),
                                 .obj => |o| try writer.writeAll(o.data.string),
+                                .visit => |v| try std.fmt.formatIntValue(v, "", .{}, fbs.writer()),
                                 else => return error.RuntimeError,
                             }
                             i += 1;
@@ -666,7 +666,9 @@ pub const Vm = struct {
                                 try self.push(mp.value.*);
                             } else return self.fail("Unknown index key \"{s}\" on map key/value pair. Only \"key\" or \"value\" are allowed.", .{@tagName(index)});
                         },
-                        else => unreachable,
+                        else => {
+                            return self.fail("Invalid index on target type \"{s}\"", .{@tagName(target)});
+                        },
                     }
                 },
                 .dialogue => {
@@ -731,7 +733,7 @@ pub const Vm = struct {
                     }
                 },
                 .closure => {
-                    const index = self.readInt(u16);
+                    const index = self.readInt(OpCode.Size(.constant));
                     const count = self.readInt(u8);
                     var value = self.bytecode.constants[index];
                     var free_values = try self.allocator.alloc(Value, count);
@@ -770,25 +772,29 @@ pub const Vm = struct {
                     self.choices_list.clearRetainingCapacity();
                 },
                 .choice => {
-                    const ip = self.readInt(OpCode.Size(.choice));
+                    const ip = self.readInt(OpCode.Size(.jump));
                     const is_unique = self.readInt(u8) == 1;
-                    _ = is_unique;
                     var id_index = self.readInt(OpCode.Size(.constant));
+                    var visit_index = self.readInt(OpCode.Size(.get_global));
+                    var visit_count = self.globals[visit_index].visit;
+                    if (visit_count > 0 and is_unique) continue;
                     try self.choices_list.append(.{
                         .content = self.pop().obj.data.string,
-                        .count = 0,
+                        .visit_count = visit_count,
                         .ip = ip,
                         .id = self.bytecode.uuids[id_index],
                     });
                 },
                 .visit => {
-                    var value = self.pop();
-                    value.visit += 1;
-                    const index = self.readInt(OpCode.Size(.get_global));
-                    self.globals[index] = value;
+                    var index = self.readInt(OpCode.Size(.get_global));
+                    self.globals[index].visit += 1;
                 },
                 .backup => {
                     const ip = self.readInt(OpCode.Size(.backup));
+                    if (self.jump_backups.items.len > 0 and self.jump_backups.getLast() == ip) {
+                        _ = self.pop();
+                        continue;
+                    }
                     try self.jump_backups.append(ip);
                 },
                 .fin => {

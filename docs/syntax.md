@@ -45,7 +45,8 @@ Boughs can be nested and jumped to with `.` like so:
 
 ### Forks
 
-To create interesting and interactive stories we need to be able to divert the story depending on choices answered by the player. For that we use the keyword `fork` with each prong denoted with a tilde `~`.
+To create interesting and interactive stories we need to be able to divert the story depending on choices answered by the player. 
+For that we use the keyword `fork` with each prong denoted with a tilde `~`.
 
 Fork bodies can be either a jump or a block surrounded by braces.
 
@@ -82,6 +83,82 @@ Forks can also be named to revisit, useful if wanting to loop choices.
     :John: "The hard way it is"
 }
 => START
+```
+
+Choices can also be unique with `~*`, this means once they are visited, 
+they won't be added to the choice list again.
+
+
+```topi
+=== START {
+    fork DIFFICULTY { 
+        // can only be chosen once
+        ~* "Easy route" {
+            :John: "Maybe this is too easy..."
+            => DIFFICULTY
+        }
+        ~ "Hard route" => END
+    }
+}
+=== END {
+    :John: "The hard way it is"
+}
+=> START
+```
+
+Choices can also be named to get the visit count in the story, 
+but all choices will have a `visit_count` field regardless of being named or not, 
+to be used in your runner code.
+
+```topi
+=== START {
+    fork DIFFICULTY {
+        ~ EASY "Easy route" {
+            :John: "Maybe this is too easy..."
+            => DIFFICULTY
+        }
+        ~ HARD "Hard route" => END
+    }
+}
+=== END {
+    :John: "The hard way it is"
+    print(START) // 1
+    print(START.DIFFICULTY.EASY) // everytime EASY was chosen
+    print(START.DIFFICULTY.HARD) // everytime HARD was chosen
+}
+=> START
+```
+
+### Visits
+
+All boughs, named forks, and named choices have visit counts. 
+If a choice is not in a named fork its path is the fork index within the bough preceeded by an underscore `_0`, `_1`, etc
+(but this is not recommended, best to give it a name).
+
+```
+=== START {
+    // Not Recommended
+    fork^ {
+        // START._0.ONE
+        ~ ONE "Pick one" {}
+        // START._0.TWO
+        ~ TWO "Pick two" {}
+    }
+    // Not Recommended
+    fork^ {
+        // START._1.ONE
+        ~ ONE "Pick one" {}
+        // START._1.TWO
+        ~ TWO "Pick two" {}
+    }
+    // Recommended if choice visit count is needed
+    fork NAMED {
+        // START.NAMED.ONE
+        ~ ONE "Pick one" {}
+        // START.NAMED.TWO
+        ~ TWO "Pick two" {}
+    }
+}
 ```
 
 ### Flow and Jump Back Ups
