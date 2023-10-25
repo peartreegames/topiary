@@ -59,11 +59,18 @@ pub fn parseFile(allocator: Allocator, dir: std.fs.Dir, path: []const u8, err: *
     };
     defer file.close();
 
-    var source = file.reader().readAllAlloc(allocator, 10_000) catch |e| {
+    const stat = file.stat() catch |e| {
+        err.add("Could not read file stats {s}: {}", undefined, .err, .{ path, e }) catch {};
+        return Parser.Error.ParserError;
+    };
+    const file_size = stat.size;
+    var source = try allocator.alloc(u8, file_size);
+    defer allocator.free(source);
+    file.reader().readNoEof(source) catch |e| {
         err.add("Could not read file {s}: {}", undefined, .err, .{ path, e }) catch {};
         return Parser.Error.ParserError;
     };
-    defer allocator.free(source);
+    errdefer err.write(source, std.io.getStdErr().writer()) catch {};
     var lexer = Lexer.init(source);
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
@@ -585,7 +592,7 @@ pub const Parser = struct {
             if (char == '}') {
                 depth -= 1;
                 if (depth == 0) {
-                    try self.parseInterpolatedExpression(self.source[start..(token.start + i)], &exprs);
+                    try self.parseInterpolatedExpression(self.source[start..(token.start + i)], &exprs, token.start);
                     start = token.start + i + 1;
                 }
             }
@@ -603,8 +610,15 @@ pub const Parser = struct {
         };
     }
 
-    fn parseInterpolatedExpression(self: *Parser, source: []const u8, exprs: *std.ArrayList(Expression)) !void {
+    fn parseInterpolatedExpression(self: *Parser, source: []const u8, exprs: *std.ArrayList(Expression), offset: usize) !void {
         var lexer = Lexer.init(source);
+        const tmp_pos = self.err.offset_pos;
+        const tmp_col = self.err.offset_col;
+        const tmp_line = self.err.offset_line;
+
+        self.err.offset_pos += offset;
+        self.err.offset_col += self.lexer.column + 1;
+        self.err.offset_line += self.lexer.line - 2;
 
         var parser = Parser{
             .current_token = lexer.next(),
@@ -619,6 +633,9 @@ pub const Parser = struct {
         while (!parser.currentIs(.eof)) : (parser.next()) {
             try exprs.append(try parser.expression(.lowest));
         }
+        self.err.offset_pos = tmp_pos;
+        self.err.offset_line = tmp_line;
+        self.err.offset_col = tmp_col;
     }
 
     fn listExpression(self: *Parser) Error!Expression {
@@ -703,6 +720,7 @@ pub const Parser = struct {
     }
 
     fn ifExpression(self: *Parser) Error!Expression {
+        const start = self.current_token;
         self.next(); // skip if
         const condition = try self.allocate(try self.expression(.lowest));
         self.next();
@@ -712,7 +730,7 @@ pub const Parser = struct {
         self.next();
         const false_value = try self.allocate(try self.expression(.lowest));
         return .{
-            .token = self.current_token,
+            .token = start,
             .type = .{
                 .@"if" = .{
                     .condition = condition,
@@ -724,6 +742,7 @@ pub const Parser = struct {
     }
 
     fn ifStatement(self: *Parser) Error!Statement {
+        const start = self.current_token;
         self.next(); // skip if
         const condition = try self.allocate(try self.expression(.lowest));
         self.next();
@@ -743,7 +762,7 @@ pub const Parser = struct {
         self.next();
         const false_body = try self.block();
         return .{
-            .token = self.current_token,
+            .token = start,
             .type = .{
                 .@"if" = .{
                     .condition = condition,

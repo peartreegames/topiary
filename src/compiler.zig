@@ -27,6 +27,14 @@ const PRONG_HOLDER = 9005;
 const SWITCH_END_HOLDER = 9006;
 const JUMP_HOLDER = 9999;
 
+pub const initial_constants = [_]Value{
+    .{ .number = 0 },
+    .{ .number = 1 },
+    .{ .bool = false },
+    .{ .bool = true },
+    .{ .visit = 0 },
+};
+
 pub fn compileSource(allocator: std.mem.Allocator, source: []const u8, errors: *Errors) !ByteCode {
     const tree = try parser.parse(allocator, source, errors);
     defer tree.deinit();
@@ -53,7 +61,6 @@ pub const Compiler = struct {
     jump_tree: JumpTree,
     divert_log: std.ArrayList(JumpTree.Entry),
     visit_tree: VisitTree,
-    fork_count: u32 = 0,
 
     pub const Chunk = struct {
         instructions: std.ArrayList(u8),
@@ -85,6 +92,7 @@ pub const Compiler = struct {
         OutOfScope,
         NoSpaceLeft,
         SymbolNotFound,
+        SymbolAlreadyDeclared,
         ExternError,
         NotYetImplemented,
     } || parser.Parser.Error;
@@ -165,7 +173,7 @@ pub const Compiler = struct {
             // as constant values, then just fetch the ip location as needed.
             try self.precompileJumps(stmt, self.jump_tree.root);
         }
-        self.visit_tree.print(std.debug);
+        self.visit_tree.reset();
 
         for (tree.root) |stmt| {
             try self.compileStatement(stmt);
@@ -224,10 +232,10 @@ pub const Compiler = struct {
                 var buf: [11]u8 = undefined;
                 var fbs = std.io.fixedBufferStream(&buf);
                 try fbs.writer().writeByte('_');
-                try std.fmt.formatIntValue(self.fork_count, "", .{}, fbs.writer());
+                var v_node = self.visit_tree.current;
+                try std.fmt.formatIntValue(v_node.anon_count, "", .{}, fbs.writer());
                 var fork_count = std.mem.trim(u8, buf[0..], &[_]u8{170});
-                self.fork_count += 1;
-                defer self.fork_count -= 1;
+                v_node.anon_count += 1;
 
                 try self.compileVisitDecl(f.name orelse fork_count, stmt.token);
                 defer _ = self.visit_tree.list.pop();
@@ -240,9 +248,6 @@ pub const Compiler = struct {
                 } else {
                     for (f.body) |s| try self.precompileJumps(s, node);
                 }
-                if (f.name != null) {
-                    self.visit_tree.pop();
-                }
             },
             .choice => |c| {
                 var name = c.name orelse &c.id;
@@ -251,6 +256,18 @@ pub const Compiler = struct {
                 defer self.visit_tree.pop();
 
                 for (c.body) |s| try self.precompileJumps(s, node);
+            },
+            .@"if" => |i| {
+                for (i.then_branch) |s| try self.precompileJumps(s, node);
+                if (i.else_branch) |e| {
+                    for (e) |s| try self.precompileJumps(s, node);
+                }
+            },
+            .@"while" => |w| {
+                for (w.body) |s| try self.precompileJumps(s, node);
+            },
+            .@"for" => |f| {
+                for (f.body) |s| try self.precompileJumps(s, node);
             },
             else => {},
         }
@@ -378,7 +395,9 @@ pub const Compiler = struct {
                     return self.failError("{s} is a builtin function and cannot be used as a variable name", stmt.token, .{v.name}, Error.IllegalOperation);
                 if (self.scope.parent != null and v.is_extern)
                     return self.failError("Only global variables can be extern.", token, .{}, Error.IllegalOperation);
-                var symbol = try self.scope.define(v.name, v.is_mutable, v.is_extern);
+                var symbol = self.scope.define(v.name, v.is_mutable, v.is_extern) catch {
+                    return self.fail("{s} is already declared", token, .{v.name});
+                };
                 try self.compileExpression(&v.initializer);
                 try self.setSymbol(symbol, token, true);
             },
@@ -394,7 +413,9 @@ pub const Compiler = struct {
                 try self.getOrSetIdentifierConstant(c.name, token);
                 try self.writeOp(.class, token);
                 _ = try self.writeInt(OpCode.Size(.class), @as(OpCode.Size(.class), @intCast(c.fields.len)), token);
-                var symbol = try self.scope.define(c.name, false, false);
+                var symbol = self.scope.define(c.name, false, false) catch {
+                    return self.fail("{s} is already declared", token, .{c.name});
+                };
                 try self.setSymbol(symbol, token, true);
             },
             .@"enum" => |e| {
@@ -426,11 +447,16 @@ pub const Compiler = struct {
                 var buf: [11]u8 = undefined;
                 var fbs = std.io.fixedBufferStream(&buf);
                 try fbs.writer().writeByte('_');
-                try std.fmt.formatIntValue(self.fork_count, "", .{}, fbs.writer());
+                try std.fmt.formatIntValue(self.visit_tree.current.anon_count, "", .{}, fbs.writer());
                 var fork_count = std.mem.trim(u8, buf[0..], &[_]u8{170});
 
-                self.fork_count += 1;
-                defer self.fork_count -= 1;
+                self.visit_tree.current.anon_count += 1;
+                var cur = if (self.visit_tree.current.getChild(f.name orelse fork_count)) |n| n else {
+                    self.visit_tree.print(std.debug);
+                    return self.fail("Could not find {s} in visit tree node {s}", token, .{ f.name orelse fork_count, self.visit_tree.current.name });
+                };
+                self.visit_tree.current = cur;
+                defer self.visit_tree.current = cur.parent.?;
 
                 try self.visit_tree.list.append(f.name orelse fork_count);
                 defer _ = self.visit_tree.list.pop();
@@ -465,6 +491,12 @@ pub const Compiler = struct {
             .choice => |c| {
                 var name = c.name orelse &c.id;
                 try self.visit_tree.list.append(name);
+                var cur = if (self.visit_tree.current.getChild(name)) |n| n else {
+                    self.visit_tree.print(std.debug);
+                    return self.fail("Could not find {s} in visit tree node {s}", token, .{ name, self.visit_tree.current.name });
+                };
+                self.visit_tree.current = cur;
+                defer self.visit_tree.current = cur.parent.?;
                 defer _ = self.visit_tree.list.pop();
 
                 var path = try std.mem.join(self.allocator, ".", self.visit_tree.list.items);
@@ -492,6 +524,8 @@ pub const Compiler = struct {
             },
             .bough => |b| {
                 try self.visit_tree.list.append(b.name);
+                self.visit_tree.current = self.visit_tree.current.getChild(b.name).?;
+                defer self.visit_tree.current = self.visit_tree.current.parent.?;
                 defer _ = self.visit_tree.list.pop();
 
                 // skip over bough when running through instructions
@@ -538,7 +572,7 @@ pub const Compiler = struct {
                 try self.writeId(d.id, token);
             },
             .divert => |d| {
-                var node = try self.getDivertNode(d.path);
+                var node = try self.getDivertNode(d.path, token);
                 var backup_pos: usize = 0;
                 if (d.is_backup) {
                     try self.writeOp(.backup, token);
@@ -564,7 +598,7 @@ pub const Compiler = struct {
         }
     }
 
-    fn getDivertNode(self: *Compiler, path: [][]const u8) !*JumpTree.Node {
+    fn getDivertNode(self: *Compiler, path: [][]const u8, token: Token) !*JumpTree.Node {
         var node = self.jump_tree.current;
         // traverse up the tree to find the start of the path
         while (!std.mem.eql(u8, node.name, "root")) : (node = node.parent.?) {
@@ -577,7 +611,9 @@ pub const Compiler = struct {
 
         // traverse back down to get the leaf node
         for (path) |name| {
-            node = try node.getChild(name);
+            node = node.getChild(name) catch {
+                return self.fail("Could not find symbol {s}", token, .{name});
+            };
         }
         return node;
     }
@@ -613,7 +649,10 @@ pub const Compiler = struct {
         try self.visit_tree.list.append(name);
         var path = try std.mem.join(self.allocator, ".", self.visit_tree.list.items);
         defer self.allocator.free(path);
-        var symbol = try self.root_scope.define(path, false, false);
+        var symbol = self.root_scope.define(path, false, false) catch {
+            self.visit_tree.print(std.debug);
+            return self.fail("Visit {s} is already declared", token, .{path});
+        };
         try self.writeOp(.constant, token);
         _ = try self.writeInt(OpCode.Size(.constant), 4, token);
         try self.setSymbol(symbol, token, true);
@@ -643,7 +682,7 @@ pub const Compiler = struct {
                             try self.compileExpression(bin.right);
                             var symbol = try self.scope.resolve(id);
                             try self.setSymbol(symbol, token, false);
-                            try self.loadSymbol(symbol, token);
+                            try self.loadSymbol(symbol, id, token);
                             return;
                         },
                         .indexer => {
@@ -688,7 +727,7 @@ pub const Compiler = struct {
                             .identifier => |id| {
                                 var symbol = try self.scope.resolve(id);
                                 try self.setSymbol(symbol, token, false);
-                                try self.loadSymbol(symbol, token);
+                                try self.loadSymbol(symbol, id, token);
                                 return;
                             },
                             .indexer => {
@@ -770,12 +809,12 @@ pub const Compiler = struct {
                 }
             },
             .identifier => |id| {
-                if (self.visit_tree.current.getChild(id)) |node| {
+                if (self.visit_tree.resolve(id)) |node| {
                     try self.loadVisit(node, token);
                     return;
                 }
                 var symbol = try self.builtins.resolve(id) orelse try self.scope.resolve(id);
-                try self.loadSymbol(symbol, token);
+                try self.loadSymbol(symbol, id, token);
             },
             .@"if" => |i| {
                 try self.compileExpression(i.condition);
@@ -821,7 +860,7 @@ pub const Compiler = struct {
                 const count = self.scope.count;
                 const free_symbols = self.scope.free_symbols.items;
                 for (free_symbols) |s| {
-                    try self.loadSymbol(s, token);
+                    try self.loadSymbol(s, s.name, token);
                 }
                 try self.exitScope();
                 // defer self.allocator.free(free_symbols);
@@ -850,7 +889,7 @@ pub const Compiler = struct {
                     try self.getOrSetIdentifierConstant(ins.field_names[i], token);
                 }
                 var symbol = try self.scope.resolve(ins.name);
-                try self.loadSymbol(symbol, token);
+                try self.loadSymbol(symbol, ins.name, token);
                 try self.writeOp(.instance, token);
                 _ = try self.writeInt(OpCode.Size(.instance), @as(OpCode.Size(.instance), @intCast(ins.fields.len)), token);
             },
@@ -899,7 +938,7 @@ pub const Compiler = struct {
         } else return self.failError("Unknown symbol", token, .{}, Error.SymbolNotFound);
     }
 
-    fn loadSymbol(self: *Compiler, symbol: ?*Symbol, token: Token) !void {
+    fn loadSymbol(self: *Compiler, symbol: ?*Symbol, name: []const u8, token: Token) !void {
         if (symbol) |ptr| {
             switch (ptr.tag) {
                 .global => {
@@ -925,7 +964,7 @@ pub const Compiler = struct {
                     _ = try self.writeInt(size, @as(size, @intCast(ptr.index)), token);
                 },
             }
-        } else return self.failError("Unknown symbol", token, .{}, Error.SymbolNotFound);
+        } else return self.failError("Unknown symbol: {s}", token, .{name}, Error.SymbolNotFound);
     }
 
     fn loadVisit(self: *Compiler, node: *VisitTree.Node, token: Token) !void {
@@ -991,6 +1030,7 @@ pub const Compiler = struct {
 
     pub fn isVisitExpression(self: *Compiler, index: *const ast.Expression, token: Token) !bool {
         var idx = index.type.indexer;
+        if (idx.index.type != .identifier) return false;
         if (idx.target.type != .indexer and idx.target.type != .identifier) return false;
 
         var list = std.ArrayList([]const u8).init(self.allocator);
@@ -1025,11 +1065,9 @@ pub const Compiler = struct {
     }
 
     fn initializeConstants(self: *Compiler) !void {
-        _ = try self.addConstant(.{ .number = 0 });
-        _ = try self.addConstant(.{ .number = 1 });
-        _ = try self.addConstant(.{ .bool = false });
-        _ = try self.addConstant(.{ .bool = true });
-        _ = try self.addConstant(.{ .visit = 0 });
+        for (initial_constants) |c| {
+            _ = try self.addConstant(c);
+        }
     }
 
     fn getOrSetIdentifierConstant(self: *Compiler, name: []const u8, token: Token) !void {
@@ -1047,1010 +1085,3 @@ pub const Compiler = struct {
         _ = try self.writeInt(OpCode.Size(.constant), i, token);
     }
 };
-
-test "Basic Compile" {
-    const test_cases = .{
-        .{
-            .input = "1 + 2",
-            .constants = [_]Value{ .{ .number = 1 }, .{ .number = 2 } },
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.add), @intFromEnum(OpCode.pop) },
-        },
-    };
-
-    inline for (test_cases) |case| {
-        var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer bytecode.free(allocator);
-        for (case.instructions, 0..) |instruction, i| {
-            try testing.expectEqual(instruction, bytecode.instructions[i]);
-        }
-        for (case.constants, 0..) |constant, i| {
-            switch (constant) {
-                .number => |n| try testing.expectEqual(n, bytecode.constants[i].number),
-                else => continue,
-            }
-        }
-    }
-}
-
-test "Conditionals Compile" {
-    const test_cases = .{
-        .{
-            .input = "if true { 10 } 333",
-            .constants = [_]Value{ .{ .number = 10 }, .{ .number = 333 } },
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.true),
-                @intFromEnum(OpCode.jump_if_false),
-                0,
-                11,
-                @intFromEnum(OpCode.constant),
-                0,
-                0,
-                @intFromEnum(OpCode.pop),
-                @intFromEnum(OpCode.jump),
-                0,
-                13,
-                @intFromEnum(OpCode.nil),
-                @intFromEnum(OpCode.pop),
-                @intFromEnum(OpCode.constant),
-                0,
-                1,
-                @intFromEnum(OpCode.pop),
-            },
-        },
-        .{
-            .input = "if true { 10 } else { 20 } 333",
-            .constants = [_]Value{ .{ .number = 10 }, .{ .number = 20 }, .{ .number = 333 } },
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.true),
-                @intFromEnum(OpCode.jump_if_false),
-                0,
-                11,
-                @intFromEnum(OpCode.constant),
-                0,
-                0,
-                @intFromEnum(OpCode.pop),
-                @intFromEnum(OpCode.jump),
-                0,
-                15,
-                @intFromEnum(OpCode.constant),
-                0,
-                1,
-                @intFromEnum(OpCode.pop),
-                @intFromEnum(OpCode.constant),
-                0,
-                2,
-                @intFromEnum(OpCode.pop),
-            },
-        },
-    };
-
-    inline for (test_cases) |case| {
-        var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer bytecode.free(allocator);
-        for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("Error on instruction:{}", .{i});
-            try testing.expectEqual(instruction, bytecode.instructions[i]);
-        }
-        for (case.constants, 0..) |constant, i| {
-            switch (constant) {
-                .number => |n| try testing.expectEqual(n, bytecode.constants[i].number),
-                else => continue,
-            }
-        }
-    }
-}
-
-test "Variables" {
-    const test_cases = .{
-        .{
-            .input =
-            \\ var one = 1
-            \\ var two = 2
-            ,
-            .constants = [_]Value{ .{ .number = 1 }, .{ .number = 2 } },
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.constant),
-                0,
-                0,
-                @intFromEnum(OpCode.decl_global),
-                0,
-                0,
-                @intFromEnum(OpCode.constant),
-                0,
-                1,
-                @intFromEnum(OpCode.decl_global),
-                0,
-                1,
-            },
-        },
-        .{
-            .input =
-            \\ var one = 1
-            \\ var two = one
-            \\ two
-            ,
-            .constants = [_]Value{.{ .number = 1 }},
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.constant),
-                0,
-                0,
-                @intFromEnum(OpCode.decl_global),
-                0,
-                0,
-                @intFromEnum(OpCode.get_global),
-                0,
-                0,
-                @intFromEnum(OpCode.decl_global),
-                0,
-                1,
-                @intFromEnum(OpCode.get_global),
-                0,
-                1,
-                @intFromEnum(OpCode.pop),
-            },
-        },
-    };
-
-    inline for (test_cases) |case| {
-        var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer bytecode.free(allocator);
-        for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("{s} -- {}", .{ case.input, i });
-            try testing.expectEqual(instruction, bytecode.instructions[i]);
-        }
-        for (case.constants, 0..) |constant, i| {
-            switch (constant) {
-                .number => |n| try testing.expectEqual(n, bytecode.constants[i].number),
-                else => continue,
-            }
-        }
-    }
-}
-
-test "Strings" {
-    const test_cases = .{
-        .{
-            .input = "\"testing\"",
-            .constants = [_][]const u8{"testing"},
-            .instructions = [_]u8{ @intFromEnum(OpCode.string), 0, 0, 0, @intFromEnum(OpCode.pop) },
-        },
-        .{
-            .input = "\"test\" + \"ing\"",
-            .constants = [_][]const u8{ "test", "ing" },
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.string),
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.string),
-                0,
-                1,
-                0,
-                @intFromEnum(OpCode.add),
-                @intFromEnum(OpCode.pop),
-            },
-        },
-    };
-
-    inline for (test_cases) |case| {
-        var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer bytecode.free(allocator);
-        for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("{}", .{i});
-            try testing.expectEqual(instruction, bytecode.instructions[i]);
-        }
-        for (case.constants, 0..) |constant, i| {
-            try testing.expectEqualStrings(constant, bytecode.constants[i].obj.data.string);
-        }
-    }
-}
-
-test "Lists" {
-    const test_cases = .{
-        .{
-            .input = "[]",
-            .constants = [_]f32{},
-            .instructions = [_]u8{ @intFromEnum(OpCode.list), 0, 0, @intFromEnum(OpCode.pop) },
-        },
-        .{
-            .input = "[1,2,3]",
-            .constants = [_]f32{ 1, 2, 3 },
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.list), 0, 3, @intFromEnum(OpCode.pop) },
-        },
-        .{
-            .input = "[1 + 2, 3 - 4, 5 * 6]",
-            .constants = [_]f32{ 1, 2, 3, 4, 5, 6 },
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.add), @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.constant), 0, 3, @intFromEnum(OpCode.subtract), @intFromEnum(OpCode.constant), 0, 4, @intFromEnum(OpCode.constant), 0, 5, @intFromEnum(OpCode.multiply), @intFromEnum(OpCode.list), 0, 3, @intFromEnum(OpCode.pop) },
-        },
-    };
-
-    inline for (test_cases) |case| {
-        var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer bytecode.free(allocator);
-        for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("{}", .{i});
-            try testing.expectEqual(instruction, bytecode.instructions[i]);
-        }
-
-        for (case.constants, 0..) |constant, i| {
-            try testing.expect(constant == bytecode.constants[i].number);
-        }
-    }
-}
-
-test "Maps and Sets" {
-    // {} denotes a group as well as a map/set,
-    // wrap it in a () to force group expression statements
-    const test_cases = .{
-        .{
-            .input = "({:})",
-            .constants = [_]f32{},
-            .instructions = [_]u8{ @intFromEnum(OpCode.map), 0, 0, @intFromEnum(OpCode.pop) },
-        },
-        .{
-            .input = "({1: 2, 3: 4, 5: 6})",
-            .constants = [_]f32{ 1, 2, 3, 4, 5, 6 },
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.constant), 0, 3, @intFromEnum(OpCode.constant), 0, 4, @intFromEnum(OpCode.constant), 0, 5, @intFromEnum(OpCode.map), 0, 3, @intFromEnum(OpCode.pop) },
-        },
-        .{
-            .input = "({1: 2 + 3, 4: 5 * 6})",
-            .constants = [_]f32{ 1, 2, 3, 4, 5, 6 },
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.add), @intFromEnum(OpCode.constant), 0, 3, @intFromEnum(OpCode.constant), 0, 4, @intFromEnum(OpCode.constant), 0, 5, @intFromEnum(OpCode.multiply), @intFromEnum(OpCode.map), 0, 2, @intFromEnum(OpCode.pop) },
-        },
-        .{
-            .input = "({})",
-            .constants = [_]f32{},
-            .instructions = [_]u8{ @intFromEnum(OpCode.set), 0, 0, @intFromEnum(OpCode.pop) },
-        },
-        .{
-            .input = "({1, 2, 3})",
-            .constants = [_]f32{ 1, 2, 3 },
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.set), 0, 3, @intFromEnum(OpCode.pop) },
-        },
-        .{
-            .input = "({1 + 2, 3 * 4, 5 - 6})",
-            .constants = [_]f32{ 1, 2, 3, 4, 5, 6 },
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.add), @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.constant), 0, 3, @intFromEnum(OpCode.multiply), @intFromEnum(OpCode.constant), 0, 4, @intFromEnum(OpCode.constant), 0, 5, @intFromEnum(OpCode.subtract), @intFromEnum(OpCode.set), 0, 3, @intFromEnum(OpCode.pop) },
-        },
-    };
-
-    inline for (test_cases) |case| {
-        var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer bytecode.free(allocator);
-        for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("Error on: {}", .{i});
-            try testing.expectEqual(instruction, bytecode.instructions[i]);
-        }
-
-        for (case.constants, 0..) |constant, i| {
-            try testing.expect(constant == bytecode.constants[i].number);
-        }
-    }
-}
-
-test "Index" {
-    const test_cases = .{
-        .{
-            .input = "[1,2,3][1 + 1]",
-            .constants = [_]f32{ 1, 2, 3, 1, 1 },
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.list), 0, 3, @intFromEnum(OpCode.constant), 0, 3, @intFromEnum(OpCode.constant), 0, 4, @intFromEnum(OpCode.add), @intFromEnum(OpCode.index), @intFromEnum(OpCode.pop) },
-        },
-        .{
-            .input = "({1: 2})[2 - 1]",
-            .constants = [_]f32{ 1, 2, 2, 1 },
-            .instructions = [_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.constant), 0, 1, @intFromEnum(OpCode.map), 0, 1, @intFromEnum(OpCode.constant), 0, 2, @intFromEnum(OpCode.constant), 0, 3, @intFromEnum(OpCode.subtract), @intFromEnum(OpCode.index), @intFromEnum(OpCode.pop) },
-        },
-    };
-
-    inline for (test_cases) |case| {
-        var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer bytecode.free(allocator);
-        for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("Error on: {}", .{i});
-            try testing.expectEqual(instruction, bytecode.instructions[i]);
-        }
-
-        for (case.constants, 0..) |constant, i| {
-            try testing.expect(constant == bytecode.constants[i].number);
-        }
-    }
-}
-
-test "Functions" {
-    var test_cases = .{
-        .{
-            .input = "|| return 5 + 10",
-            .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 2, 0, @intFromEnum(OpCode.pop) },
-            .constants = [_]f32{ 5, 10 },
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant), 0,                                 0,
-                    @intFromEnum(OpCode.constant), 0,                                 1,
-                    @intFromEnum(OpCode.add),      @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input = "|| 5 + 10",
-            .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 2, 0, @intFromEnum(OpCode.pop) },
-            .constants = [_]f32{ 5, 10 },
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.constant),
-                    0,
-                    1,
-                    @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.pop),
-                    @intFromEnum(OpCode.return_void),
-                },
-            },
-        },
-        .{
-            .input = "|| { 5 + 10 return }",
-            .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 2, 0, @intFromEnum(OpCode.pop) },
-            .constants = [_]f32{ 5, 10 },
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant), 0,                        0,
-                    @intFromEnum(OpCode.constant), 0,                        1,
-                    @intFromEnum(OpCode.add),      @intFromEnum(OpCode.pop), @intFromEnum(OpCode.return_void),
-                },
-            },
-        },
-        .{
-            .input = "|| {}",
-            .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 0, 0, @intFromEnum(OpCode.pop) },
-            .constants = [_]f32{ 0, 0, 0 },
-            .functions = [_][]const u8{
-                &[_]u8{
-                    @intFromEnum(OpCode.return_void),
-                },
-            },
-        },
-        .{
-            .input = "|| { return 5 }()",
-            .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 1, 0, @intFromEnum(OpCode.call), 0, @intFromEnum(OpCode.pop) },
-            .constants = [_]f32{5},
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),     0, 0,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input =
-            \\ const five = || return 5
-            \\ five()
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
-                0,
-                1,
-                0,
-                @intFromEnum(OpCode.decl_global),
-                0,
-                0,
-                @intFromEnum(OpCode.get_global),
-                0,
-                0,
-                @intFromEnum(OpCode.call),
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{5},
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),     0, 0,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input =
-            \\ const two = || return 2
-            \\ two() + two()
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),     0,                        1,                         0,
-                @intFromEnum(OpCode.decl_global), 0,                        0,                         @intFromEnum(OpCode.get_global),
-                0,                                0,                        @intFromEnum(OpCode.call), 0,
-                @intFromEnum(OpCode.get_global),  0,                        0,                         @intFromEnum(OpCode.call),
-                0,                                @intFromEnum(OpCode.add), @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{2},
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),     0, 0,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input =
-            \\ const value = |a| return a
-            \\ value(1) + value(1)
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),     0,                         0,                             0,
-                @intFromEnum(OpCode.decl_global), 0,                         0,                             @intFromEnum(OpCode.get_global),
-                0,                                0,                         @intFromEnum(OpCode.constant), 0,
-                1,                                @intFromEnum(OpCode.call), 1,                             @intFromEnum(OpCode.get_global),
-                0,                                0,                         @intFromEnum(OpCode.constant), 0,
-                2,                                @intFromEnum(OpCode.call), 1,                             @intFromEnum(OpCode.add),
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{ 0, 1, 1 },
-            .functions = [_][]const u8{
-                &[_]u8{
-                    @intFromEnum(OpCode.get_local),    0, 0,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input =
-            \\ const oneArg = |a| { return a }
-            \\ oneArg(24)
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),     0,                         0,                             0,
-                @intFromEnum(OpCode.decl_global), 0,                         0,                             @intFromEnum(OpCode.get_global),
-                0,                                0,                         @intFromEnum(OpCode.constant), 0,
-                1,                                @intFromEnum(OpCode.call), 1,                             @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{ 0, 24 },
-            .functions = [_][]const u8{
-                &[_]u8{
-                    @intFromEnum(OpCode.get_local),    0, 0,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input =
-            \\ const multiArg = |a, b, c| { a b return c }
-            \\ multiArg(24,25,26)
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),     0,                             0,                             0,
-                @intFromEnum(OpCode.decl_global), 0,                             0,                             @intFromEnum(OpCode.get_global),
-                0,                                0,                             @intFromEnum(OpCode.constant), 0,
-                1,                                @intFromEnum(OpCode.constant), 0,                             2,
-                @intFromEnum(OpCode.constant),    0,                             3,                             @intFromEnum(OpCode.call),
-                3,                                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{ 0, 24, 25, 26 },
-            .functions = [_][]const u8{
-                &[_]u8{
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.pop),
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    1,
-                    @intFromEnum(OpCode.pop),
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    2,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-    };
-
-    inline for (test_cases) |case| {
-        errdefer std.log.warn("{s}", .{case.input});
-        var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer bytecode.free(allocator);
-        errdefer bytecode.print(std.debug);
-        for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("Error on: {}", .{i});
-            try testing.expectEqual(instruction, bytecode.instructions[i]);
-        }
-        for (bytecode.constants, 0..) |constant, i| {
-            switch (constant) {
-                .number => |n| try testing.expect(case.constants[i] == n),
-                .obj => |o| try testing.expectEqualSlices(u8, case.functions[i], o.data.function.instructions),
-                else => unreachable,
-            }
-        }
-    }
-}
-
-test "Locals" {
-    var test_cases = .{
-        .{
-            .input =
-            \\ const num = 5
-            \\ || return num
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.constant),
-                0,
-                0,
-                @intFromEnum(OpCode.decl_global),
-                0,
-                0,
-                @intFromEnum(OpCode.closure),
-                0,
-                1,
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{5},
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.get_global),   0, 0,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input =
-            \\ || {
-            \\     const num = 5
-            \\     return num 
-            \\ }
-            ,
-            .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 1, 0, @intFromEnum(OpCode.pop) },
-            .constants = [_]f32{5},
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{ @intFromEnum(OpCode.constant), 0, 0, @intFromEnum(OpCode.set_local), 0, 0, @intFromEnum(OpCode.get_local), 0, 0, @intFromEnum(OpCode.return_value) },
-            },
-        },
-        .{
-            .input =
-            \\ || {
-            \\    const a = 5
-            \\    const b = 7
-            \\    return a + b
-            \\ }
-            ,
-            .instructions = [_]u8{ @intFromEnum(OpCode.closure), 0, 2, 0, @intFromEnum(OpCode.pop) },
-            .constants = [_]f32{ 5, 7 },
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.set_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.constant),
-                    0,
-                    1,
-                    @intFromEnum(OpCode.set_local),
-                    0,
-                    1,
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    1,
-                    @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-    };
-
-    inline for (test_cases) |case| {
-        errdefer std.log.warn("{s}", .{case.input});
-        var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer bytecode.free(allocator);
-        for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("Error on: {}", .{i});
-            try testing.expectEqual(instruction, bytecode.instructions[i]);
-        }
-        for (bytecode.constants, 0..) |constant, i| {
-            switch (constant) {
-                .number => |n| try testing.expect(case.constants[i] == n),
-                .obj => |o| try testing.expectEqualSlices(u8, case.functions[i], o.data.function.instructions),
-                else => unreachable,
-            }
-        }
-    }
-}
-
-test "Builtin Functions" {
-    var test_cases = .{
-        .{
-            .input =
-            \\ rnd(1, 10)
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.get_builtin),
-                0,
-                @intFromEnum(OpCode.constant),
-                0,
-                0,
-                @intFromEnum(OpCode.constant),
-                0,
-                1,
-                @intFromEnum(OpCode.call),
-                2,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{ 1, 10 },
-        },
-        .{
-            .input = "rnd01()",
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.get_builtin),
-                1,
-                @intFromEnum(OpCode.call),
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{0},
-        },
-    };
-
-    inline for (test_cases) |case| {
-        errdefer std.log.warn("{s}", .{case.input});
-        var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer bytecode.free(allocator);
-        errdefer bytecode.print(std.debug);
-        for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("Error on: {}", .{i});
-            try testing.expectEqual(instruction, bytecode.instructions[i]);
-        }
-        for (bytecode.constants, 0..) |constant, i| {
-            try testing.expect(case.constants[i] == constant.number);
-        }
-    }
-}
-
-test "Closures" {
-    var test_cases = .{
-        .{
-            .input = "|a| { return |b| { return a + b } }",
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
-                0,
-                1,
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{0},
-            .functions = [_][]const u8{
-                &[_]u8{
-                    @intFromEnum(OpCode.get_free),     0,
-                    @intFromEnum(OpCode.get_local),    0,
-                    0,                                 @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.return_value),
-                },
-                &[_]u8{
-                    @intFromEnum(OpCode.get_local), 0,                                 0,
-                    @intFromEnum(OpCode.closure),   0,                                 0,
-                    1,                              @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input =
-            \\ |a| {
-            \\     return |b| { 
-            \\        return |c| return a + b + c 
-            \\     }
-            \\ }
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
-                0,
-                2,
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{0},
-            .functions = [_][]const u8{
-                &[_]u8{
-                    @intFromEnum(OpCode.get_free), 0,
-                    @intFromEnum(OpCode.get_free), 1,
-                    @intFromEnum(OpCode.add),      @intFromEnum(OpCode.get_local),
-                    0,                             0,
-                    @intFromEnum(OpCode.add),      @intFromEnum(OpCode.return_value),
-                },
-                &[_]u8{
-                    @intFromEnum(OpCode.get_free),  0,
-                    @intFromEnum(OpCode.get_local), 0,
-                    0,                              @intFromEnum(OpCode.closure),
-                    0,                              0,
-                    2,                              @intFromEnum(OpCode.return_value),
-                },
-                &[_]u8{
-                    @intFromEnum(OpCode.get_local), 0,                                 0,
-                    @intFromEnum(OpCode.closure),   0,                                 1,
-                    1,                              @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input =
-            \\ const globalNum = 55
-            \\ || {
-            \\     const a = 66
-            \\     return || {
-            \\        const b = 77 
-            \\        return || {
-            \\            const c = 88 
-            \\            return globalNum + a + b + c
-            \\        }
-            \\     } 
-            \\ }
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.constant),    0,                        0,
-                @intFromEnum(OpCode.decl_global), 0,                        0,
-                @intFromEnum(OpCode.closure),     0,                        6,
-                0,                                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{ 55, 66, 77, 88 },
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{},
-                &[_]u8{},
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),   0,                                 3,
-                    @intFromEnum(OpCode.set_local),  0,                                 0,
-                    @intFromEnum(OpCode.get_global), 0,                                 0,
-                    @intFromEnum(OpCode.get_free),   0,                                 @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.get_free),   1,                                 @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.get_local),  0,                                 0,
-                    @intFromEnum(OpCode.add),        @intFromEnum(OpCode.return_value),
-                },
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),     0, 2,
-                    @intFromEnum(OpCode.set_local),    0, 0,
-                    @intFromEnum(OpCode.get_free),     0, @intFromEnum(OpCode.get_local),
-                    0,                                 0, @intFromEnum(OpCode.closure),
-                    0,                                 4, 2,
-                    @intFromEnum(OpCode.return_value),
-                },
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),  0,                                 1,
-                    @intFromEnum(OpCode.set_local), 0,                                 0,
-                    @intFromEnum(OpCode.get_local), 0,                                 0,
-                    @intFromEnum(OpCode.closure),   0,                                 5,
-                    1,                              @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input =
-            \\ const countDown =|x| return countDown(x - 1)
-            \\ countDown(1)
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
-                0,
-                1,
-                0,
-                @intFromEnum(OpCode.decl_global),
-                0,
-                0,
-                @intFromEnum(OpCode.get_global),
-                0,
-                0,
-                @intFromEnum(OpCode.constant),
-                0,
-                2,
-                @intFromEnum(OpCode.call),
-                1,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{ 1, 0, 1 },
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.current_closure),
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.constant),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.subtract),
-                    @intFromEnum(OpCode.call),
-                    1,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-    };
-
-    inline for (test_cases) |case| {
-        errdefer std.log.warn("{s}", .{case.input});
-        var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer bytecode.free(allocator);
-        errdefer bytecode.print(std.debug);
-        for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("Error on: {}", .{i});
-            try testing.expectEqual(instruction, bytecode.instructions[i]);
-        }
-        for (bytecode.constants, 0..) |constant, i| {
-            switch (constant) {
-                .number => |n| try testing.expect(case.constants[i] == n),
-                .obj => |o| try testing.expectEqualSlices(u8, case.functions[i], o.data.function.instructions),
-                else => unreachable,
-            }
-        }
-    }
-}
-
-test "Classes" {
-    const TestValue = union(enum(u4)) {
-        number: f32,
-        string: []const u8,
-    };
-    const test_cases = .{
-        .{
-            .input =
-            \\ class Test {
-            \\     value = 0    
-            \\ }
-            \\ new Test{}.value
-            \\
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.constant), 0, 0,
-                @intFromEnum(OpCode.constant), 0, 1,
-                @intFromEnum(OpCode.constant), 0, 2,
-                @intFromEnum(OpCode.class),    1, @intFromEnum(OpCode.decl_global),
-                0,                             0, @intFromEnum(OpCode.get_global),
-                0,                             0, @intFromEnum(OpCode.instance),
-            },
-            .constants = [_]TestValue{
-                .{ .number = 0.0 },
-                .{ .string = "value" },
-                .{ .string = "Test" },
-            },
-        },
-    };
-
-    inline for (test_cases) |case| {
-        errdefer std.log.warn("{s}", .{case.input});
-        var allocator = testing.allocator;
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
-            return err;
-        };
-        defer bytecode.free(allocator);
-        errdefer bytecode.print(std.debug);
-        for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("Error on: {}", .{i});
-            try testing.expectEqual(instruction, bytecode.instructions[i]);
-        }
-        for (case.constants, 0..) |constant, i| {
-            switch (constant) {
-                .number => |n| try testing.expect(n == bytecode.constants[i].number),
-                .string => |s| try testing.expectEqualStrings(s, bytecode.constants[i].obj.data.string),
-            }
-        }
-    }
-}
-
-test "Serialize" {
-    const input =
-        \\ var str = "string value"
-        \\ const num = 25
-        \\ const fun = |x| {
-        \\     return x * 2
-        \\ }
-        \\ var list = ["one", "two"]
-        \\ const set = {1, 2, 3.3}
-        \\ const map = {1:2.2, 3: 4.4}
-    ;
-
-    errdefer std.log.warn("{s}", .{input});
-    var allocator = testing.allocator;
-    var errors = Errors.init(allocator);
-    defer errors.deinit();
-    var bytecode = compileSource(allocator, input, &errors) catch |err| {
-        try errors.write(input, std.io.getStdErr().writer());
-        return err;
-    };
-    defer bytecode.free(allocator);
-
-    // this doesn't need to be a file, but it's nice to sometimes not delete it and inspect it
-    const file = try std.fs.cwd().createFile("tmp.topib", .{ .read = true });
-    defer std.fs.cwd().deleteFile("tmp.topib") catch {};
-    defer file.close();
-    try bytecode.serialize(file.writer());
-
-    try file.seekTo(0);
-    var deserialized = try ByteCode.deserialize(allocator, file.reader());
-    defer deserialized.free(allocator);
-    try testing.expectEqualSlices(u8, bytecode.instructions, deserialized.instructions);
-    for (bytecode.constants, 0..) |constant, i| {
-        try testing.expect(constant.eql(deserialized.constants[i]));
-    }
-}

@@ -13,6 +13,7 @@ pub const VisitTree = struct {
         name: []const u8,
         index: global_size,
         children: std.ArrayList(*Node),
+        anon_count: usize = 0,
 
         pub fn create(allocator: std.mem.Allocator, name: []const u8, index: global_size, parent: ?*Node) !*Node {
             var node = try allocator.create(Node);
@@ -34,9 +35,13 @@ pub const VisitTree = struct {
             allocator.destroy(self);
         }
 
+        pub fn reset(self: *Node) void {
+            self.anon_count = 0;
+            for (self.children.items) |c| c.reset();
+        }
+
         pub fn getChild(self: *const Node, name: []const u8) ?*Node {
             for (self.children.items) |child| {
-                std.log.warn("CHILD: {} == {} | {}", .{ name.len, child.name.len, std.mem.eql(u8, child.name, name) });
                 if (std.mem.eql(u8, child.name, name)) return child;
             }
             return null;
@@ -100,10 +105,14 @@ pub const VisitTree = struct {
         writer.print("\n", .{});
     }
 
+    pub fn reset(self: *VisitTree) void {
+        self.root.reset();
+    }
+
     pub fn resolve(self: *VisitTree, name: []const u8) ?*Node {
         var node = self.current;
-        if (node == self.root) return node.getChild(name);
         if (std.mem.eql(u8, node.name, name)) return node;
+        if (node.getChild(name)) |n| return n;
         while (node.parent) |p| {
             node = p;
             if (std.mem.eql(u8, node.name, name)) return node;

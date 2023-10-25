@@ -55,6 +55,7 @@ pub const Scope = struct {
     }
 
     pub fn define(self: *Scope, name: []const u8, is_mutable: bool, is_extern: bool) !*Symbol {
+        if (self.symbols.contains(name)) return error.SymbolAlreadyDeclared;
         const symbol = try self.allocator.create(Symbol);
         if (is_extern and self.parent != null) {
             return error.ExternError;

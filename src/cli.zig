@@ -25,14 +25,17 @@ pub fn main() !void {
 
     var dir = try std.fs.cwd().openDir(std.fs.path.dirname(file_path.?).?, .{});
     var file_name = std.fs.path.basename(file_path.?);
-    var tree = try parseFile(allocator, dir, file_name, &err);
+    var tree = parseFile(allocator, dir, file_name, &err) catch return;
     defer tree.deinit();
     defer allocator.free(tree.source);
 
     var compiler = try Compiler.init(allocator, &err);
     defer compiler.deinit();
 
-    try compiler.compile(tree);
+    compiler.compile(tree) catch |e| {
+        try err.write(tree.source, std.io.getStdErr().writer());
+        return e;
+    };
     var bytecode = try compiler.bytecode();
     var cli_runner = CliRunner.init();
     var vm = try Vm.init(vm_alloc, bytecode, &cli_runner.runner, &err);
