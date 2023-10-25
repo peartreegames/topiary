@@ -66,7 +66,6 @@ pub fn initTestVm(source: []const u8, debug: bool) !Vm {
     if (debug) {
         bytecode.print(std.debug);
     }
-    for (bytecode.global_symbols) |s| std.log.warn("SYM: {} {s}", .{ s.index, s.name });
     var vm = try Vm.init(alloc, bytecode, &test_runner.runner, &errors);
     return vm;
 }
@@ -884,6 +883,26 @@ test "Visits" {
             \\ print(START.INNER)
             \\ print(START.INNER._0.ONE)
             \\ print(START.INNER._0.TWO)
+            ,
+        },
+        .{
+            .input =
+            \\ === START {
+            \\     :speaker: "Starting"
+            \\     fork NAMED {
+            \\         ~ ONE "Answer one" {
+            \\             :speaker: "You chose one"
+            \\             print("ONE={ONE}")
+            \\             print("TWO={NAMED.TWO}")
+            \\         }
+            \\         ~ TWO "Answer two" {
+            \\             :speaker: "You chose two"
+            \\             print("ONE={NAMED.ONE}")
+            \\             print("TWO={TWO}")
+            \\         }
+            \\     }
+            \\ }
+            \\ => START
             ,
         },
     };

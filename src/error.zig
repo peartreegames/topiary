@@ -18,6 +18,11 @@ pub const Errors = struct {
     list: std.ArrayListUnmanaged(Error),
     allocator: std.mem.Allocator,
 
+    // used for interpolatedExpressions
+    offset_pos: usize = 0,
+    offset_line: usize = 0,
+    offset_col: usize = 0,
+
     pub fn init(allocator: std.mem.Allocator) Errors {
         return .{ .list = std.ArrayListUnmanaged(Error){}, .allocator = allocator };
     }
@@ -50,17 +55,22 @@ pub const Errors = struct {
             };
             try writer.print("{s}error: \x1b[0m{s}\n", .{ color_prefix, err.fmt });
 
-            var start = @min(err.token.start, source.len - 1);
-            var end = @min(err.token.end, source.len);
+            var start = err.token.start + self.offset_pos;
+            var end = err.token.end + self.offset_pos;
+            var line = err.token.line + self.offset_line;
+            var column = err.token.column + self.offset_col;
 
-            try writer.print("type: {s}, line: {d}, column: {d}\n", .{ tok.toString(err.token.token_type), err.token.line, err.token.column });
+            start = @min(start, source.len - 1);
+            end = @min(end, source.len);
+
+            try writer.print("type: {s}, line: {}, column: {}\n", .{ tok.toString(err.token.token_type), line, column });
 
             var lines = std.mem.splitSequence(u8, source, "\n");
             var lineNumber: usize = 1;
-            while (lines.next()) |line| : (lineNumber += 1) {
-                if (lineNumber < err.token.line) continue;
-                try writer.print("{s}\n", .{line});
-                try writer.writeByteNTimes(' ', err.token.column - 1);
+            while (lines.next()) |l| : (lineNumber += 1) {
+                if (lineNumber < line) continue;
+                try writer.print("{s}\n", .{l});
+                try writer.writeByteNTimes(' ', column - 1);
                 try writer.writeByteNTimes('~', end - start);
                 try writer.writeAll("\x1b[0;35m^\n\x1b[0m");
                 break;
