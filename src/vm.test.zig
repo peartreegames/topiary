@@ -94,6 +94,7 @@ test "Basics" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
         switch (case.type) {
             f32 => try testing.expect(case.value == vm.stack.previous().number),
@@ -119,6 +120,7 @@ test "Conditionals" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
         switch (case.type) {
             .number => {
@@ -144,6 +146,7 @@ test "Variables" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
         var value = vm.stack.previous().number;
         try testing.expect(case.value == value);
@@ -179,6 +182,7 @@ test "Strings" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
         switch (@TypeOf(case.value)) {
             []const u8 => try testing.expectEqualStrings(case.value, vm.stack.previous().obj.data.string),
@@ -202,6 +206,7 @@ test "Lists" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
         var prev = vm.stack.previous();
         for (case.value, 0..) |v, i| {
@@ -222,6 +227,7 @@ test "Maps" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
         const map = vm.stack.previous().obj.data.map;
         try testing.expect(map.keys().len == case.keys.len);
@@ -247,6 +253,7 @@ test "Sets" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
         const set = vm.stack.previous().obj.data.set;
         try testing.expect(set.keys().len == case.values.len);
@@ -278,6 +285,7 @@ test "Index" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
         const value = vm.stack.previous();
         switch (@TypeOf(case.value)) {
@@ -339,6 +347,7 @@ test "Functions" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
         const value = vm.stack.previous();
         switch (@TypeOf(case.value)) {
@@ -407,6 +416,7 @@ test "Locals" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
         const value = vm.stack.previous();
         errdefer std.log.warn("{s}:: {any} == {any}", .{ case.input, case.value, value });
@@ -467,6 +477,7 @@ test "Function Arguments" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
         const value = vm.stack.previous();
         switch (@TypeOf(case.value)) {
@@ -490,6 +501,7 @@ test "Builtin Functions" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
             try vm.err.write(case.input, std.io.getStdErr().writer());
             return err;
@@ -560,6 +572,7 @@ test "Closures" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
         const value = vm.stack.previous();
         try testing.expectEqual(value.number, case.value);
@@ -638,6 +651,7 @@ test "Loops" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
             try vm.err.write(case.input, std.io.getStdErr().writer());
             return err;
@@ -655,6 +669,7 @@ test "Classes" {
     ;
     var vm = try initTestVm(input, false);
     defer vm.deinit();
+    defer vm.bytecode.free(testing.allocator);
     try vm.interpret();
     var value = vm.stack.previous();
     try testing.expect(value.obj.data == .class);
@@ -680,6 +695,7 @@ test "Instance" {
     ;
     var vm = try initTestVm(input, false);
     defer vm.deinit();
+    defer vm.bytecode.free(testing.allocator);
     try vm.interpret();
 }
 
@@ -766,6 +782,7 @@ test "Boughs" {
         std.debug.print("\n======\n", .{});
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
     }
 }
@@ -816,6 +833,7 @@ test "Forks" {
         std.debug.print("\n======\n", .{});
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
     }
 }
@@ -911,6 +929,7 @@ test "Visits" {
         std.debug.print("\n======\n", .{});
         var vm = try initTestVm(case.input, true);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
     }
 }
@@ -980,6 +999,7 @@ test "Jump Backups" {
         std.debug.print("\n======\n", .{});
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
     }
 }
@@ -1083,6 +1103,7 @@ test "Switch" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
     }
 }
@@ -1102,6 +1123,7 @@ test "Externs and Subscribers" {
     inline for (test_cases) |case| {
         var vm = try initTestVm(case.input, false);
         defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
         const Listener = struct {
             pub fn onChange(_: usize, value: Value) void {
                 std.debug.print("\nListener::{}\n", .{value});
@@ -1123,6 +1145,7 @@ test "Save and Load State" {
 
     var vm = try initTestVm(test_case, false);
     defer vm.deinit();
+    defer vm.bytecode.free(testing.allocator);
     try vm.interpret();
 
     var save = StateMap.init(alloc);
@@ -1136,6 +1159,7 @@ test "Save and Load State" {
 
     var vm2 = try initTestVm(second_case, false);
     defer vm2.deinit();
+    defer vm2.bytecode.free(testing.allocator);
     try vm2.loadState(&save);
     try testing.expectEqual(vm2.globals[0].number, 1);
 

@@ -209,8 +209,7 @@ pub const Compiler = struct {
     fn exitScope(self: *Compiler) !void {
         const old_scope = self.scope;
         self.scope = old_scope.parent orelse return Error.OutOfScope;
-        const locals_count = self.locals_count + old_scope.count;
-        if (locals_count > self.locals_count) self.locals_count = locals_count;
+        self.locals_count = @max(self.locals_count, self.scope.count + old_scope.count);
         old_scope.destroy();
     }
 
@@ -682,7 +681,6 @@ pub const Compiler = struct {
                             try self.compileExpression(bin.right);
                             var symbol = try self.scope.resolve(id);
                             try self.setSymbol(symbol, token, false);
-                            try self.loadSymbol(symbol, id, token);
                             return;
                         },
                         .indexer => {
@@ -864,7 +862,6 @@ pub const Compiler = struct {
                 }
                 try self.exitScope();
                 // defer self.allocator.free(free_symbols);
-
                 const obj = try self.allocator.create(Value.Obj);
 
                 obj.* = .{
