@@ -43,7 +43,7 @@ pub fn main() !void {
     var bytecode = try compiler.bytecode();
 
     var i: usize = 0;
-    var visit_counts = std.StringHashMap(u64).init(vm_alloc);
+    var visit_counts = std.StringArrayHashMap(u64).init(vm_alloc);
     defer visit_counts.deinit();
     while (i < count) : (i += 1) {
         var auto_runner = AutoTestRunner.init();
