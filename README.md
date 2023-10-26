@@ -8,11 +8,13 @@ It is written in [Zig](https://ziglang.org).
 ## Usage
 
 Currently Topiary can only be run as a CLI tool.
-Simply download the appropiary binary then pass in a `[PATH]` argument.
+Simply download the appropiate binary then pass in a `[PATH]` argument.
 
 You can then press `enter` for the next line, and select a choice with `0-9` then `enter`
 
-Example:
+`~/Downloads/topi-cli ./examples/hello.topi`
+
+From Source Example:
 ```
 zig build
 ./zig-out/bin/topi-cli ./examples/hello.topi
