@@ -618,7 +618,7 @@ pub const Parser = struct {
 
         self.err.offset_pos += offset;
         self.err.offset_col += self.lexer.column + 1;
-        self.err.offset_line += self.lexer.line - 2;
+        self.err.offset_line += if (self.lexer.line >= 2) self.lexer.line - 2 else 0;
 
         var parser = Parser{
             .current_token = lexer.next(),

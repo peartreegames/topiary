@@ -111,7 +111,6 @@ pub const Vm = struct {
         for (self.subscribers) |*sub| sub.deinit();
         self.allocator.free(self.subscribers);
         self.allocator.free(self.globals);
-        self.bytecode.free(self.allocator);
     }
 
     /// Add the current state to a StateMap
@@ -239,7 +238,9 @@ pub const Vm = struct {
         self.frames.push(try Frame.create(root_closure, 0, 0));
         try self.run();
         if (self.stack.count > self.bytecode.locals_count) {
-            std.log.warn("Completed run but still had {} items on stack.", .{self.stack.count});
+            var count = self.stack.count - self.bytecode.locals_count;
+            std.log.warn("Completed run but still had {} items on stack.", .{count});
+            self.stack.print(std.debug, count);
         }
     }
 
@@ -267,6 +268,7 @@ pub const Vm = struct {
         while (self.ip < self.currentFrame().instructions().len) : (self.ip = self.currentFrame().ip) {
             if (self.is_waiting) continue;
             const instruction = self.readByte();
+            if (instruction == 170) break;
             const op: OpCode = @enumFromInt(instruction);
             switch (op) {
                 .constant => {
@@ -667,7 +669,7 @@ pub const Vm = struct {
                             } else return self.fail("Unknown index key \"{s}\" on map key/value pair. Only \"key\" or \"value\" are allowed.", .{@tagName(index)});
                         },
                         else => {
-                            return self.fail("Invalid index on target type \"{s}\"", .{@tagName(target)});
+                            return self.fail("Invalid index \"{s}\" on target type \"{s}\"", .{ @tagName(index), @tagName(target) });
                         },
                     }
                 },
