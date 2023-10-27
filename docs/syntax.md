@@ -131,7 +131,7 @@ to be used in your runner code.
 
 ### Visits
 
-All boughs, named forks, and named choices have visit counts. 
+All boughs, forks, and choices have visit counts. 
 If a choice is not in a named fork its path is the fork index within the bough preceeded by an underscore `_0`, `_1`, etc
 (but this is not recommended, best to give it a name).
 
@@ -159,6 +159,28 @@ If a choice is not in a named fork its path is the fork index within the bough p
         ~ TWO "Pick two" {}
     }
 }
+```
+
+Visit paths can be found within scopes and don't need the full path written out.
+
+```
+=== START {
+    :speaker: "Starting"
+    fork NAMED {
+        ~ ONE "Answer one" {
+            :speaker: "You chose one"
+            print("ONE={ONE}")
+            print("TWO={NAMED.TWO}")
+        }
+        ~ TWO "Answer two" {
+            :speaker: "You chose two"
+            if (TWO > 1) :spekaer: "You've already been here"
+            print("ONE={NAMED.ONE}")
+            print("TWO={TWO}")
+        }
+    }
+}
+=> START
 ```
 
 ### Flow and Jump Back Ups
@@ -392,7 +414,7 @@ const value = 42
 Functions are declared same as variables, with parameters between pipes (`|`)
 Braces are optional if only one line is used.
 
-**Functions cannot contain Boughs or Jumps, only logic.**
+**Functions cannot contain Boughs or Jumps, only logic. And currently functions can only be declared in global scope**
 
 ```topi
 const sum = |x, y| return x + y
