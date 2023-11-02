@@ -76,6 +76,32 @@ export fn tryGetValue(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize,
     return true;
 }
 
+export fn setExternString(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value_ptr: [*c]const u8, value_length: usize) void {
+    var vm: *Vm = @ptrFromInt(vm_ptr);
+    var name = name_ptr[0..name_length];
+    var value = value_ptr[0..value_length];
+    var str = vm.gc.create(vm, .{ .string = vm.allocator.dupe(u8, value) catch @panic("Cannot allocate memory for string.") }) catch @panic("Unable to create gc value");
+    vm.setExtern(name, str) catch @panic("Invalid operation");
+}
+
+export fn setExternNumber(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value: f32) void {
+    var vm: *Vm = @ptrFromInt(vm_ptr);
+    var name = name_ptr[0..name_length];
+    vm.setExtern(name, .{ .number = value }) catch @panic("Invalid operation");
+}
+
+export fn setExternBool(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value: bool) void {
+    var vm: *Vm = @ptrFromInt(vm_ptr);
+    var name = name_ptr[0..name_length];
+    vm.setExtern(name, if (value) values.True else values.False) catch @panic("Invalid operation");
+}
+
+export fn setExternNil(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize) void {
+    var vm: *Vm = @ptrFromInt(vm_ptr);
+    var name = name_ptr[0..name_length];
+    vm.setExtern(name, values.Nil) catch @panic("Invalid operation");
+}
+
 export fn destroyValue(value: *ExportValue) void {
     value.deinit(alloc);
 }

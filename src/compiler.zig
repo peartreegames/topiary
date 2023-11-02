@@ -400,7 +400,6 @@ pub const Compiler = struct {
                 try self.compileExpression(&v.initializer);
                 try self.setSymbol(symbol, token, true);
             },
-
             .class => |c| {
                 try self.enterScope(.local);
                 for (c.fields, 0..) |field, i| {
@@ -681,6 +680,7 @@ pub const Compiler = struct {
                             try self.compileExpression(bin.right);
                             var symbol = try self.scope.resolve(id);
                             try self.setSymbol(symbol, token, false);
+                            try self.loadSymbol(symbol, id, token);
                             return;
                         },
                         .indexer => {

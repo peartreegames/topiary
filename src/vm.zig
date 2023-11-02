@@ -168,26 +168,9 @@ pub const Vm = struct {
         return index;
     }
 
-    pub fn setExternString(self: *Vm, name: []const u8, value: []const u8) !void {
-        const index = try self.getExternIndex(name);
-        var str = try self.gc.create(self, .{ .string = try self.allocator.dupe(u8, value) });
-        self.globals[index] = str;
-    }
-
-    pub fn setExternNumber(self: *Vm, name: []const u8, value: f32) !void {
-        return self.setExtern(try self.getExternIndex(name), f32, value);
-    }
-
-    pub fn setExternBool(self: *Vm, name: []const u8, value: bool) !void {
-        return self.setExtern(try self.getExternIndex(name), bool, value);
-    }
-
-    pub fn setExternNil(self: *Vm, name: []const u8) !void {
-        return self.setExtern(try self.getExternIndex(name), @TypeOf(null), null);
-    }
-
-    pub fn setExtern(self: *Vm, index: usize, comptime T: type, value: T) !void {
-        self.globals[index] = Value.createFrom(T, value);
+    pub fn setExtern(self: *Vm, name: []const u8, value: Value) !void {
+        var index = try self.getExternIndex(name);
+        self.globals[index] = value;
     }
 
     pub fn getExtern(self: *Vm, name: []const u8) !Value {
@@ -237,11 +220,11 @@ pub const Vm = struct {
         self.stack.resize(self.bytecode.locals_count);
         self.frames.push(try Frame.create(root_closure, 0, 0));
         try self.run();
-        if (self.stack.count > self.bytecode.locals_count) {
-            var count = self.stack.count - self.bytecode.locals_count;
-            std.log.warn("Completed run but still had {} items on stack.", .{count});
-            self.stack.print(std.debug, count);
-        }
+        // if (self.stack.count > self.bytecode.locals_count) {
+        //     var count = self.stack.count - self.bytecode.locals_count;
+        //     std.log.warn("Completed run but still had {} items on stack.", .{count});
+        //     self.stack.print(std.debug, count);
+        // }
     }
 
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {

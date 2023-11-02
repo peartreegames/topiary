@@ -606,10 +606,19 @@ test "Loops" {
         \\ x
         , .value = 10 },
         .{ .input = 
+        \\ var x = 0
+        \\ while true {
+        \\    var y = 1
+        \\    x = x + y
+        \\    if x < 10 continue
+        \\    break
+        \\ }
+        \\ x
+        , .value = 10 },
+        .{ .input = 
         \\ const list = [1,2,3,4,5]
         \\ var sum = 0
         \\ for list |item| {
-        \\     print(item)
         \\     sum += item
         \\ }
         \\ sum
@@ -633,7 +642,6 @@ test "Loops" {
         .{ .input = 
         \\ var sum = 0
         \\ for 0..10 |i| {
-        \\     print(i)
         \\     sum += i
         \\ }
         \\ sum
@@ -642,7 +650,6 @@ test "Loops" {
         \\ const list = [1,2,3,4,5]
         \\ var sum = 0
         \\ for 0..(list.count() - 1) |i| {
-        \\     print(i)
         \\     sum += list[i]
         \\ }
         \\ sum
@@ -787,6 +794,38 @@ test "Boughs" {
     }
 }
 
+test "Bough Loops" {
+    const test_cases = .{
+        .{
+            .input =
+            \\ var i = 0
+            \\ var str = ""
+            \\ === START {
+            \\     while i < 5 {
+            \\         i += 1
+            \\         str = "{i}"
+            \\         :Speaker: "Testing {str}"
+            \\     }
+            \\ }
+            \\ => START^
+            \\ i
+            ,
+            .value = 5,
+        },
+    };
+    inline for (test_cases) |case| {
+        var vm = try initTestVm(case.input, false);
+        defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| {
+            try vm.err.write(case.input, std.io.getStdErr().writer());
+            return err;
+        };
+        const value = vm.stack.previous();
+        try testing.expectEqual(value.number, case.value);
+    }
+}
+
 test "Forks" {
     const test_cases = .{
         .{
@@ -927,7 +966,7 @@ test "Visits" {
 
     inline for (test_cases) |case| {
         std.debug.print("\n======\n", .{});
-        var vm = try initTestVm(case.input, true);
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -1129,7 +1168,7 @@ test "Externs and Subscribers" {
                 std.debug.print("\nListener::{}\n", .{value});
             }
         };
-        try vm.setExternNumber("value", 2);
+        try vm.setExtern("value", .{ .number = 2 });
         try vm.subscribeCallback("value", Listener.onChange);
         try vm.interpret();
         try testing.expect(case.value == vm.stack.previous().number);
