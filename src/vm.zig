@@ -712,6 +712,16 @@ pub const Vm = struct {
                             self.stack.count -= arg_count + 1;
                             try self.push(result);
                         },
+                        .ext_function => |e| {
+                            if (e.arity != arg_count)
+                                return self.fail(
+                                    "Extern Function expected {} arguments, but found {}",
+                                    .{ e.arity, arg_count },
+                                );
+                            var result = e.backing(e.context_ptr, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
+                            self.stack.count -= arg_count + 1;
+                            try self.push(result);
+                        },
                         else => {
                             return self.fail("Cannot call non-function type {s}", .{@tagName(value.obj.data)});
                         },

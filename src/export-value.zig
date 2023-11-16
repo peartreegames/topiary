@@ -1,5 +1,6 @@
 const std = @import("std");
-const Value = @import("./values.zig").Value;
+const values = @import("./values.zig");
+const Value = values.Value;
 
 const Tag = enum(u8) {
     nil,
@@ -67,6 +68,15 @@ pub const ExportValue = extern struct {
                 else => Nil,
             },
             else => Nil,
+        };
+    }
+
+    pub fn toValue(self: *const ExportValue) Value {
+        return switch(self.tag) {
+            .nil => values.Nil,
+            .bool => if (self.data.bool) values.True else values.False,
+            .number => .{ .number = self.data.number },
+            else => unreachable
         };
     }
 

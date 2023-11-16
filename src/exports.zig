@@ -30,7 +30,7 @@ const ExportChoice = extern struct {
 
 const OnExportValueChanged = *const fn (value: *ExportValue) void;
 const OnExportDialogue = *const fn (vm_ptr: usize, dialogue: *ExportDialogue) void;
-const OnExportChoices = *const fn (vm_ptr: usize, choices: [*]*ExportChoice, choices_len: u8) void;
+const OnExportChoices = *const fn (vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) void;
 
 export fn compile(source_ptr: [*c]const u8, length: usize, out_ptr: [*c]u8, max: usize) void {
     var arena = std.heap.ArenaAllocator.init(alloc);
@@ -102,6 +102,15 @@ export fn setExternNil(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize
     vm.setExtern(name, values.Nil) catch @panic("Invalid operation");
 }
 
+export fn setExternFunc(vm_ptr: usize, name_ptr: [*]const u8, name_length: usize, value_ptr: usize, arity: u8) void {
+    var vm: *Vm = @ptrFromInt(vm_ptr);
+    var name = name_ptr[0..name_length];
+    var wrapper = alloc.create(ExportFunction) catch @panic("Could not allocate ExportFunction");
+    wrapper.* = ExportFunction.init(@as(ExportFunction.Delegate, @ptrFromInt(value_ptr)));
+    var val = vm.gc.create(vm, .{ .ext_function = .{ .arity = arity, .backing = ExportFunction.call, .context_ptr = @intFromPtr(wrapper) } }) catch @panic("Could not create value");
+    vm.setExtern(name, val) catch @panic("Invalid operation");
+}
+
 export fn destroyValue(value: *ExportValue) void {
     value.deinit(alloc);
 }
@@ -126,6 +135,29 @@ const ExportCallback = struct {
     pub fn onUnsubscribe(context_ptr: usize, allocator: std.mem.Allocator) void {
         var self: *ExportCallback = @ptrFromInt(context_ptr);
         allocator.destroy(self);
+    }
+};
+
+const ExportFunction = struct {
+    func: Delegate,
+
+    pub const Delegate = *const fn (args: [*c]ExportValue, args_len: u8) ExportValue;
+
+    pub fn init(func: Delegate) ExportFunction {
+        return .{
+            .func = func
+        };
+    }
+
+    pub fn call(context_ptr: usize, args: []Value) Value {
+        var self: *ExportFunction = @ptrFromInt(context_ptr);
+        var exp_args = alloc.alloc(ExportValue, args.len) catch @panic("Could not allocate args");
+        var i: usize = 0;
+        while (i < args.len) : (i += 1) {
+            exp_args[i] = ExportValue.fromValue(args[i], alloc);
+        }
+        var v = self.func(exp_args.ptr, @intCast(exp_args.len));
+        return v.toValue();
     }
 };
 
@@ -228,18 +260,15 @@ const ExportRunner = struct {
     pub fn onChoices(runner: *Runner, vm: *Vm, choices: []Choice) void {
         var self = @fieldParentPtr(ExportRunner, "runner", runner);
         var i: usize = 0;
-        var result = self.allocator.alloc(*ExportChoice, choices.len) catch @panic("Could not allocate choices");
+        var result = self.allocator.alloc(ExportChoice, choices.len) catch @panic("Could not allocate choices");
         while (i < choices.len) : (i += 1) {
-            var choice = self.allocator.create(ExportChoice) catch @panic("Could not create Choice");
-            choice.* = .{
+            result[i] = .{
                 .content = choices[i].content.ptr,
                 .visit_count = @intCast(choices[i].visit_count),
                 .ip = choices[i].ip,
             };
-            result[i] = choice;
         }
         self.onExportChoices(@intFromPtr(vm), result.ptr, @intCast(result.len));
-        for (result) |choice| self.allocator.destroy(choice);
         self.allocator.free(result);
     }
 };

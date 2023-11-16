@@ -32,6 +32,8 @@ pub const Iterator = struct {
     index: usize,
 };
 
+pub const ExternFunctionDelegate = *const fn(args: []Value) Value;
+
 pub const adapter = Value.Adapter{};
 
 pub const Value = union(Type) {
@@ -64,6 +66,7 @@ pub const Value = union(Type) {
             map,
             set,
             function,
+            ext_function,
             builtin,
             closure,
             class,
@@ -82,6 +85,11 @@ pub const Value = union(Type) {
                 locals_count: usize,
                 is_method: bool = false,
             },
+            ext_function: struct {
+                arity: u8,
+                context_ptr: usize,
+                backing: *const fn(context_ptr: usize, args: []Value) Value,
+            },
             builtin: struct {
                 arity: u8,
                 backing: Builtin,
@@ -93,12 +101,8 @@ pub const Value = union(Type) {
             },
             class: Class,
             instance: Class.Instance,
-            // visit: struct {
-            //     name: []const u8,
-            //     count: u32 = 0,
-            //     children: std.ArrayList(Value),
-            // },
         };
+
         pub const MapType = std.ArrayHashMap(Value, Value, Adapter, true);
         pub const SetType = std.ArrayHashMap(Value, void, Adapter, true);
 
@@ -114,11 +118,10 @@ pub const Value = union(Type) {
                 .map => obj.data.map.deinit(),
                 .set => obj.data.set.deinit(),
                 .function => |f| allocator.free(f.instructions),
-                .builtin => {},
+                .ext_function, .builtin => {},
                 .closure => |c| allocator.free(c.free_values),
                 .class => |c| c.deinit(),
                 .instance => obj.data.instance.fields.deinit(),
-                // .visit => |v| v.children.deinit(),
             }
             allocator.destroy(obj);
         }
@@ -244,15 +247,6 @@ pub const Value = union(Type) {
                         try writer.writeIntBig(u16, @as(u16, @intCast(f.instructions.len)));
                         try writer.writeAll(f.instructions);
                     },
-                    // .visit => |v| {
-                    //     try writer.writeIntBig(u16, @as(u16, @intCast(v.name.len)));
-                    //     try writer.writeAll(v.name);
-                    //     try writer.writeIntBig(u32, v.count);
-                    //     try writer.writeIntBig(u16, @as(u16, @intCast(v.children.count())));
-                    //     for (v.children.items) |c| {
-                    //         try Value.serialize(c, writer);
-                    //     }
-                    // },
                     else => {},
                 }
             },
