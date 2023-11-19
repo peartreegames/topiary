@@ -1,7 +1,6 @@
 const std = @import("std");
 const ast = @import("./ast.zig");
 const values = @import("./values.zig");
-const DebugToken = @import("./debug.zig").DebugToken;
 const OpCode = @import("./opcode.zig").OpCode;
 
 pub const Symbol = struct {

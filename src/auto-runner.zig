@@ -3,7 +3,7 @@ const Vm = @import("./vm.zig").Vm;
 const parseFile = @import("./parser.zig").parseFile;
 const Scope = @import("./scope.zig").Scope;
 const Compiler = @import("./compiler.zig").Compiler;
-const Errors = @import("./error.zig").Errors;
+const Errors = @import("./compiler-error.zig").CompilerErrors;
 const runners = @import("./runner.zig");
 
 const Runner = runners.Runner;
@@ -47,7 +47,7 @@ pub fn main() !void {
     defer visit_counts.deinit();
     while (i < count) : (i += 1) {
         var auto_runner = AutoTestRunner.init();
-        var vm = try Vm.init(vm_alloc, bytecode, &auto_runner.runner, &err);
+        var vm = try Vm.init(vm_alloc, bytecode, &auto_runner.runner);
         vm.interpret() catch {
             try err.write(tree.source, std.io.getStdErr().writer());
             continue;

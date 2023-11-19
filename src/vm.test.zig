@@ -5,7 +5,7 @@ const parser = @import("./parser.zig");
 const Scope = @import("./scope.zig").Scope;
 const compiler = @import("./compiler.zig");
 const Value = @import("./values.zig").Value;
-const Errors = @import("./error.zig").Errors;
+const Errors = @import("./compiler-error.zig").CompilerErrors;
 const StateMap = @import("./state.zig").StateMap;
 const runners = @import("./runner.zig");
 const Runner = runners.Runner;
@@ -66,7 +66,7 @@ pub fn initTestVm(source: []const u8, debug: bool) !Vm {
     if (debug) {
         bytecode.print(std.debug);
     }
-    var vm = try Vm.init(alloc, bytecode, &test_runner.runner, &errors);
+    var vm = try Vm.init(alloc, bytecode, &test_runner.runner);
     return vm;
 }
 
@@ -503,7 +503,7 @@ test "Builtin Functions" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
-            try vm.err.write(case.input, std.io.getStdErr().writer());
+            vm.err.print(std.debug);
             return err;
         };
         const value = vm.stack.previous();
@@ -660,7 +660,7 @@ test "Loops" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
-            try vm.err.write(case.input, std.io.getStdErr().writer());
+            vm.err.print(std.debug);
             return err;
         };
         const value = vm.stack.previous();
@@ -818,7 +818,7 @@ test "Bough Loops" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
-            try vm.err.write(case.input, std.io.getStdErr().writer());
+            vm.err.print(std.debug);
             return err;
         };
         const value = vm.stack.previous();

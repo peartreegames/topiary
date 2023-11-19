@@ -1,5 +1,4 @@
 const std = @import("std");
-const OpCode = @import("./opcode.zig").OpCode;
 
 /// Used to keep track of jump locations by scope name
 pub const JumpTree = struct {
@@ -9,14 +8,14 @@ pub const JumpTree = struct {
 
     pub const Entry = struct {
         node: *Node,
-        jump_ip: OpCode.Size(.jump),
+        jump_ip: u32,
     };
 
     pub const Node = struct {
         parent: ?*Node,
         name: []const u8,
         children: std.ArrayList(*Node),
-        dest_ip: OpCode.Size(.jump) = 9999,
+        dest_ip: u32 = 9999,
 
         pub fn create(allocator: std.mem.Allocator, name: []const u8, parent: ?*Node) !*Node {
             var node = try allocator.create(Node);

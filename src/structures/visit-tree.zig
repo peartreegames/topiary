@@ -1,6 +1,5 @@
 const std = @import("std");
-const OpCode = @import("./opcode.zig").OpCode;
-const global_size = OpCode.Size(.get_global);
+const global_size = u32;
 
 pub const VisitTree = struct {
     allocator: std.mem.Allocator,

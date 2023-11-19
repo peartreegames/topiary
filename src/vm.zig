@@ -2,18 +2,16 @@ const std = @import("std");
 const Compiler = @import("./compiler.zig").Compiler;
 const compileSource = @import("./compiler.zig").compileSource;
 const ByteCode = @import("./bytecode.zig").ByteCode;
-const Errors = @import("./error.zig").Errors;
 const parser = @import("./parser.zig");
 const OpCode = @import("./opcode.zig").OpCode;
 const values = @import("./values.zig");
-const Stack = @import("./stack.zig").Stack;
+const Stack = @import("./structures/stack.zig").Stack;
 const Gc = @import("./gc.zig").Gc;
 const Token = @import("./token.zig").Token;
 const Frame = @import("./frame.zig").Frame;
 const Class = @import("./class.zig").Class;
 const builtins = @import("./builtins.zig");
 const Rnd = @import("./builtins.zig").Rnd;
-const DebugToken = @import("./debug.zig").DebugToken;
 const Subscriber = @import("./subscriber.zig").Subscriber;
 const StateMap = @import("./state.zig").StateMap;
 const runners = @import("./runner.zig");
@@ -41,10 +39,20 @@ const InterpretResult = union(enum) {
     Paused,
 };
 
+pub const RuntimeErr = struct {
+    line: u32 = 0,
+    msg: ?[]const u8 = null,
+    pub fn print(self: @This(), writer: anytype) void {
+        if (self.msg) |m| {
+            writer.print("Error at line {}: {s}\n", .{self.line, m});
+        }
+    }
+};
+
 pub const Vm = struct {
     allocator: std.mem.Allocator,
     frames: Stack(Frame),
-    err: *Errors,
+    err: RuntimeErr,
     gc: Gc,
     globals: []Value,
     subscribers: []Subscriber,
@@ -75,7 +83,7 @@ pub const Vm = struct {
         Uninitialized,
     } || Compiler.Error;
 
-    pub fn init(allocator: std.mem.Allocator, bytecode: ByteCode, runner: anytype, errors: *Errors) !Vm {
+    pub fn init(allocator: std.mem.Allocator, bytecode: ByteCode, runner: anytype) !Vm {
         var globals = try allocator.alloc(Value, bytecode.global_symbols.len);
         var subs = try allocator.alloc(Subscriber, bytecode.global_symbols.len);
 
@@ -88,8 +96,8 @@ pub const Vm = struct {
         return .{
             .allocator = allocator,
             .bytecode = bytecode,
-            .err = errors,
             .frames = try Stack(Frame).init(allocator, frame_size),
+            .err = .{},
             .globals = globals,
             .subscribers = subs,
             .runner = runner,
@@ -205,6 +213,7 @@ pub const Vm = struct {
         root_frame.* = .{
             .function = .{
                 .instructions = self.bytecode.instructions,
+                .lines = self.bytecode.token_lines,
                 .locals_count = 0,
                 .arity = 0,
             },
@@ -228,8 +237,9 @@ pub const Vm = struct {
     }
 
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {
-        var token = DebugToken.get(self.bytecode.tokens, self.ip) orelse undefined;
-        try self.err.add(msg, token, .err, args);
+        var buf: [2048]u8 = undefined;
+        self.err.msg = try std.fmt.bufPrint(buf[0..], msg, args);
+        self.err.line = self.currentFrame().cl.data.closure.data.function.lines[self.currentFrame().ip];
         return Error.RuntimeError;
     }
 
@@ -264,18 +274,17 @@ pub const Vm = struct {
                     const right = self.pop();
                     const left = self.pop();
                     if (@intFromEnum(right) != @intFromEnum(left)) {
-                        std.log.warn("Cannot add types {} and {}", .{ left, right });
-                        return error.RuntimeError;
+                        return self.fail("Cannot add types {s} and {s}", .{ left.typeName(), right.typeName() });
                     }
                     switch (right) {
                         .number => try self.push(.{ .number = right.number + left.number }),
                         .obj => |o| {
                             switch (o.data) {
                                 .string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.allocator, u8, &.{ left.obj.data.string, s }) }),
-                                else => return error.RuntimeError,
+                                else => return self.fail("Cannot add types {s} and {s}", .{ left.typeName(), right.typeName() }),
                             }
                         },
-                        else => return error.RuntimeError,
+                        else => return self.fail("Cannot add types {s} and {s}", .{ left.typeName(), right.typeName() }),
                     }
                 },
                 .subtract, .multiply, .divide, .modulus => try self.binaryNumberOp(op),
@@ -297,7 +306,7 @@ pub const Vm = struct {
                     const right = self.pop();
                     const left = self.pop();
                     if (right != .bool or left != .bool) {
-                        return error.RuntimeError;
+                        return self.fail("Conditionals must be of type bool not types {s} and {s}", .{ left.typeName(), right.typeName() });
                     }
                     try self.push(.{ .bool = right.bool or left.bool });
                 },
@@ -305,7 +314,7 @@ pub const Vm = struct {
                     const right = self.pop();
                     const left = self.pop();
                     if (right != .bool or left != .bool) {
-                        return error.RuntimeError;
+                        return self.fail("Conditionals must be of type bool not types {s} and {s}", .{ left.typeName(), right.typeName() });
                     }
                     try self.push(.{ .bool = right.bool and left.bool });
                 },
@@ -341,7 +350,7 @@ pub const Vm = struct {
                 },
                 .decl_global => {
                     const index = self.readInt(OpCode.Size(.get_global));
-                    if (index > globals_size) return Error.RuntimeError;
+                    if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{ index });
                     var value = self.pop();
                     // global already set from loaded state
                     if (self.globals[index] != .void) {
@@ -351,8 +360,9 @@ pub const Vm = struct {
                 },
                 .set_global => {
                     const index = self.readInt(OpCode.Size(.set_global));
-                    if (index > globals_size) return Error.RuntimeError;
-                    if (index >= self.globals.len) return Error.RuntimeError;
+                    if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{ index });
+
+                    if (index >= self.globals.len) return self.fail("Globals index {} is out of bounds of current size {}", .{ index, self.globals.len });
                     const value = self.pop();
                     self.globals[index] = value;
                     self.subscribers[index].invoke(value);
@@ -379,7 +389,8 @@ pub const Vm = struct {
                     var new_value = self.pop();
                     var field_name = field_name_value.obj.data.string;
                     var instance = instance_value.obj.data.instance;
-                    if (!instance.fields.contains(field_name)) return error.RuntimeError;
+                    if (!instance.fields.contains(field_name))
+                        return self.fail("Instance of {s} does not contain {s}", .{ instance.class.name, field_name });
                     try instance.fields.put(field_name, new_value);
                 },
                 .get_builtin => {
@@ -423,7 +434,7 @@ pub const Vm = struct {
                                 .bool => |b| try writer.writeAll(if (b) "true" else "false"),
                                 .obj => |o| try writer.writeAll(o.data.string),
                                 .visit => |v| try std.fmt.formatIntValue(v, "", .{}, fbs.writer()),
-                                else => return error.RuntimeError,
+                                else => return self.fail("Unsupported interpolated type {s} for {s}", .{ args.items[a].typeName(), str })
                             }
                             i += 1;
                             start = i + 1;

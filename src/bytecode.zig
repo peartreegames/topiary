@@ -1,16 +1,15 @@
 const std = @import("std");
 const Value = @import("./values.zig").Value;
 const OpCode = @import("./opcode.zig").OpCode;
-const DebugToken = @import("./debug.zig").DebugToken;
 const UUID = @import("./utils/uuid.zig").UUID;
 
 pub const ByteCode = struct {
     instructions: []u8,
     constants: []Value,
-    tokens: []DebugToken,
     global_symbols: []GlobalSymbol,
     uuids: []UUID.ID,
     locals_count: usize,
+    token_lines: []u32,
 
     pub const GlobalSymbol = struct {
         name: []const u8,
@@ -20,13 +19,13 @@ pub const ByteCode = struct {
 
     pub fn free(self: *const ByteCode, allocator: std.mem.Allocator) void {
         allocator.free(self.instructions);
+        allocator.free(self.token_lines);
         for (self.constants) |item| {
             if (item == .obj) {
                 Value.Obj.destroy(allocator, item.obj);
             }
         }
         allocator.free(self.constants);
-        allocator.free(self.tokens);
         allocator.free(self.uuids);
         for (self.global_symbols) |s| allocator.free(s.name);
         allocator.free(self.global_symbols);
@@ -37,6 +36,8 @@ pub const ByteCode = struct {
         // to decode it might not be worth it
         try writer.writeIntBig(u64, @as(u64, @intCast(self.instructions.len)));
         try writer.writeAll(self.instructions);
+        try writer.writeIntBig(u64, @as(u64, @intCast(self.token_lines.len)));
+        for (self.token_lines) |line| try writer.writeIntBig(u32, line);
         try writer.writeIntBig(u64, @as(u64, @intCast(self.constants.len)));
         for (self.constants) |constant| try constant.serialize(writer);
         try writer.writeIntBig(u64, @as(u64, @intCast(self.uuids.len)));
@@ -54,6 +55,11 @@ pub const ByteCode = struct {
         const instruction_count = try reader.readIntBig(u64);
         var instructions = try allocator.alloc(u8, instruction_count);
         try reader.readNoEof(instructions);
+        const token_count = try reader.readIntBig(u64);
+        var token_lines = try allocator.alloc(u32, token_count);
+        for (0..token_count) |i| {
+            token_lines[i] = try reader.readIntBig(u32);
+        }
         var constant_count = try reader.readIntBig(u64);
         var constants = try allocator.alloc(Value, constant_count);
         for (0..constant_count) |i| {
@@ -83,8 +89,8 @@ pub const ByteCode = struct {
         }
         return .{
             .instructions = instructions,
+            .token_lines = token_lines,
             .constants = constants,
-            .tokens = &[_]DebugToken{},
             .global_symbols = global_symbols,
             .uuids = uuids,
             .locals_count = 0,

@@ -2,7 +2,7 @@ const std = @import("std");
 const tok = @import("token.zig");
 const Token = tok.Token;
 
-pub const Error = struct {
+pub const CompilerError = struct {
     fmt: []const u8,
     severity: Severity,
     token: Token,
@@ -14,8 +14,8 @@ pub const Error = struct {
     };
 };
 
-pub const Errors = struct {
-    list: std.ArrayListUnmanaged(Error),
+pub const CompilerErrors = struct {
+    list: std.ArrayListUnmanaged(CompilerError),
     allocator: std.mem.Allocator,
 
     // used for interpolatedExpressions
@@ -23,11 +23,11 @@ pub const Errors = struct {
     offset_line: usize = 0,
     offset_col: usize = 0,
 
-    pub fn init(allocator: std.mem.Allocator) Errors {
-        return .{ .list = std.ArrayListUnmanaged(Error){}, .allocator = allocator };
+    pub fn init(allocator: std.mem.Allocator) CompilerErrors {
+        return .{ .list = std.ArrayListUnmanaged(CompilerError){}, .allocator = allocator };
     }
 
-    pub fn add(self: *Errors, comptime fmt: []const u8, token: Token, severity: Error.Severity, args: anytype) !void {
+    pub fn add(self: *CompilerErrors, comptime fmt: []const u8, token: Token, severity: CompilerError.Severity, args: anytype) !void {
         const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
         errdefer self.allocator.free(msg);
 
@@ -37,7 +37,7 @@ pub const Errors = struct {
             .token = token,
         });
     }
-    pub fn deinit(self: *Errors) void {
+    pub fn deinit(self: *CompilerErrors) void {
         for (self.list.items) |err| {
             self.allocator.free(err.fmt);
         }
@@ -45,7 +45,7 @@ pub const Errors = struct {
         self.* = undefined;
     }
 
-    pub fn write(self: *Errors, source: []const u8, writer: anytype) !void {
+    pub fn write(self: *CompilerErrors, source: []const u8, writer: anytype) !void {
         while (self.list.popOrNull()) |err| {
             defer self.allocator.free(err.fmt);
             const color_prefix = switch (err.severity) {

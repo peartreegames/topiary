@@ -32,7 +32,7 @@ pub const Iterator = struct {
     index: usize,
 };
 
-pub const ExternFunctionDelegate = *const fn(args: []Value) Value;
+pub const ExternFunctionDelegate = *const fn (args: []Value) Value;
 
 pub const adapter = Value.Adapter{};
 
@@ -82,13 +82,14 @@ pub const Value = union(Type) {
             function: struct {
                 arity: u8,
                 instructions: []const u8,
+                lines: []const u32,
                 locals_count: usize,
                 is_method: bool = false,
             },
             ext_function: struct {
                 arity: u8,
                 context_ptr: usize,
-                backing: *const fn(context_ptr: usize, args: []Value) Value,
+                backing: *const fn (context_ptr: usize, args: []Value) Value,
             },
             builtin: struct {
                 arity: u8,
@@ -117,7 +118,10 @@ pub const Value = union(Type) {
                 .list => |l| l.deinit(),
                 .map => obj.data.map.deinit(),
                 .set => obj.data.set.deinit(),
-                .function => |f| allocator.free(f.instructions),
+                .function => |f| {
+                    allocator.free(f.instructions);
+                    allocator.free(f.lines);
+                },
                 .ext_function, .builtin => {},
                 .closure => |c| allocator.free(c.free_values),
                 .class => |c| c.deinit(),
@@ -137,6 +141,31 @@ pub const Value = union(Type) {
 
     pub fn eql(a: Value, b: Value) bool {
         return adapter.eql(a, b, 0);
+    }
+
+    pub fn typeName(self: Value) []const u8 {
+        return switch (self) {
+            .void => "void",
+            .nil => "nil",
+            .bool => "bool",
+            .number => "number",
+            .range => "range",
+            .map_pair => "map_pair",
+            .visit => "visit",
+            .obj => |o| switch (o.data) {
+                .string => "string",
+                .list => "list",
+                .set => "set",
+                .map => "map",
+                .closure => "closure",
+                .function => "function",
+                .ext_function => "extern_function",
+                .class => "class",
+                .instance => "instance",
+                .@"enum" => "enum",
+                .builtin => "builtin",
+            },
+        };
     }
 
     pub fn len(self: Value) usize {
@@ -246,6 +275,8 @@ pub const Value = union(Type) {
                         try writer.writeIntBig(u16, @as(u16, @intCast(f.locals_count)));
                         try writer.writeIntBig(u16, @as(u16, @intCast(f.instructions.len)));
                         try writer.writeAll(f.instructions);
+                        try writer.writeIntBig(u16, @as(u16, @intCast(f.lines.len)));
+                        for (f.lines) |l| try writer.writeIntBig(u32, l);
                     },
                     else => {},
                 }
@@ -325,6 +356,11 @@ pub const Value = union(Type) {
                         const instructions_count = try reader.readIntBig(u16);
                         var buf = try allocator.alloc(u8, instructions_count);
                         try reader.readNoEof(buf);
+                        const lines_count = try reader.readIntBig(u16);
+                        var lines = try allocator.alloc(u32, lines_count);
+                        for (0..lines_count) |i| {
+                            lines[i] = try reader.readIntBig(u32);
+                        }
                         const obj = try allocator.create(Value.Obj);
                         obj.* = .{ .id = id, .data = .{
                             .function = .{
@@ -332,6 +368,7 @@ pub const Value = union(Type) {
                                 .is_method = is_method,
                                 .locals_count = locals_count,
                                 .instructions = buf,
+                                .lines = lines,
                             },
                         } };
                         return .{ .obj = obj };

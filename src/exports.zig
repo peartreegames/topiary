@@ -3,7 +3,7 @@ const Vm = @import("./vm.zig").Vm;
 const values = @import("./values.zig");
 const Value = @import("./values.zig").Value;
 const ExportValue = @import("./export-value.zig").ExportValue;
-const Errors = @import("./error.zig").Errors;
+const Errors = @import("./compiler-error.zig").CompilerErrors;
 const compileSource = @import("./compiler.zig").compileSource;
 const ByteCode = @import("./bytecode.zig").ByteCode;
 const runners = @import("./runner.zig");
@@ -50,9 +50,16 @@ export fn compile(source_ptr: [*c]const u8, length: usize, out_ptr: [*c]u8, max:
     bytecode.serialize(writer) catch @panic("Could not serialize bytecode.");
 }
 
-export fn run(vm_ptr: usize) void {
+export fn run(vm_ptr: usize, error_line: *c_int, error_message: [*c]u8, capacity: usize) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
-    vm.interpret() catch @panic("Unable to run vm");
+    vm.interpret() catch {
+        error_line.* = @intCast(vm.err.line);
+        if (vm.err.msg) |msg| {
+            const len = @min(msg.len, capacity - 1);
+            std.mem.copy(u8, error_message[0..len], msg[0..len]);
+            if (len < capacity) error_message[len] = 0;
+        }
+    };
 }
 
 export fn selectContinue(vm_ptr: usize) void {
@@ -144,9 +151,7 @@ const ExportFunction = struct {
     pub const Delegate = *const fn (args: [*c]ExportValue, args_len: u8) ExportValue;
 
     pub fn init(func: Delegate) ExportFunction {
-        return .{
-            .func = func
-        };
+        return .{ .func = func };
     }
 
     pub fn call(context_ptr: usize, args: []Value) Value {
@@ -204,15 +209,12 @@ export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_ptr:
     extern_runner.* = ExportRunner.init(alloc, on_dialogue, on_choices);
 
     var vm = alloc.create(Vm) catch @panic("Could not allocate vm");
-    vm.* = Vm.init(alloc, bytecode, &extern_runner.runner, errors) catch @panic("Could not initialize Vm");
-
+    vm.* = Vm.init(alloc, bytecode, &extern_runner.runner) catch @panic("Could not initialize Vm");
     return @intFromPtr(vm);
 }
 
 export fn destroyVm(vm_ptr: usize) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
-    vm.err.deinit();
-    alloc.destroy(vm.err);
     vm.deinit();
     var runner = @fieldParentPtr(ExportRunner, "runner", vm.runner);
     alloc.destroy(runner);

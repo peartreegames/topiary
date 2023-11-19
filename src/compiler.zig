@@ -3,17 +3,16 @@ const ast = @import("./ast.zig");
 const parser = @import("./parser.zig");
 const Token = @import("./token.zig").Token;
 const OpCode = @import("./opcode.zig").OpCode;
-const Errors = @import("./error.zig").Errors;
+const CompilerErrors = @import("./compiler-error.zig").CompilerErrors;
 const Value = @import("./values.zig").Value;
 const ValueType = @import("./values.zig").Type;
 const String = @import("./values.zig").String;
 const Scope = @import("./scope.zig").Scope;
 const Symbol = @import("./scope.zig").Symbol;
-const DebugToken = @import("./debug.zig").DebugToken;
 const builtins = @import("./builtins.zig").builtins;
 const ByteCode = @import("./bytecode.zig").ByteCode;
-const JumpTree = @import("./jump-tree.zig").JumpTree;
-const VisitTree = @import("./visit-tree.zig").VisitTree;
+const JumpTree = @import("./structures/jump-tree.zig").JumpTree;
+const VisitTree = @import("./structures/visit-tree.zig").VisitTree;
 const Enum = @import("./enum.zig").Enum;
 const UUID = @import("./utils/uuid.zig").UUID;
 
@@ -35,7 +34,7 @@ pub const initial_constants = [_]Value{
     .{ .visit = 0 },
 };
 
-pub fn compileSource(allocator: std.mem.Allocator, source: []const u8, errors: *Errors) !ByteCode {
+pub fn compileSource(allocator: std.mem.Allocator, source: []const u8, errors: *CompilerErrors) !ByteCode {
     const tree = try parser.parse(allocator, source, errors);
     defer tree.deinit();
 
@@ -51,7 +50,7 @@ pub const Compiler = struct {
     builtins: *Scope,
     constants: std.ArrayList(Value),
     uuids: std.ArrayList(UUID.ID),
-    err: *Errors,
+    err: *CompilerErrors,
     scope: *Scope,
     root_scope: *Scope,
     identifier_cache: std.StringHashMap(OpCode.Size(.constant)),
@@ -64,7 +63,7 @@ pub const Compiler = struct {
 
     pub const Chunk = struct {
         instructions: std.ArrayList(u8),
-        tokens: DebugToken.List,
+        token_lines: std.ArrayList(u32),
         parent: ?*Chunk,
         allocator: std.mem.Allocator,
 
@@ -72,7 +71,7 @@ pub const Compiler = struct {
             var chunk = try allocator.create(Chunk);
             chunk.* = .{
                 .instructions = std.ArrayList(u8).init(allocator),
-                .tokens = DebugToken.List.init(allocator),
+                .token_lines = std.ArrayList(u32).init(allocator),
                 .parent = parent,
                 .allocator = allocator,
             };
@@ -81,7 +80,7 @@ pub const Compiler = struct {
 
         pub fn destroy(self: *Chunk) void {
             self.instructions.deinit();
-            self.tokens.deinit();
+            self.token_lines.deinit();
             self.allocator.destroy(self);
         }
     };
@@ -97,7 +96,7 @@ pub const Compiler = struct {
         NotYetImplemented,
     } || parser.Parser.Error;
 
-    pub fn init(allocator: std.mem.Allocator, errors: *Errors) !Compiler {
+    pub fn init(allocator: std.mem.Allocator, errors: *CompilerErrors) !Compiler {
         var root_chunk = try Compiler.Chunk.create(allocator, null);
         var root_scope = try Scope.create(allocator, null, .global, 0);
         var root_builtins = try Scope.create(allocator, null, .builtin, 0);
@@ -150,8 +149,8 @@ pub const Compiler = struct {
         }
         return .{
             .instructions = try self.chunk.instructions.toOwnedSlice(),
+            .token_lines = try self.chunk.token_lines.toOwnedSlice(),
             .constants = try self.constants.toOwnedSlice(),
-            .tokens = try self.chunk.tokens.toOwnedSlice(),
             .global_symbols = global_symbols,
             .locals_count = self.locals_count,
             .uuids = try self.uuids.toOwnedSlice(),
@@ -186,15 +185,11 @@ pub const Compiler = struct {
         self.chunk = try Chunk.create(self.allocator, self.chunk);
     }
 
-    fn exitChunk(self: *Compiler) !struct { instructions: []u8, tokens: []DebugToken } {
+    fn exitChunk(self: *Compiler) !struct{[]u8, []u32} {
         const old_chunk = self.chunk;
-        const result = .{
-            .instructions = try old_chunk.instructions.toOwnedSlice(),
-            .tokens = try old_chunk.tokens.toOwnedSlice(),
-        };
+        defer old_chunk.destroy();
         self.chunk = old_chunk.parent orelse return Error.OutOfScope;
-        old_chunk.destroy();
-        return result;
+        return .{ try old_chunk.instructions.toOwnedSlice(), try old_chunk.token_lines.toOwnedSlice() };
     }
 
     fn enterScope(self: *Compiler, tag: Scope.Tag) !void {
@@ -853,8 +848,6 @@ pub const Compiler = struct {
                 }
 
                 var chunk = try self.exitChunk();
-                // TODO: use debug tokens
-                self.allocator.free(chunk.tokens);
                 const count = self.scope.count;
                 const free_symbols = self.scope.free_symbols.items;
                 for (free_symbols) |s| {
@@ -868,7 +861,8 @@ pub const Compiler = struct {
                     .data = .{
                         .function = .{
                             .is_method = f.is_method,
-                            .instructions = chunk.instructions,
+                            .instructions = chunk[0],
+                            .lines = chunk[1],
                             .locals_count = count,
                             .arity = @as(u8, @intCast(length)),
                         },
@@ -975,17 +969,14 @@ pub const Compiler = struct {
 
     fn writeOp(self: *Compiler, op: OpCode, token: Token) !void {
         var chunk = self.chunk;
+        try chunk.token_lines.append(@intCast(token.line));
         try chunk.instructions.append(@intFromEnum(op));
-        try DebugToken.add(&chunk.tokens, token);
     }
 
     fn writeValue(self: *Compiler, buf: []const u8, token: Token) !void {
         var chunk = self.chunk;
+        try chunk.token_lines.appendNTimes(@intCast(token.line), buf.len);
         try chunk.instructions.writer().writeAll(buf);
-        var i: usize = 0;
-        while (i < buf.len) : (i += 1) {
-            try DebugToken.add(&chunk.tokens, token);
-        }
     }
 
     fn writeInt(self: *Compiler, comptime T: type, value: T, token: Token) !usize {
