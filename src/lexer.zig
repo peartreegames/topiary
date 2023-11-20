@@ -181,7 +181,11 @@ pub const Lexer = struct {
         var count: usize = 0;
         var is_string = true;
         while ((self.char != '"' or count > 0) and self.char != 0) {
-            if (self.source[self.position] == '\\') continue;
+            if (self.source[self.position] == '\\') {
+                self.readChar();
+                self.readChar();
+                continue;
+            }
             if (self.char == '}' or self.char == '{') {
                 is_string = !is_string;
                 if (!is_string) {
