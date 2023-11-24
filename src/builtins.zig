@@ -91,8 +91,8 @@ pub const Count = struct {
         },
     };
     fn builtin(_: *Gc, args: []Value) Value {
-        var data = args[0].obj.data;
-        var count = switch (data) {
+        const data = args[0].obj.data;
+        const count = switch (data) {
             .list => |l| l.items.len,
             .map => |m| m.count(),
             .set => |s| s.count(),
@@ -113,7 +113,7 @@ pub const Add = struct {
         },
     };
     fn builtin(_: *Gc, args: []Value) Value {
-        var item = args[1];
+        const item = args[1];
         switch (args[0].obj.data) {
             .list => args[0].obj.data.list.append(item) catch {},
             .set => args[0].obj.data.set.put(item, {}) catch {},
@@ -134,8 +134,8 @@ pub const AddMap = struct {
         },
     };
     fn builtin(_: *Gc, args: []Value) Value {
-        var key = args[1];
-        var item = args[2];
+        const key = args[1];
+        const item = args[2];
         switch (args[0].obj.data) {
             .map => args[0].obj.data.map.put(key, item) catch {},
             else => unreachable,
@@ -154,7 +154,7 @@ pub const Remove = struct {
         },
     };
     fn builtin(_: *Gc, args: []Value) Value {
-        var item = args[1];
+        const item = args[1];
         switch (args[0].obj.data) {
             .list => {
                 for (args[0].obj.data.list.items, 0..) |it, i| {
@@ -182,7 +182,7 @@ pub const Has = struct {
         },
     };
     fn builtin(_: *Gc, args: []Value) Value {
-        var item = args[1];
+        const item = args[1];
         const result = switch (args[0].obj.data) {
             .list => blk: {
                 for (args[0].obj.data.list.items) |it| {

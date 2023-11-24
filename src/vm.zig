@@ -44,7 +44,7 @@ pub const RuntimeErr = struct {
     msg: ?[]const u8 = null,
     pub fn print(self: @This(), writer: anytype) void {
         if (self.msg) |m| {
-            writer.print("Error at line {}: {s}\n", .{self.line, m});
+            writer.print("Error at line {}: {s}\n", .{ self.line, m });
         }
     }
 };
@@ -94,8 +94,8 @@ pub const Vm = struct {
             subs[i] = Subscriber.init(allocator);
         }
 
-        var root_frame = try allocator.create(Value.Obj.Data);
-        var root_closure = try allocator.create(Value.Obj);
+        const root_frame = try allocator.create(Value.Obj.Data);
+        const root_closure = try allocator.create(Value.Obj);
         root_frame.* = .{
             .function = .{
                 .instructions = bytecode.instructions,
@@ -161,7 +161,7 @@ pub const Vm = struct {
     /// Load the StateMap into the globals list
     pub fn loadState(self: *Vm, state: *StateMap) !void {
         for (self.bytecode.global_symbols) |s| {
-            var value = try state.get(s.name);
+            const value = try state.get(s.name);
             if (value) |v| self.globals[s.index] = v;
         }
     }
@@ -182,7 +182,7 @@ pub const Vm = struct {
         if (index < 0 or index >= self.current_choices.len) {
             return Error.InvalidChoice;
         }
-        var choice = self.current_choices[index];
+        const choice = self.current_choices[index];
         self.currentFrame().ip = choice.ip;
         self.is_waiting = false;
         self.allocator.free(self.current_choices);
@@ -197,18 +197,18 @@ pub const Vm = struct {
     }
 
     fn getExternIndex(self: *Vm, name: []const u8) !usize {
-        var index = try self.getGlobalsIndex(name);
+        const index = try self.getGlobalsIndex(name);
         if (!self.bytecode.global_symbols[index].is_extern) return error.IllegalOperation;
         return index;
     }
 
     pub fn setExtern(self: *Vm, name: []const u8, value: Value) !void {
-        var index = try self.getExternIndex(name);
+        const index = try self.getExternIndex(name);
         self.globals[index] = value;
     }
 
     pub fn getExtern(self: *Vm, name: []const u8) !Value {
-        var index = self.getExternIndex(name) catch |err| {
+        const index = self.getExternIndex(name) catch |err| {
             if (err == Error.IllegalOperation) return err;
             return values.Nil;
         };
@@ -234,7 +234,6 @@ pub const Vm = struct {
     pub fn interpret(self: *Vm) !void {
         try self.start();
         while (self.can_continue) {
-            std.log.warn("RUN {}", .{self.ip});
             try self.run();
         }
         // if (self.stack.count > self.bytecode.locals_count) {
@@ -269,9 +268,13 @@ pub const Vm = struct {
 
     fn readInt(self: *Vm, comptime T: type) T {
         var frame = self.currentFrame();
-        const result = std.mem.readIntSliceBig(T, frame.instructions()[frame.ip..(frame.ip + @sizeOf(T))]);
-        frame.ip += @sizeOf(T);
-        return result;
+        if (T == u8) {
+            return self.readByte();
+        } else {
+            const result = std.mem.readVarInt(T, frame.instructions()[frame.ip..(frame.ip + @sizeOf(T))], .little);
+            frame.ip += @sizeOf(T);
+            return result;
+        }
     }
 
     fn end(self: *Vm) void {
@@ -289,8 +292,8 @@ pub const Vm = struct {
             const op: OpCode = @enumFromInt(instruction);
             switch (op) {
                 .constant => {
-                    var index = self.readInt(OpCode.Size(.constant));
-                    var value = self.bytecode.constants[index];
+                    const index = self.readInt(OpCode.Size(.constant));
+                    const value = self.bytecode.constants[index];
                     try self.push(value);
                 },
                 .pop => _ = self.pop(),
@@ -343,25 +346,25 @@ pub const Vm = struct {
                     try self.push(.{ .bool = right.bool and left.bool });
                 },
                 .jump => {
-                    var dest = self.readInt(OpCode.Size(.jump));
+                    const dest = self.readInt(OpCode.Size(.jump));
                     if (dest > self.currentFrame().instructions().len) break;
                     self.currentFrame().ip = dest;
                 },
                 .jump_if_false => {
-                    var dest = self.readInt(OpCode.Size(.jump_if_false));
+                    const dest = self.readInt(OpCode.Size(.jump_if_false));
                     var condition = self.pop();
                     if (!try condition.isTruthy()) {
                         self.currentFrame().ip = dest;
                     }
                 },
                 .prong => {
-                    var dest = self.readInt(OpCode.Size(.jump));
-                    var values_count = self.readInt(u8);
-                    var capture = self.stack.items[self.stack.count - values_count - 1];
+                    const dest = self.readInt(OpCode.Size(.jump));
+                    const values_count = self.readInt(u8);
+                    const capture = self.stack.items[self.stack.count - values_count - 1];
                     var i: usize = 0;
                     var match = false;
                     while (i < values_count) : (i += 1) {
-                        var value = self.pop();
+                        const value = self.pop();
                         if (!self.prongIsMatch(capture, value)) continue;
                         match = true;
                         self.stack.count -= values_count - i - 1;
@@ -374,8 +377,8 @@ pub const Vm = struct {
                 },
                 .decl_global => {
                     const index = self.readInt(OpCode.Size(.get_global));
-                    if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{ index });
-                    var value = self.pop();
+                    if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{index});
+                    const value = self.pop();
                     // global already set from loaded state
                     if (self.globals[index] != .void) {
                         continue;
@@ -384,7 +387,7 @@ pub const Vm = struct {
                 },
                 .set_global => {
                     const index = self.readInt(OpCode.Size(.set_global));
-                    if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{ index });
+                    if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{index});
 
                     if (index >= self.globals.len) return self.fail("Globals index {} is out of bounds of current size {}", .{ index, self.globals.len });
                     const value = self.pop();
@@ -398,20 +401,20 @@ pub const Vm = struct {
                 },
                 .set_local => {
                     const index = self.readInt(OpCode.Size(.set_local));
-                    var frame = self.currentFrame();
+                    const frame = self.currentFrame();
                     self.stack.items[frame.bp + index] = self.pop();
                 },
                 .get_local => {
                     const index = self.readInt(OpCode.Size(.get_local));
-                    var frame = self.currentFrame();
-                    var value = self.stack.items[frame.bp + index];
+                    const frame = self.currentFrame();
+                    const value = self.stack.items[frame.bp + index];
                     try self.push(value);
                 },
                 .set_property => {
-                    var field_name_value = self.pop();
-                    var instance_value = self.pop();
-                    var new_value = self.pop();
-                    var field_name = field_name_value.obj.data.string;
+                    const field_name_value = self.pop();
+                    const instance_value = self.pop();
+                    const new_value = self.pop();
+                    const field_name = field_name_value.obj.data.string;
                     var instance = instance_value.obj.data.instance;
                     if (!instance.fields.contains(field_name))
                         return self.fail("Instance of {s} does not contain {s}", .{ instance.class.name, field_name });
@@ -419,12 +422,12 @@ pub const Vm = struct {
                 },
                 .get_builtin => {
                     const index = self.readInt(OpCode.Size(.get_builtin));
-                    var value = builtins.builtins[index].value;
+                    const value = builtins.builtins[index].value;
                     try self.push(value.*);
                 },
                 .get_free => {
                     const index = self.readInt(OpCode.Size(.get_free));
-                    var obj = self.currentFrame().cl;
+                    const obj = self.currentFrame().cl;
                     try self.push(obj.data.closure.free_values[index]);
                 },
                 .set_free => {
@@ -433,8 +436,8 @@ pub const Vm = struct {
                     obj.data.closure.free_values[index] = self.pop();
                 },
                 .string => {
-                    var index = self.readInt(OpCode.Size(.constant));
-                    var value = self.bytecode.constants[index];
+                    const index = self.readInt(OpCode.Size(.constant));
+                    const value = self.bytecode.constants[index];
                     var count = self.readInt(u8);
                     var args = try std.ArrayList(Value).initCapacity(self.allocator, count);
                     defer args.deinit();
@@ -452,7 +455,7 @@ pub const Vm = struct {
                     var s: usize = 0;
                     const str = value.obj.*.data.string;
                     while (i < str.len) : (i += 1) {
-                        var c = str[i];
+                        const c = str[i];
                         if (c == '{') {
                             try writer.writeAll(str[s..i]);
                             switch (args.items[a]) {
@@ -460,7 +463,7 @@ pub const Vm = struct {
                                 .bool => |b| try writer.writeAll(if (b) "true" else "false"),
                                 .obj => |o| try writer.writeAll(o.data.string),
                                 .visit => |v| try std.fmt.formatIntValue(v, "", .{}, fbs.writer()),
-                                else => return self.fail("Unsupported interpolated type {s} for {s}", .{ args.items[a].typeName(), str })
+                                else => return self.fail("Unsupported interpolated type {s} for {s}", .{ args.items[a].typeName(), str }),
                             }
                             i += 1;
                             s = i + 1;
@@ -508,7 +511,7 @@ pub const Vm = struct {
                     if (value.len() > 0) try self.push(value.getAtIndex(0));
                 },
                 .iter_next => {
-                    var iter = self.iterators.peek().*;
+                    const iter = self.iterators.peek().*;
                     var value = iter.value;
                     if (iter.index >= value.len()) {
                         try self.push(values.Nil);
@@ -523,14 +526,14 @@ pub const Vm = struct {
                     _ = self.iterators.pop();
                 },
                 .class => {
-                    var value = self.pop();
+                    const value = self.pop();
                     var count = self.readInt(OpCode.Size(.class));
                     var fields = std.ArrayList(Class.Field).init(self.allocator);
                     errdefer fields.deinit();
                     while (count > 0) : (count -= 1) {
-                        var name = self.pop();
-                        var field_name = name.obj.data.string;
-                        var field_value = self.pop();
+                        const name = self.pop();
+                        const field_name = name.obj.data.string;
+                        const field_value = self.pop();
                         try fields.append(.{
                             .name = field_name,
                             .value = field_value,
@@ -538,32 +541,32 @@ pub const Vm = struct {
                     }
 
                     std.mem.reverse(Class.Field, fields.items);
-                    var class = try Class.init(self.allocator, value.obj.data.string, try fields.toOwnedSlice());
+                    const class = try Class.init(self.allocator, value.obj.data.string, try fields.toOwnedSlice());
                     try self.pushAlloc(.{ .class = class });
                 },
                 .instance => {
-                    var value = self.pop();
+                    const value = self.pop();
                     var class = value.obj.data.class;
 
                     var count = self.readInt(OpCode.Size(.class));
                     var fields = std.ArrayList(Class.Field).init(self.allocator);
                     defer fields.deinit();
                     while (count > 0) : (count -= 1) {
-                        var name = self.pop();
-                        var str_name = name.obj.data.string;
-                        var field = self.pop();
+                        const name = self.pop();
+                        const str_name = name.obj.data.string;
+                        const field = self.pop();
                         try fields.append(.{
                             .name = str_name,
                             .value = field,
                         });
                     }
                     std.mem.reverse(Class.Field, fields.items);
-                    var instance = try class.createInstance(try fields.toOwnedSlice());
+                    const instance = try class.createInstance(try fields.toOwnedSlice());
                     try self.pushAlloc(.{ .instance = instance });
                 },
                 .range => {
-                    var left = self.pop();
-                    var right = self.pop();
+                    const left = self.pop();
+                    const right = self.pop();
                     try self.push(.{
                         .range = .{
                             .start = @as(i32, @intFromFloat(left.number)),
@@ -573,7 +576,7 @@ pub const Vm = struct {
                 },
                 .index => {
                     const index = self.pop();
-                    var target = self.pop();
+                    const target = self.pop();
                     switch (target) {
                         .obj => |o| switch (o.data) {
                             // TODO: Will want to clean this up.
@@ -581,7 +584,7 @@ pub const Vm = struct {
                             // but that's for another day
                             .string => {
                                 if (index == .obj and index.obj.data == .string) {
-                                    var name = index.obj.data.string;
+                                    const name = index.obj.data.string;
                                     if (std.mem.eql(u8, name, "has")) {
                                         try self.push(builtins.Has.value);
                                         try self.push(target);
@@ -592,7 +595,7 @@ pub const Vm = struct {
                             },
                             .list => |l| {
                                 if (index == .obj and index.obj.data == .string) {
-                                    var name = index.obj.data.string;
+                                    const name = index.obj.data.string;
                                     if (std.mem.eql(u8, name, "count")) {
                                         try self.push(builtins.Count.value);
                                         try self.push(target);
@@ -620,7 +623,7 @@ pub const Vm = struct {
                                 if (m.get(index)) |v| {
                                     try self.push(v);
                                 } else if (index == .obj and index.obj.data == .string) {
-                                    var name = index.obj.data.string;
+                                    const name = index.obj.data.string;
                                     if (std.mem.eql(u8, name, "count")) {
                                         try self.push(builtins.Count.value);
                                         try self.push(target);
@@ -644,7 +647,7 @@ pub const Vm = struct {
                                     return self.fail("Can only query set methods by string name, not {s}", .{@tagName(index)});
                                 if (index.obj.data != .string)
                                     return self.fail("Can only query set methods by string name, not {s}", .{@tagName(index.obj.data)});
-                                var name = index.obj.data.string;
+                                const name = index.obj.data.string;
                                 if (std.mem.eql(u8, name, "count")) {
                                     try self.push(builtins.Count.value);
                                     try self.push(target);
@@ -681,7 +684,7 @@ pub const Vm = struct {
                                 return self.fail("Unknown index key \"{s}\" on map key/value pair. Only \"key\" or \"value\" are allowed.", .{@tagName(index)});
                             if (index.obj.data != .string)
                                 return self.fail("Unknown index key \"{s}\" on map key/value pair. Only \"key\" or \"value\" are allowed.", .{@tagName(index.obj.data)});
-                            var name = index.obj.data.string;
+                            const name = index.obj.data.string;
                             if (std.mem.eql(u8, name, "key")) {
                                 try self.push(mp.key.*);
                             } else if (std.mem.eql(u8, name, "value")) {
@@ -694,16 +697,16 @@ pub const Vm = struct {
                     }
                 },
                 .dialogue => {
-                    var has_speaker = self.readInt(u8) == 1;
+                    const has_speaker = self.readInt(u8) == 1;
                     var speaker: ?[]const u8 = null;
                     if (has_speaker) {
-                        var speaker_value = self.pop();
+                        const speaker_value = self.pop();
                         speaker = speaker_value.obj.data.string;
                     }
 
-                    var dialogue_value = self.pop();
+                    const dialogue_value = self.pop();
 
-                    var tag_count = self.readInt(u8);
+                    const tag_count = self.readInt(u8);
                     var tags = try self.allocator.alloc([]const u8, tag_count);
                     defer self.allocator.free(tags);
                     var i: usize = 0;
@@ -711,8 +714,8 @@ pub const Vm = struct {
                         const tag_value = self.pop();
                         tags[tag_count - i - 1] = tag_value.obj.data.string;
                     }
-                    var id_index = self.readInt(OpCode.Size(.constant));
-                    var result = Dialogue{
+                    const id_index = self.readInt(OpCode.Size(.constant));
+                    const result = Dialogue{
                         .content = dialogue_value.obj.data.string,
                         .speaker = speaker,
                         .tags = tags,
@@ -724,7 +727,7 @@ pub const Vm = struct {
                 },
                 .call => {
                     const arg_count = self.readInt(OpCode.Size(.call));
-                    var value = self.stack.items[self.stack.count - 1 - arg_count];
+                    const value = self.stack.items[self.stack.count - 1 - arg_count];
                     if (value != .obj)
                         return self.fail("Cannot call non-function type {s}", .{@tagName(value.obj.data)});
                     switch (value.obj.data) {
@@ -736,7 +739,7 @@ pub const Vm = struct {
                                     .{ f.arity, arg_count },
                                 );
                             }
-                            var frame = try Frame.create(value.obj, 0, self.stack.count - arg_count);
+                            const frame = try Frame.create(value.obj, 0, self.stack.count - arg_count);
                             self.frames.push(frame);
                             self.stack.count = frame.bp + f.locals_count;
                         },
@@ -746,7 +749,7 @@ pub const Vm = struct {
                                     "Builtin Function expected {} arguments, but found {}",
                                     .{ b.arity, arg_count },
                                 );
-                            var result = b.backing(&self.gc, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
+                            const result = b.backing(&self.gc, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
                             self.stack.count -= arg_count + 1;
                             try self.push(result);
                         },
@@ -756,7 +759,7 @@ pub const Vm = struct {
                                     "Extern Function expected {} arguments, but found {}",
                                     .{ e.arity, arg_count },
                                 );
-                            var result = e.backing(e.context_ptr, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
+                            const result = e.backing(e.context_ptr, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
                             self.stack.count -= arg_count + 1;
                             try self.push(result);
                         },
@@ -773,28 +776,28 @@ pub const Vm = struct {
                     for (0..count) |i| {
                         free_values[i] = self.stack.items[self.stack.count - count + i];
                     }
-                    var closure = try self.gc.create(self, .{
+                    const closure = try self.gc.create(self, .{
                         .closure = .{
                             .data = &value.obj.data,
                             .free_values = free_values,
                         },
                     });
-                    var reset_count = self.stack.count - count;
+                    const reset_count = self.stack.count - count;
                     self.stack.count = reset_count;
                     try self.push(closure);
                 },
                 .current_closure => {
-                    var current = self.currentFrame().cl;
+                    const current = self.currentFrame().cl;
                     try self.push(.{ .obj = current });
                 },
                 .return_value => {
-                    var value = self.pop();
-                    var frame = self.frames.pop();
+                    const value = self.pop();
+                    const frame = self.frames.pop();
                     self.stack.count = frame.bp - 1;
                     try self.push(value);
                 },
                 .return_void => {
-                    var frame = self.frames.pop();
+                    const frame = self.frames.pop();
                     self.stack.count = frame.bp - 1;
                     try self.push(values.Void);
                 },
@@ -808,9 +811,9 @@ pub const Vm = struct {
                 .choice => {
                     const ip = self.readInt(OpCode.Size(.jump));
                     const is_unique = self.readInt(u8) == 1;
-                    var id_index = self.readInt(OpCode.Size(.constant));
-                    var visit_index = self.readInt(OpCode.Size(.get_global));
-                    var visit_count = self.globals[visit_index].visit;
+                    const id_index = self.readInt(OpCode.Size(.constant));
+                    const visit_index = self.readInt(OpCode.Size(.get_global));
+                    const visit_count = self.globals[visit_index].visit;
                     if (visit_count > 0 and is_unique) continue;
                     try self.choices_list.append(.{
                         .content = self.pop().obj.data.string,
@@ -820,7 +823,7 @@ pub const Vm = struct {
                     });
                 },
                 .visit => {
-                    var index = self.readInt(OpCode.Size(.get_global));
+                    const index = self.readInt(OpCode.Size(.get_global));
                     self.globals[index].visit += 1;
                 },
                 .backup => {

@@ -18,7 +18,7 @@ pub const UUID = struct {
 
         var i: usize = 0;
         while (i < Size) : (i += 1) {
-            var res: u8 = r.random().uintLessThanBiased(u8, chars.len);
+            const res: u8 = r.random().uintLessThanBiased(u8, chars.len);
             id[i] = chars[res];
         }
 

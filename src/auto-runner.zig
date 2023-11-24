@@ -16,19 +16,19 @@ pub fn main() !void {
 
     var args = try std.process.argsWithAllocator(arena.allocator());
     _ = args.skip();
-    var file_path = args.next();
+    const file_path = args.next();
     if (file_path == null) {
         std.log.warn("No file argument provided.", .{});
         return;
     }
-    var count = try std.fmt.parseInt(u64, args.next().?, 10);
+    const count = try std.fmt.parseInt(u64, args.next().?, 10);
     var allocator = arena.allocator();
-    var vm_alloc = arena.allocator();
+    const vm_alloc = arena.allocator();
     var err = Errors.init(vm_alloc);
     errdefer err.deinit();
 
-    var dir = try std.fs.cwd().openDir(std.fs.path.dirname(file_path.?).?, .{});
-    var file_name = std.fs.path.basename(file_path.?);
+    const dir = try std.fs.cwd().openDir(std.fs.path.dirname(file_path.?).?, .{});
+    const file_name = std.fs.path.basename(file_path.?);
     var tree = parseFile(allocator, dir, file_name, &err) catch return;
     defer tree.deinit();
     defer allocator.free(tree.source);
@@ -40,7 +40,7 @@ pub fn main() !void {
         try err.write(tree.source, std.io.getStdErr().writer());
         return e;
     };
-    var bytecode = try compiler.bytecode();
+    const bytecode = try compiler.bytecode();
 
     var i: usize = 0;
     var visit_counts = std.StringArrayHashMap(u64).init(vm_alloc);
@@ -56,7 +56,7 @@ pub fn main() !void {
         for (vm.globals, 0..) |g, idx| {
             if (g == .visit) {
                 const name = bytecode.global_symbols[idx].name;
-                var cur = try visit_counts.getOrPutValue(name, 0);
+                const cur = try visit_counts.getOrPutValue(name, 0);
                 try visit_counts.put(name, cur.value_ptr.* + g.visit);
             } else break;
             // all visits are first so we can break

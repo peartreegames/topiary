@@ -95,7 +95,7 @@ pub const Lexer = struct {
             '/' => if (self.peekChar() == '=') {
                 return self.readAndCreateToken(.slash_equal, 2);
             } else if (self.peekChar() == '/') {
-                var start = self.position;
+                const start = self.position;
                 self.readLine();
                 return .{ .token_type = .comment, .start = start + 2, .end = self.position, .line = self.line, .column = self.column };
             } else .slash,
@@ -389,7 +389,7 @@ test "Check supported tokens" {
     //     std.debug.print("{}\n", .{next});
     // }
     for (tests) |item| {
-        var current = lexer.next();
+        const current = lexer.next();
         try testing.expectEqual(item.token_type, current.token_type);
         try testing.expectEqual(item.start, current.start);
         try testing.expectEqual(item.end, current.end);

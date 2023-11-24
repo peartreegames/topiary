@@ -36,10 +36,10 @@ pub const StateMap = struct {
     }
 
     pub fn get(self: *StateMap, name: []const u8) !?Value {
-        var item = self.map.get(name);
+        const item = self.map.get(name);
         if (item) |i| {
             var buf = std.io.fixedBufferStream(i);
-            var value = try Value.deserialize(buf.reader(), self.allocator);
+            const value = try Value.deserialize(buf.reader(), self.allocator);
             return value;
         }
         return null;
@@ -47,13 +47,13 @@ pub const StateMap = struct {
 
     /// Write the given StateMap to a string
     pub fn serialize(self: *StateMap, writer: anytype) !void {
-        try writer.writeIntBig(u64, @as(u64, @intCast(self.map.count())));
+        try writer.writeInt(u64, @as(u64, @intCast(self.map.count())), .little);
         var it = self.map.iterator();
         while (it.next()) |entry| {
-            try writer.writeIntBig(u16, @as(u8, @intCast(entry.key_ptr.*.len)));
+            try writer.writeInt(u16, @as(u8, @intCast(entry.key_ptr.*.len)), .little);
             try writer.writeAll(entry.key_ptr.*);
             try writer.writeAll(":");
-            try writer.writeIntBig(u32, @as(u32, @intCast(entry.value_ptr.*.len)));
+            try writer.writeInt(u32, @as(u32, @intCast(entry.value_ptr.*.len)), .little);
             try writer.writeAll(entry.value_ptr.*);
             try writer.writeAll("\n");
         }
@@ -61,16 +61,16 @@ pub const StateMap = struct {
 
     /// Parse a serialized state back into a StateMap
     pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !StateMap {
-        var size = try reader.readIntBig(u64);
+        const size = try reader.readInt(u64, .little);
         var state = StateMap.init(allocator);
         var count: usize = 0;
         while (count < size) : (count += 1) {
-            var length = try reader.readIntBig(u16);
-            var buf = try allocator.alloc(u8, length);
+            const length = try reader.readInt(u16, .little);
+            const buf = try allocator.alloc(u8, length);
             try reader.readNoEof(buf);
             _ = try reader.readByte();
-            var value_length = try reader.readIntBig(u32);
-            var value = try allocator.alloc(u8, value_length);
+            const value_length = try reader.readInt(u32, .little);
+            const value = try allocator.alloc(u8, value_length);
             try reader.readNoEof(value);
             try state.map.put(buf, value);
             _ = try reader.readByte();
@@ -85,7 +85,7 @@ test "Stringify" {
     defer map.deinit();
     try map.put("a", .{ .number = 71.005 });
 
-    var str = try alloc.create(Value.Obj);
+    const str = try alloc.create(Value.Obj);
     defer alloc.destroy(str);
     str.* = .{ .data = .{ .string = "some text value" } };
     str.*.id = UUID.new();
@@ -93,7 +93,7 @@ test "Stringify" {
 
     try map.put("c", .{ .bool = true });
 
-    var list_obj = try alloc.create(Value.Obj);
+    const list_obj = try alloc.create(Value.Obj);
     defer alloc.destroy(list_obj);
     var list = std.ArrayList(Value).init(alloc);
     defer list.deinit();

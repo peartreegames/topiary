@@ -64,7 +64,7 @@ pub fn parseFile(allocator: Allocator, dir: std.fs.Dir, path: []const u8, err: *
         return Parser.Error.ParserError;
     };
     const file_size = stat.size;
-    var source = try allocator.alloc(u8, file_size);
+    const source = try allocator.alloc(u8, file_size);
     defer allocator.free(source);
     file.reader().readNoEof(source) catch |e| {
         err.add("Could not read file {s}: {}", undefined, .err, .{ path, e }) catch {};
@@ -220,17 +220,17 @@ pub const Parser = struct {
     }
 
     fn includeStatement(self: *Parser) Error!Statement {
-        var start = self.current_token;
+        const start = self.current_token;
         self.next();
 
-        var path = try self.getStringValue();
+        const path = try self.getStringValue();
         if (self.directory == null) return self.fail("Current directory not set.", self.current_token, .{});
-        var full_path = self.directory.?.realpathAlloc(self.allocator, path) catch path;
+        const full_path = self.directory.?.realpathAlloc(self.allocator, path) catch path;
         var dir = self.directory.?.openDir(std.fs.path.dirname(full_path).?, .{}) catch |e| {
             return self.fail("Could not open directory {s}: {}", self.current_token, .{ path, e });
         };
         defer dir.close();
-        var include_tree = try parseFile(self.allocator, dir, path, self.err);
+        const include_tree = try parseFile(self.allocator, dir, path, self.err);
         return .{
             .token = start,
             .type = .{
@@ -243,9 +243,9 @@ pub const Parser = struct {
     }
 
     fn classDeclaration(self: *Parser) Error!Statement {
-        var start = self.current_token;
+        const start = self.current_token;
         self.next();
-        var name = try self.consumeIdentifier();
+        const name = try self.consumeIdentifier();
         try self.expectCurrent(.left_brace);
         self.next();
 
@@ -278,9 +278,9 @@ pub const Parser = struct {
     }
 
     fn enumDeclaration(self: *Parser) Error!Statement {
-        var start = self.current_token;
+        const start = self.current_token;
         self.next();
-        var name = try self.consumeIdentifier();
+        const name = try self.consumeIdentifier();
         try self.expectCurrent(.left_brace);
         self.next();
         var values = std.ArrayList([]const u8).init(self.allocator);
@@ -302,8 +302,8 @@ pub const Parser = struct {
     }
 
     fn fieldDeclaration(self: *Parser) Error!Statement {
-        var start = self.current_token;
-        var name = try self.consumeIdentifier();
+        const start = self.current_token;
+        const name = try self.consumeIdentifier();
         try self.expectPeek(.equal);
         self.next();
         return .{
@@ -351,8 +351,8 @@ pub const Parser = struct {
     fn boughStatement(self: *Parser) Error!Statement {
         const start = self.current_token;
         self.next();
-        var name = try self.consumeIdentifier();
-        var body = try self.block();
+        const name = try self.consumeIdentifier();
+        const body = try self.block();
         return .{
             .token = start,
             .type = .{
@@ -402,7 +402,7 @@ pub const Parser = struct {
     }
 
     fn expression(self: *Parser, prec: Precedence) Error!Expression {
-        var start = self.current_token;
+        const start = self.current_token;
         var left: Expression = switch (self.current_token.token_type) {
             .identifier => try self.identifierExpression(),
             .number => blk: {
@@ -501,7 +501,7 @@ pub const Parser = struct {
     }
 
     fn functionExpression(self: *Parser) Error!Expression {
-        var start = self.current_token;
+        const start = self.current_token;
         var list = ArrayList([]const u8).init(self.allocator);
         errdefer list.deinit();
         self.next();
@@ -538,7 +538,7 @@ pub const Parser = struct {
     }
 
     fn instanceExpression(self: *Parser) Error!Expression {
-        var start = self.current_token;
+        const start = self.current_token;
         self.next();
         const name = try self.consumeIdentifier();
         try self.expectCurrent(.left_brace);
@@ -574,7 +574,7 @@ pub const Parser = struct {
     }
 
     fn stringExpression(self: *Parser) Error!Expression {
-        var token = self.current_token;
+        const token = self.current_token;
         var value: []const u8 = "";
         var depth: usize = 0;
         var start: usize = token.start;
@@ -670,7 +670,7 @@ pub const Parser = struct {
     fn mapPairSetKey(self: *Parser) Error!Expression {
         const start_token = self.current_token;
 
-        var key = try self.expression(.lowest);
+        const key = try self.expression(.lowest);
         if (!self.peekIs(.colon)) return key;
         self.next();
         self.next();
@@ -840,8 +840,8 @@ pub const Parser = struct {
         }
 
         self.next();
-        var text = try self.stringExpression();
-        var tags = try self.getTagsList();
+        const text = try self.stringExpression();
+        const tags = try self.getTagsList();
         self.next();
         return .{
             .token = start,
@@ -862,7 +862,7 @@ pub const Parser = struct {
         var tags = std.ArrayList([]const u8).init(self.allocator);
         while (self.peekIs(.hash)) {
             self.next();
-            var tag = try self.getStringValue();
+            const tag = try self.getStringValue();
             try tags.append(tag);
         }
         return tags.toOwnedSlice();
@@ -873,7 +873,7 @@ pub const Parser = struct {
         self.next();
         var speaker: ?[]const u8 = null;
         if (!self.currentIs(.colon)) {
-            var speaker_start = self.current_token.start;
+            const speaker_start = self.current_token.start;
             var speaker_end = self.current_token.end;
             // allow any character including spaces for speaker
             while (!self.currentIs(.colon)) {
@@ -884,8 +884,8 @@ pub const Parser = struct {
         }
         try self.expectCurrent(.colon);
         self.next();
-        var text = try self.stringExpression();
-        var tags = try self.getTagsList();
+        const text = try self.stringExpression();
+        const tags = try self.getTagsList();
         return .{
             .token = start_token,
             .type = .{
@@ -922,7 +922,7 @@ pub const Parser = struct {
     }
 
     fn callExpression(self: *Parser, func: Expression) Error!Expression {
-        var start_token = self.current_token;
+        const start_token = self.current_token;
         self.next();
         return .{
             .token = start_token,
@@ -981,7 +981,7 @@ pub const Parser = struct {
     fn forStatement(self: *Parser) Error!Statement {
         const start_token = self.current_token;
         self.next();
-        var iterator = try self.expression(.lowest);
+        const iterator = try self.expression(.lowest);
         switch (iterator.type) {
             .range, .identifier => {},
             else => return self.fail("Expected list, set, map, or range in for loop, found {}", iterator.token, .{iterator.token.token_type}),
@@ -1020,9 +1020,9 @@ pub const Parser = struct {
     }
 
     fn switchStatement(self: *Parser) Error!Statement {
-        var start_token = self.current_token;
+        const start_token = self.current_token;
         self.next();
-        var capture = try self.expression(.lowest);
+        const capture = try self.expression(.lowest);
 
         try self.expectPeek(.left_brace);
         var prongs = std.ArrayList(Statement).init(self.allocator);
@@ -1051,7 +1051,7 @@ pub const Parser = struct {
     }
 
     fn switchProng(self: *Parser) Error!Statement {
-        var start_token = self.current_token;
+        const start_token = self.current_token;
         var values = std.ArrayList(Expression).init(self.allocator);
         defer values.deinit();
         const is_else = start_token.token_type == .@"else";
@@ -1155,8 +1155,8 @@ test "Parse Include" {
 }
 
 test "Parse Declaration" {
-    var allocator = testing.allocator;
-    var t =
+    const allocator = testing.allocator;
+    const t =
         \\ const intValue = 5
         \\ var mutableValue = 1.2
         \\ class ClassType {
@@ -1197,14 +1197,14 @@ test "Parse Declaration" {
 }
 
 test "Parse Function Declaration" {
-    var t =
+    const t =
         \\ const sum = |x, y| return x + y
         \\ const str = |value, count| {
         \\    var result = "This is a string"
         \\    return result    
         \\ }
     ;
-    var allocator = testing.allocator;
+    const allocator = testing.allocator;
     var errors = Errors.init(allocator);
     defer errors.deinit();
     const tree = parse(allocator, t, &errors) catch |err| {
@@ -1220,11 +1220,11 @@ test "Parse Function Declaration" {
 }
 
 test "Parse Function Arguments" {
-    var t =
+    const t =
         \\ const sum = |x, y| return x + y
         \\ sum(1, 2) + sum(3, 4)
     ;
-    var allocator = testing.allocator;
+    const allocator = testing.allocator;
     var errors = Errors.init(allocator);
     defer errors.deinit();
     const tree = parse(allocator, t, &errors) catch |err| {
@@ -1245,14 +1245,14 @@ test "Parse Function Arguments" {
 }
 
 test "Parse Enums" {
-    var t =
+    const t =
         \\ enum Test {
         \\    one,
         \\    two  
         \\ }
         \\ var value = Test.one
     ;
-    var allocator = testing.allocator;
+    const allocator = testing.allocator;
     var errors = Errors.init(allocator);
     defer errors.deinit();
     const tree = parse(allocator, t, &errors) catch |err| {
@@ -1270,7 +1270,7 @@ test "Parse Enums" {
 }
 
 test "Parse Iterable Types" {
-    var allocator = testing.allocator;
+    const allocator = testing.allocator;
     const test_cases = .{
         .{ .input = "const stringList = [\"item\"]", .id = "stringList", .item_value = [_][]const u8{"item"}, .mutable = false, .type = .list },
         .{ .input = "const stringList = [\"item1\", \"item2\"]", .id = "stringList", .item_value = [_][]const u8{ "item1", "item2" }, .mutable = false, .type = .list },
@@ -1343,7 +1343,7 @@ test "Parse Nested Iterable Types" {
 }
 
 test "Parse Extern" {
-    var allocator = testing.allocator;
+    const allocator = testing.allocator;
     const test_cases = .{
         .{ .input = "extern const x = 0", .id = "x", .mutable = false, .@"extern" = true },
         .{ .input = "extern var y = 0", .id = "y", .mutable = true, .@"extern" = true },
@@ -1395,7 +1395,7 @@ test "Parse Enum" {
     try testing.expectEqualStrings("three", decl.values[0]);
     try testing.expectEqualStrings("four", decl.values[1]);
 
-    var varDecl = tree.root[2].type.variable;
+    const varDecl = tree.root[2].type.variable;
     try testing.expectEqualStrings("val", varDecl.name);
     try testing.expectEqualStrings("En", varDecl.initializer.type.indexer.target.type.identifier);
     try testing.expectEqualStrings("three", varDecl.initializer.type.indexer.index.type.identifier);
@@ -1508,7 +1508,7 @@ test "Parse While loop" {
         return err;
     };
     defer tree.deinit();
-    var loop = tree.root[0].type.@"while";
+    const loop = tree.root[0].type.@"while";
     try testing.expect(loop.condition.type.binary.operator == .less_than);
     try testing.expectEqualStrings("x", loop.body[0].type.expression.type.identifier);
 }
@@ -1618,12 +1618,12 @@ test "Parse Forks" {
     };
     defer tree.deinit();
 
-    var fork = tree.root[0].type.bough.body[0].type.fork;
+    const fork = tree.root[0].type.bough.body[0].type.fork;
     try testing.expect(fork.name == null);
 
     var choice = fork.body[0].type.choice;
     try testing.expectEqualStrings("choice 1", choice.text.type.string.value);
-    var line = choice.body[0].type.dialogue;
+    const line = choice.body[0].type.dialogue;
     try testing.expectEqualStrings("Other", line.speaker.?);
     try testing.expectEqualStrings("Response", line.content.type.string.value);
 

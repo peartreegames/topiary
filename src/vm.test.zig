@@ -55,7 +55,7 @@ pub const TestRunner = struct {
 
 var test_runner = TestRunner.init();
 pub fn initTestVm(source: []const u8, debug: bool) !Vm {
-    var alloc = std.testing.allocator;
+    const alloc = std.testing.allocator;
     var errors = Errors.init(alloc);
     defer errors.deinit();
     var bytecode = compileSource(alloc, source, &errors) catch |err| {
@@ -66,7 +66,7 @@ pub fn initTestVm(source: []const u8, debug: bool) !Vm {
     if (debug) {
         bytecode.print(std.debug);
     }
-    var vm = try Vm.init(alloc, bytecode, &test_runner.runner);
+    const vm = try Vm.init(alloc, bytecode, &test_runner.runner);
     return vm;
 }
 
@@ -148,7 +148,7 @@ test "Variables" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
-        var value = vm.stack.previous().number;
+        const value = vm.stack.previous().number;
         try testing.expect(case.value == value);
     }
 }
@@ -160,7 +160,7 @@ test "Constant Variables" {
     };
 
     inline for (test_cases) |case| {
-        var err = initTestVm(case, false);
+        const err = initTestVm(case, false);
         try testing.expect(Vm.Error.CompilerError == err);
     }
 }
@@ -208,7 +208,7 @@ test "Lists" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
-        var prev = vm.stack.previous();
+        const prev = vm.stack.previous();
         for (case.value, 0..) |v, i| {
             try testing.expect(v == prev.obj.data.list.items[i].number);
         }
@@ -664,6 +664,7 @@ test "Loops" {
             return err;
         };
         const value = vm.stack.previous();
+        value.print(std.debug, vm.bytecode.constants);
         try testing.expectEqual(value.number, case.value);
     }
 }
@@ -678,7 +679,7 @@ test "Classes" {
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
     try vm.interpret();
-    var value = vm.stack.previous();
+    const value = vm.stack.previous();
     try testing.expect(value.obj.data == .class);
     try testing.expectEqualStrings("Test", value.obj.data.class.name);
 }
@@ -1180,7 +1181,7 @@ test "Save and Load State" {
         \\ var value = 0
         \\ value += 1
     ;
-    var alloc = testing.allocator;
+    const alloc = testing.allocator;
 
     var vm = try initTestVm(test_case, false);
     defer vm.deinit();

@@ -57,8 +57,8 @@ pub const CompilerErrors = struct {
 
             var start = err.token.start + self.offset_pos;
             var end = err.token.end + self.offset_pos;
-            var line = err.token.line + self.offset_line;
-            var column = err.token.column + self.offset_col;
+            const line = err.token.line + self.offset_line;
+            const column = err.token.column + self.offset_col;
 
             start = @min(start, source.len - 1);
             end = @min(end, source.len);

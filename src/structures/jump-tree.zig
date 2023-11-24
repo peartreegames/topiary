@@ -18,7 +18,7 @@ pub const JumpTree = struct {
         dest_ip: u32 = 9999,
 
         pub fn create(allocator: std.mem.Allocator, name: []const u8, parent: ?*Node) !*Node {
-            var node = try allocator.create(Node);
+            const node = try allocator.create(Node);
             node.* = .{
                 .parent = parent,
                 .name = name,
@@ -77,7 +77,7 @@ pub const JumpTree = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator) !JumpTree {
-        var root = try JumpTree.Node.create(allocator, "root", null);
+        const root = try JumpTree.Node.create(allocator, "root", null);
         return .{
             .allocator = allocator,
             .root = root,

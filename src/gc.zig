@@ -33,7 +33,7 @@ pub const Gc = struct {
 
     /// root_ctx must have `fn root() []const []Value` function
     pub fn create(self: *Gc, root_ctx: anytype, data: Obj.Data) !Value {
-        var obj = try self.allocator.create(Obj);
+        const obj = try self.allocator.create(Obj);
         obj.* = .{
             .id = UUID.new(),
             .data = data,
@@ -69,7 +69,7 @@ pub const Gc = struct {
         var objPtr = self.stack;
         while (objPtr) |obj| {
             if (!obj.is_marked) {
-                var unmarked = obj;
+                const unmarked = obj;
                 objPtr = obj.next;
                 Obj.destroy(self.allocator, unmarked);
                 continue;

@@ -15,7 +15,7 @@ pub const VisitTree = struct {
         anon_count: usize = 0,
 
         pub fn create(allocator: std.mem.Allocator, name: []const u8, index: global_size, parent: ?*Node) !*Node {
-            var node = try allocator.create(Node);
+            const node = try allocator.create(Node);
             node.* = .{
                 .parent = parent,
                 .name = try allocator.dupe(u8, name),
@@ -73,7 +73,7 @@ pub const VisitTree = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator) !VisitTree {
-        var root = try Node.create(allocator, "__v", 0, null);
+        const root = try Node.create(allocator, "__v", 0, null);
         return .{
             .allocator = allocator,
             .root = root,
@@ -83,7 +83,7 @@ pub const VisitTree = struct {
     }
 
     pub fn push(self: *VisitTree, name: []const u8, index: u32) !void {
-        var node = try Node.create(self.allocator, name, index, self.current);
+        const node = try Node.create(self.allocator, name, index, self.current);
         try self.current.children.append(node);
         self.current = node;
     }

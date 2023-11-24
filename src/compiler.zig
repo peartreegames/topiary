@@ -68,7 +68,7 @@ pub const Compiler = struct {
         allocator: std.mem.Allocator,
 
         pub fn create(allocator: std.mem.Allocator, parent: ?*Chunk) !*Chunk {
-            var chunk = try allocator.create(Chunk);
+            const chunk = try allocator.create(Chunk);
             chunk.* = .{
                 .instructions = std.ArrayList(u8).init(allocator),
                 .token_lines = std.ArrayList(u32).init(allocator),
@@ -97,9 +97,9 @@ pub const Compiler = struct {
     } || parser.Parser.Error;
 
     pub fn init(allocator: std.mem.Allocator, errors: *CompilerErrors) !Compiler {
-        var root_chunk = try Compiler.Chunk.create(allocator, null);
-        var root_scope = try Scope.create(allocator, null, .global, 0);
-        var root_builtins = try Scope.create(allocator, null, .builtin, 0);
+        const root_chunk = try Compiler.Chunk.create(allocator, null);
+        const root_scope = try Scope.create(allocator, null, .global, 0);
+        const root_builtins = try Scope.create(allocator, null, .builtin, 0);
         return .{
             .allocator = allocator,
             .builtins = root_builtins,
@@ -185,7 +185,7 @@ pub const Compiler = struct {
         self.chunk = try Chunk.create(self.allocator, self.chunk);
     }
 
-    fn exitChunk(self: *Compiler) !struct{[]u8, []u32} {
+    fn exitChunk(self: *Compiler) !struct { []u8, []u32 } {
         const old_chunk = self.chunk;
         defer old_chunk.destroy();
         self.chunk = old_chunk.parent orelse return Error.OutOfScope;
@@ -218,7 +218,7 @@ pub const Compiler = struct {
                 defer _ = self.visit_tree.list.pop();
                 defer self.visit_tree.pop();
 
-                var bough_node = try JumpTree.Node.create(self.allocator, b.name, node);
+                const bough_node = try JumpTree.Node.create(self.allocator, b.name, node);
                 for (b.body) |s| try self.precompileJumps(s, bough_node);
                 try node.children.append(bough_node);
             },
@@ -228,7 +228,7 @@ pub const Compiler = struct {
                 try fbs.writer().writeByte('_');
                 var v_node = self.visit_tree.current;
                 try std.fmt.formatIntValue(v_node.anon_count, "", .{}, fbs.writer());
-                var fork_count = std.mem.trim(u8, buf[0..], &[_]u8{170});
+                const fork_count = std.mem.trim(u8, buf[0..], &[_]u8{170});
                 v_node.anon_count += 1;
 
                 try self.compileVisitDecl(f.name orelse fork_count, stmt.token);
@@ -236,7 +236,7 @@ pub const Compiler = struct {
                 defer self.visit_tree.pop();
 
                 if (f.name) |name| {
-                    var fork_node = try JumpTree.Node.create(self.allocator, name, node);
+                    const fork_node = try JumpTree.Node.create(self.allocator, name, node);
                     for (f.body) |s| try self.precompileJumps(s, fork_node);
                     try node.children.append(fork_node);
                 } else {
@@ -244,7 +244,7 @@ pub const Compiler = struct {
                 }
             },
             .choice => |c| {
-                var name = c.name orelse &c.id;
+                const name = c.name orelse &c.id;
                 try self.compileVisitDecl(name, stmt.token);
                 defer _ = self.visit_tree.list.pop();
                 defer self.visit_tree.pop();
@@ -268,7 +268,7 @@ pub const Compiler = struct {
     }
 
     pub fn compileStatement(self: *Compiler, stmt: ast.Statement) Error!void {
-        var token = stmt.token;
+        const token = stmt.token;
         switch (stmt.type) {
             .include => |i| {
                 try self.compileBlock(i.contents);
@@ -293,24 +293,24 @@ pub const Compiler = struct {
                 try self.replaceValue(jumpPos, OpCode.Size(.jump), self.instructionPos());
             },
             .@"switch" => |s| {
-                var start = self.instructionPos();
+                const start = self.instructionPos();
                 try self.compileExpression(&s.capture);
                 var prong_jumps = try self.allocator.alloc(usize, s.prongs.len);
                 defer self.allocator.free(prong_jumps);
                 for (s.prongs, 0..) |prong_stmt, i| {
-                    var prong = prong_stmt.type.switch_prong;
+                    const prong = prong_stmt.type.switch_prong;
                     if (prong.values == null) break;
                     for (prong.values.?) |value| {
                         try self.compileExpression(&value);
                     }
                     try self.writeOp(.prong, prong_stmt.token);
-                    var prong_jump = try self.writeInt(OpCode.Size(.jump), PRONG_HOLDER, prong_stmt.token);
+                    const prong_jump = try self.writeInt(OpCode.Size(.jump), PRONG_HOLDER, prong_stmt.token);
                     _ = try self.writeInt(u8, @as(u8, @intCast(prong.values.?.len)), prong_stmt.token);
                     prong_jumps[i] = prong_jump;
                 }
 
                 for (s.prongs, 0..) |prong_stmt, i| {
-                    var prong = prong_stmt.type.switch_prong;
+                    const prong = prong_stmt.type.switch_prong;
                     if (prong.values != null)
                         try self.replaceValue(prong_jumps[i], OpCode.Size(.jump), self.instructionPos());
                     try self.enterScope(.local);
@@ -389,7 +389,7 @@ pub const Compiler = struct {
                     return self.failError("{s} is a builtin function and cannot be used as a variable name", stmt.token, .{v.name}, Error.IllegalOperation);
                 if (self.scope.parent != null and v.is_extern)
                     return self.failError("Only global variables can be extern.", token, .{}, Error.IllegalOperation);
-                var symbol = self.scope.define(v.name, v.is_mutable, v.is_extern) catch {
+                const symbol = self.scope.define(v.name, v.is_mutable, v.is_extern) catch {
                     return self.fail("{s} is already declared", token, .{v.name});
                 };
                 try self.compileExpression(&v.initializer);
@@ -406,7 +406,7 @@ pub const Compiler = struct {
                 try self.getOrSetIdentifierConstant(c.name, token);
                 try self.writeOp(.class, token);
                 _ = try self.writeInt(OpCode.Size(.class), @as(OpCode.Size(.class), @intCast(c.fields.len)), token);
-                var symbol = self.scope.define(c.name, false, false) catch {
+                const symbol = self.scope.define(c.name, false, false) catch {
                     return self.fail("{s} is already declared", token, .{c.name});
                 };
                 try self.setSymbol(symbol, token, true);
@@ -433,7 +433,7 @@ pub const Compiler = struct {
                 try self.writeOp(.constant, token);
                 _ = try self.writeInt(OpCode.Size(.constant), i, token);
 
-                var symbol = try self.scope.define(e.name, false, false);
+                const symbol = try self.scope.define(e.name, false, false);
                 try self.setSymbol(symbol, token, true);
             },
             .fork => |f| {
@@ -441,10 +441,10 @@ pub const Compiler = struct {
                 var fbs = std.io.fixedBufferStream(&buf);
                 try fbs.writer().writeByte('_');
                 try std.fmt.formatIntValue(self.visit_tree.current.anon_count, "", .{}, fbs.writer());
-                var fork_count = std.mem.trim(u8, buf[0..], &[_]u8{170});
+                const fork_count = std.mem.trim(u8, buf[0..], &[_]u8{170});
 
                 self.visit_tree.current.anon_count += 1;
-                var cur = if (self.visit_tree.current.getChild(f.name orelse fork_count)) |n| n else {
+                const cur = if (self.visit_tree.current.getChild(f.name orelse fork_count)) |n| n else {
                     self.visit_tree.print(std.debug);
                     return self.fail("Could not find {s} in visit tree node {s}", token, .{ f.name orelse fork_count, self.visit_tree.current.name });
                 };
@@ -454,9 +454,9 @@ pub const Compiler = struct {
                 try self.visit_tree.list.append(f.name orelse fork_count);
                 defer _ = self.visit_tree.list.pop();
 
-                var path = try std.mem.join(self.allocator, ".", self.visit_tree.list.items);
+                const path = try std.mem.join(self.allocator, ".", self.visit_tree.list.items);
                 defer self.allocator.free(path);
-                var symbol = try self.root_scope.resolve(path);
+                const symbol = try self.root_scope.resolve(path);
                 try self.compileVisit(symbol, path, token);
 
                 if (f.name) |name| {
@@ -482,9 +482,9 @@ pub const Compiler = struct {
                 }
             },
             .choice => |c| {
-                var name = c.name orelse &c.id;
+                const name = c.name orelse &c.id;
                 try self.visit_tree.list.append(name);
-                var cur = if (self.visit_tree.current.getChild(name)) |n| n else {
+                const cur = if (self.visit_tree.current.getChild(name)) |n| n else {
                     self.visit_tree.print(std.debug);
                     return self.fail("Could not find {s} in visit tree node {s}", token, .{ name, self.visit_tree.current.name });
                 };
@@ -492,9 +492,9 @@ pub const Compiler = struct {
                 defer self.visit_tree.current = cur.parent.?;
                 defer _ = self.visit_tree.list.pop();
 
-                var path = try std.mem.join(self.allocator, ".", self.visit_tree.list.items);
+                const path = try std.mem.join(self.allocator, ".", self.visit_tree.list.items);
                 defer self.allocator.free(path);
-                var visit_symbol = try self.root_scope.resolve(path);
+                const visit_symbol = try self.root_scope.resolve(path);
 
                 try self.compileExpression(&c.text);
                 try self.writeOp(.choice, token);
@@ -532,9 +532,9 @@ pub const Compiler = struct {
                 try self.enterScope(.local);
                 errdefer self.exitScope() catch {};
 
-                var path = try std.mem.join(self.allocator, ".", self.visit_tree.list.items);
+                const path = try std.mem.join(self.allocator, ".", self.visit_tree.list.items);
                 defer self.allocator.free(path);
-                var symbol = try self.root_scope.resolve(path);
+                const symbol = try self.root_scope.resolve(path);
                 try self.compileVisit(symbol, path, token);
 
                 try self.compileBlock(b.body);
@@ -559,13 +559,13 @@ pub const Compiler = struct {
                     try self.getOrSetIdentifierConstant(speaker, token);
                 }
                 try self.writeOp(.dialogue, d.content.token);
-                var has_speaker_value = if (d.speaker == null) @as(u8, 0) else @as(u8, 1);
+                const has_speaker_value = if (d.speaker == null) @as(u8, 0) else @as(u8, 1);
                 _ = try self.writeInt(u8, has_speaker_value, token);
                 _ = try self.writeInt(u8, @as(u8, @intCast(d.tags.len)), token);
                 try self.writeId(d.id, token);
             },
             .divert => |d| {
-                var node = try self.getDivertNode(d.path, token);
+                const node = try self.getDivertNode(d.path, token);
                 var backup_pos: usize = 0;
                 if (d.is_backup) {
                     try self.writeOp(.backup, token);
@@ -640,9 +640,9 @@ pub const Compiler = struct {
 
     fn compileVisitDecl(self: *Compiler, name: []const u8, token: Token) Error!void {
         try self.visit_tree.list.append(name);
-        var path = try std.mem.join(self.allocator, ".", self.visit_tree.list.items);
+        const path = try std.mem.join(self.allocator, ".", self.visit_tree.list.items);
         defer self.allocator.free(path);
-        var symbol = self.root_scope.define(path, false, false) catch {
+        const symbol = self.root_scope.define(path, false, false) catch {
             self.visit_tree.print(std.debug);
             return self.fail("Visit {s} is already declared", token, .{path});
         };
@@ -660,7 +660,7 @@ pub const Compiler = struct {
     }
 
     pub fn compileExpression(self: *Compiler, expr: *const ast.Expression) Error!void {
-        var token = expr.token;
+        const token = expr.token;
         switch (expr.type) {
             .binary => |bin| {
                 if (bin.operator == .less_than) {
@@ -673,7 +673,7 @@ pub const Compiler = struct {
                     switch (bin.left.type) {
                         .identifier => |id| {
                             try self.compileExpression(bin.right);
-                            var symbol = try self.scope.resolve(id);
+                            const symbol = try self.scope.resolve(id);
                             try self.setSymbol(symbol, token, false);
                             try self.loadSymbol(symbol, id, token);
                             return;
@@ -718,7 +718,7 @@ pub const Compiler = struct {
                     .assign_add, .assign_subtract, .assign_multiply, .assign_divide, .assign_modulus => {
                         switch (bin.left.type) {
                             .identifier => |id| {
-                                var symbol = try self.scope.resolve(id);
+                                const symbol = try self.scope.resolve(id);
                                 try self.setSymbol(symbol, token, false);
                                 try self.loadSymbol(symbol, id, token);
                                 return;
@@ -806,7 +806,7 @@ pub const Compiler = struct {
                     try self.loadVisit(node, token);
                     return;
                 }
-                var symbol = try self.builtins.resolve(id) orelse try self.scope.resolve(id);
+                const symbol = try self.builtins.resolve(id) orelse try self.scope.resolve(id);
                 try self.loadSymbol(symbol, id, token);
             },
             .@"if" => |i| {
@@ -847,7 +847,7 @@ pub const Compiler = struct {
                     try self.writeOp(.return_void, token);
                 }
 
-                var chunk = try self.exitChunk();
+                const chunk = try self.exitChunk();
                 const count = self.scope.count;
                 const free_symbols = self.scope.free_symbols.items;
                 for (free_symbols) |s| {
@@ -879,7 +879,7 @@ pub const Compiler = struct {
                     try self.compileExpression(&field);
                     try self.getOrSetIdentifierConstant(ins.field_names[i], token);
                 }
-                var symbol = try self.scope.resolve(ins.name);
+                const symbol = try self.scope.resolve(ins.name);
                 try self.loadSymbol(symbol, ins.name, token);
                 try self.writeOp(.instance, token);
                 _ = try self.writeInt(OpCode.Size(.instance), @as(OpCode.Size(.instance), @intCast(ins.fields.len)), token);
@@ -980,10 +980,10 @@ pub const Compiler = struct {
     }
 
     fn writeInt(self: *Compiler, comptime T: type, value: T, token: Token) !usize {
-        var chunk = self.chunk;
-        var start = chunk.instructions.items.len;
+        const chunk = self.chunk;
+        const start = chunk.instructions.items.len;
         var buf: [@sizeOf(T)]u8 = undefined;
-        std.mem.writeIntBig(T, buf[0..], value);
+        std.mem.writeInt(T, buf[0..], value, .little);
         try self.writeValue(&buf, token);
         return start;
     }
@@ -995,7 +995,7 @@ pub const Compiler = struct {
 
     pub fn replaceValue(self: *Compiler, pos: usize, comptime T: type, value: T) !void {
         var buf: [@sizeOf(T)]u8 = undefined;
-        std.mem.writeIntBig(T, buf[0..], value);
+        std.mem.writeInt(T, buf[0..], value, .little);
         var chunk = self.chunk;
         for (buf, 0..) |v, i| {
             chunk.instructions.items[pos + i] = v;
@@ -1004,11 +1004,11 @@ pub const Compiler = struct {
 
     pub fn replaceJumps(instructions: []u8, old_pos: OpCode.Size(.jump), new_pos: OpCode.Size(.jump)) !void {
         var i: usize = 0;
-        var jump = @intFromEnum(OpCode.jump);
+        const jump = @intFromEnum(OpCode.jump);
         while (i < instructions.len) : (i += 1) {
-            if (instructions[i] == jump and std.mem.readIntSliceBig(OpCode.Size(.jump), instructions[(i + 1)..]) == old_pos) {
+            if (instructions[i] == jump and std.mem.readVarInt(OpCode.Size(.jump), instructions[(i + 1)..(i + @sizeOf(OpCode.Size(.jump)))], .little) == old_pos) {
                 var buf: [@sizeOf(OpCode.Size(.jump))]u8 = undefined;
-                std.mem.writeIntBig(OpCode.Size(.jump), buf[0..], new_pos);
+                std.mem.writeInt(OpCode.Size(.jump), buf[0..], new_pos, .little);
                 for (buf, 0..) |v, index| {
                     instructions[i + index + 1] = v;
                 }
@@ -1032,7 +1032,7 @@ pub const Compiler = struct {
         try list.append(idx.target.type.identifier);
         std.mem.reverse([]const u8, list.items);
 
-        var joined = try std.mem.join(self.allocator, ".", list.items);
+        const joined = try std.mem.join(self.allocator, ".", list.items);
         defer self.allocator.free(joined);
         if (self.visit_tree.resolve(list.items[0])) |visit_node| {
             var node = visit_node;

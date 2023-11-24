@@ -230,41 +230,41 @@ pub const Value = union(Type) {
                 try std.fmt.formatFloatDecimal(n, .{
                     .precision = 5,
                 }, buf_stream.writer());
-                try writer.writeIntBig(u16, @as(u16, @intCast(buf_stream.pos)));
+                try writer.writeInt(u16, @as(u16, @intCast(buf_stream.pos)), .little);
                 try writer.writeAll(buf[0..buf_stream.pos]);
             },
             .range => |r| {
-                try writer.writeIntBig(i32, r.start);
-                try writer.writeIntBig(i32, r.end);
+                try writer.writeInt(i32, r.start, .little);
+                try writer.writeInt(i32, r.end, .little);
             },
             .map_pair => |mp| {
                 try serialize(mp.key.*, writer);
                 try serialize(mp.value.*, writer);
             },
             .visit => |v| {
-                try writer.writeIntBig(u32, v);
+                try writer.writeInt(u32, v, .little);
             },
             .obj => |o| {
                 try writer.writeByte(@intFromEnum(@as(Obj.DataType, o.data)));
                 try writer.writeAll(&o.id);
                 switch (o.data) {
                     .string => |s| {
-                        try writer.writeIntBig(u16, @as(u16, @intCast(s.len)));
+                        try writer.writeInt(u16, @as(u16, @intCast(s.len)), .little);
                         try writer.writeAll(s);
                     },
                     .list => |l| {
-                        try writer.writeIntBig(u16, @as(u16, @intCast(l.items.len)));
+                        try writer.writeInt(u16, @as(u16, @intCast(l.items.len)), .little);
                         for (l.items) |i| try serialize(i, writer);
                     },
                     .map => |m| {
-                        try writer.writeIntBig(u16, @as(u16, @intCast(m.count())));
+                        try writer.writeInt(u16, @as(u16, @intCast(m.count())), .little);
                         for (m.keys()) |k| {
                             try serialize(k, writer);
                             try serialize(m.get(k) orelse Nil, writer);
                         }
                     },
                     .set => |s| {
-                        try writer.writeIntBig(u16, @as(u16, @intCast(s.count())));
+                        try writer.writeInt(u16, @as(u16, @intCast(s.count())), .little);
                         for (s.keys()) |k| {
                             try serialize(k, writer);
                         }
@@ -272,11 +272,11 @@ pub const Value = union(Type) {
                     .function => |f| {
                         try writer.writeByte(f.arity);
                         try writer.writeByte(if (f.is_method) 1 else 0);
-                        try writer.writeIntBig(u16, @as(u16, @intCast(f.locals_count)));
-                        try writer.writeIntBig(u16, @as(u16, @intCast(f.instructions.len)));
+                        try writer.writeInt(u16, @as(u16, @intCast(f.locals_count)), .little);
+                        try writer.writeInt(u16, @as(u16, @intCast(f.instructions.len)), .little);
                         try writer.writeAll(f.instructions);
-                        try writer.writeIntBig(u16, @as(u16, @intCast(f.lines.len)));
-                        for (f.lines) |l| try writer.writeIntBig(u32, l);
+                        try writer.writeInt(u16, @as(u16, @intCast(f.lines.len)), .little);
+                        for (f.lines) |l| try writer.writeInt(u32, l, .little);
                     },
                     else => {},
                 }
@@ -286,35 +286,35 @@ pub const Value = union(Type) {
     }
 
     pub fn deserialize(reader: anytype, allocator: std.mem.Allocator) !Value {
-        var value_type: Type = @enumFromInt(try reader.readByte());
+        const value_type: Type = @enumFromInt(try reader.readByte());
         return switch (value_type) {
             .nil => Nil,
             .bool => if (try reader.readByte() == '1') True else False,
             .number => {
-                var length = try reader.readIntBig(u16);
-                var buf = try allocator.alloc(u8, length);
+                const length = try reader.readInt(u16, .little);
+                const buf = try allocator.alloc(u8, length);
                 defer allocator.free(buf);
                 try reader.readNoEof(buf);
                 return .{ .number = try std.fmt.parseFloat(f32, buf) };
             },
             .visit => {
-                return .{ .visit = try reader.readIntBig(u32) };
+                return .{ .visit = try reader.readInt(u32, .little) };
             },
             .obj => {
-                var data_type: Obj.DataType = @enumFromInt(try reader.readByte());
+                const data_type: Obj.DataType = @enumFromInt(try reader.readByte());
                 var id: ID = undefined;
                 try reader.readNoEof(id[0..]);
                 switch (data_type) {
                     .string => {
-                        const length = try reader.readIntBig(u16);
-                        var buf = try allocator.alloc(u8, length);
+                        const length = try reader.readInt(u16, .little);
+                        const buf = try allocator.alloc(u8, length);
                         try reader.readNoEof(buf);
                         const obj = try allocator.create(Value.Obj);
                         obj.* = .{ .id = id, .data = .{ .string = buf } };
                         return .{ .obj = obj };
                     },
                     .list => {
-                        const length = try reader.readIntBig(u16);
+                        const length = try reader.readInt(u16, .little);
                         var list = try std.ArrayList(Value).initCapacity(allocator, length);
                         var i: usize = 0;
                         while (i < length) : (i += 1) {
@@ -325,12 +325,12 @@ pub const Value = union(Type) {
                         return .{ .obj = obj };
                     },
                     .map => {
-                        const length = try reader.readIntBig(u16);
+                        const length = try reader.readInt(u16, .little);
                         var map = Value.Obj.MapType.initContext(allocator, adapter);
                         var i: usize = 0;
                         while (i < length) : (i += 1) {
-                            var key = try Value.deserialize(reader, allocator);
-                            var value = try Value.deserialize(reader, allocator);
+                            const key = try Value.deserialize(reader, allocator);
+                            const value = try Value.deserialize(reader, allocator);
                             try map.put(key, value);
                         }
                         const obj = try allocator.create(Value.Obj);
@@ -338,11 +338,11 @@ pub const Value = union(Type) {
                         return .{ .obj = obj };
                     },
                     .set => {
-                        const length = try reader.readIntBig(u16);
+                        const length = try reader.readInt(u16, .little);
                         var set = Value.Obj.SetType.initContext(allocator, adapter);
                         var i: usize = 0;
                         while (i < length) : (i += 1) {
-                            var key = try Value.deserialize(reader, allocator);
+                            const key = try Value.deserialize(reader, allocator);
                             try set.put(key, {});
                         }
                         const obj = try allocator.create(Value.Obj);
@@ -352,14 +352,14 @@ pub const Value = union(Type) {
                     .function => {
                         const arity = try reader.readByte();
                         const is_method = if (try reader.readByte() == 1) true else false;
-                        const locals_count = try reader.readIntBig(u16);
-                        const instructions_count = try reader.readIntBig(u16);
-                        var buf = try allocator.alloc(u8, instructions_count);
+                        const locals_count = try reader.readInt(u16, .little);
+                        const instructions_count = try reader.readInt(u16, .little);
+                        const buf = try allocator.alloc(u8, instructions_count);
                         try reader.readNoEof(buf);
-                        const lines_count = try reader.readIntBig(u16);
+                        const lines_count = try reader.readInt(u16, .little);
                         var lines = try allocator.alloc(u32, lines_count);
                         for (0..lines_count) |i| {
-                            lines[i] = try reader.readIntBig(u32);
+                            lines[i] = try reader.readInt(u32, .little);
                         }
                         const obj = try allocator.create(Value.Obj);
                         obj.* = .{ .id = id, .data = .{
@@ -400,7 +400,7 @@ pub const Value = union(Type) {
                     },
                     .map => |m| {
                         writer.print("map{{", .{});
-                        var keys = m.keys();
+                        const keys = m.keys();
                         for (keys, 0..) |k, i| {
                             k.print(writer, constants);
                             writer.print(":", .{});
@@ -411,7 +411,7 @@ pub const Value = union(Type) {
                         writer.print("}}", .{});
                     },
                     .set => |s| {
-                        var keys = s.keys();
+                        const keys = s.keys();
                         writer.print("set{{", .{});
                         for (keys, 0..) |k, i| {
                             k.print(writer, constants);
@@ -573,7 +573,7 @@ pub const Value = union(Type) {
 };
 
 test "Serialize" {
-    var alloc = std.testing.allocator;
+    const alloc = std.testing.allocator;
     var data = std.ArrayList(u8).init(alloc);
     defer data.deinit();
 
@@ -582,7 +582,7 @@ test "Serialize" {
 
     try std.testing.expectEqualSlices(
         u8,
-        &[_]u8{ 0x03, 0x00, 0x08, 0x31, 0x35, 0x2e, 0x30, 0x30, 0x30, 0x30, 0x30 },
+        &[_]u8{ 0x03, 0x08, 0x00, 0x31, 0x35, 0x2e, 0x30, 0x30, 0x30, 0x30, 0x30 },
         data.items,
     );
 }

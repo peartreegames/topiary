@@ -54,7 +54,7 @@ pub const ExportValue = extern struct {
                     break :blk .{ .tag = Tag.set, .data = .{ .list = .{ .items = list.ptr, .count = @intCast(list.len) } } };
                 },
                 .map => |m| blk: {
-                    var count = m.count();
+                    const count = m.count();
                     var list = allocator.alloc(ExportValue, count * 2) catch @panic("Could not allocate list items");
                     var it = m.iterator();
                     var i: usize = 0;
@@ -72,11 +72,11 @@ pub const ExportValue = extern struct {
     }
 
     pub fn toValue(self: *const ExportValue) Value {
-        return switch(self.tag) {
+        return switch (self.tag) {
             .nil => values.Nil,
             .bool => if (self.data.bool) values.True else values.False,
             .number => .{ .number = self.data.number },
-            else => unreachable
+            else => unreachable,
         };
     }
 

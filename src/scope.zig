@@ -31,7 +31,7 @@ pub const Scope = struct {
     };
 
     pub fn create(allocator: std.mem.Allocator, parent: ?*Scope, tag: Tag, offset: u32) !*Scope {
-        var scope = try allocator.create(Scope);
+        const scope = try allocator.create(Scope);
         scope.* = .{
             .allocator = allocator,
             .parent = parent,
@@ -59,7 +59,7 @@ pub const Scope = struct {
         if (is_extern and self.parent != null) {
             return error.ExternError;
         }
-        var name_copy = try self.allocator.dupe(u8, name);
+        const name_copy = try self.allocator.dupe(u8, name);
         symbol.* = .{
             .name = name_copy,
             .index = self.count + self.offset,
@@ -74,7 +74,7 @@ pub const Scope = struct {
 
     pub fn defineFunction(self: *Scope, name: []const u8) !*Symbol {
         const symbol = try self.allocator.create(Symbol);
-        var name_copy = try self.allocator.dupe(u8, name);
+        const name_copy = try self.allocator.dupe(u8, name);
         symbol.* = .{
             .name = name_copy,
             .index = 0,
@@ -91,7 +91,7 @@ pub const Scope = struct {
         try self.free_symbols.append(original);
 
         const symbol = try self.allocator.create(Symbol);
-        var name = try self.allocator.dupe(u8, original.name);
+        const name = try self.allocator.dupe(u8, original.name);
         symbol.* = .{
             .name = name,
             .index = index,
@@ -111,7 +111,7 @@ pub const Scope = struct {
             if (symbol == null) return null;
             if (symbol) |s| {
                 if (s.tag == .global or self.tag == .local) return s;
-                var free = try self.defineFree(s);
+                const free = try self.defineFree(s);
                 return free;
             }
         }

@@ -13,18 +13,18 @@ const Choice = runners.Choice;
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-    var file_path = try getFilePath(arena.allocator());
+    const file_path = try getFilePath(arena.allocator());
     if (file_path == null) {
         std.log.warn("No file argument provided.", .{});
         return;
     }
     var allocator = arena.allocator();
-    var vm_alloc = arena.allocator();
+    const vm_alloc = arena.allocator();
     var err = Errors.init(vm_alloc);
     errdefer err.deinit();
 
-    var dir = try std.fs.cwd().openDir(std.fs.path.dirname(file_path.?).?, .{});
-    var file_name = std.fs.path.basename(file_path.?);
+    const dir = try std.fs.cwd().openDir(std.fs.path.dirname(file_path.?).?, .{});
+    const file_name = std.fs.path.basename(file_path.?);
     var tree = parseFile(allocator, dir, file_name, &err) catch return;
     defer tree.deinit();
     defer allocator.free(tree.source);
@@ -36,7 +36,7 @@ pub fn main() !void {
         try err.write(tree.source, std.io.getStdErr().writer());
         return e;
     };
-    var bytecode = try compiler.bytecode();
+    const bytecode = try compiler.bytecode();
     var cli_runner = CliRunner.init();
     var vm = try Vm.init(vm_alloc, bytecode, &cli_runner.runner);
 
@@ -84,7 +84,7 @@ const CliRunner = struct {
             }
             var buf: [10]u8 = undefined;
             if (stdin.readUntilDelimiterOrEof(&buf, '\n') catch &buf) |user_input| {
-                var input = std.mem.trim(u8, user_input, "\r\n");
+                const input = std.mem.trim(u8, user_input, "\r\n");
                 index = std.fmt.parseInt(usize, input, 10) catch |err| blk: {
                     std.debug.print("Invliad value: {}.\n", .{err});
                     break :blk null;
