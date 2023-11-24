@@ -75,6 +75,7 @@ pub const Vm = struct {
     /// Determines if the vm is waiting on input
     /// hopefully will remove with async?
     is_waiting: bool = false,
+    can_continue: bool = false,
     runner: *Runner,
 
     pub const Error = error{
@@ -93,7 +94,26 @@ pub const Vm = struct {
             subs[i] = Subscriber.init(allocator);
         }
 
-        return .{
+        var root_frame = try allocator.create(Value.Obj.Data);
+        var root_closure = try allocator.create(Value.Obj);
+        root_frame.* = .{
+            .function = .{
+                .instructions = bytecode.instructions,
+                .lines = bytecode.token_lines,
+                .locals_count = 0,
+                .arity = 0,
+            },
+        };
+        root_closure.* = .{
+            .data = .{
+                .closure = .{
+                    .data = root_frame,
+                    .free_values = &[_]Value{},
+                },
+            },
+        };
+
+        var vm = Vm{
             .allocator = allocator,
             .bytecode = bytecode,
             .frames = try Stack(Frame).init(allocator, frame_size),
@@ -107,9 +127,15 @@ pub const Vm = struct {
             .jump_backups = std.ArrayList(OpCode.Size(.jump)).init(allocator),
             .choices_list = std.ArrayList(Choice).init(allocator),
         };
+
+        vm.stack.resize(bytecode.locals_count);
+        vm.frames.push(try Frame.create(root_closure, 0, 0));
+        return vm;
     }
 
     pub fn deinit(self: *Vm) void {
+        self.allocator.destroy(self.currentFrame().cl.data.closure.data);
+        Value.Obj.destroy(self.allocator, self.currentFrame().cl);
         self.choices_list.deinit();
         self.stack.deinit();
         self.iterators.deinit();
@@ -206,34 +232,25 @@ pub const Vm = struct {
     }
 
     pub fn interpret(self: *Vm) !void {
-        var root_frame = try self.allocator.create(Value.Obj.Data);
-        var root_closure = try self.allocator.create(Value.Obj);
-        defer self.allocator.destroy(root_frame);
-        defer self.allocator.destroy(root_closure);
-        root_frame.* = .{
-            .function = .{
-                .instructions = self.bytecode.instructions,
-                .lines = self.bytecode.token_lines,
-                .locals_count = 0,
-                .arity = 0,
-            },
-        };
-        root_closure.* = .{
-            .data = .{
-                .closure = .{
-                    .data = root_frame,
-                    .free_values = &[_]Value{},
-                },
-            },
-        };
-        self.stack.resize(self.bytecode.locals_count);
-        self.frames.push(try Frame.create(root_closure, 0, 0));
-        try self.run();
+        try self.start();
+        while (self.can_continue) {
+            std.log.warn("RUN {}", .{self.ip});
+            try self.run();
+        }
         // if (self.stack.count > self.bytecode.locals_count) {
         //     var count = self.stack.count - self.bytecode.locals_count;
         //     std.log.warn("Completed run but still had {} items on stack.", .{count});
         //     self.stack.print(std.debug, count);
         // }
+    }
+
+    pub fn start(self: *Vm) !void {
+        self.can_continue = true;
+        self.stack.resize(self.bytecode.locals_count);
+        while (self.frames.count > 1) {
+            _ = self.frames.pop();
+        }
+        self.currentFrame().ip = 0;
     }
 
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {
@@ -257,11 +274,18 @@ pub const Vm = struct {
         return result;
     }
 
-    fn run(self: *Vm) !void {
+    fn end(self: *Vm) void {
+        self.can_continue = false;
+    }
+
+    pub fn run(self: *Vm) !void {
+        if (!self.can_continue) return;
         while (self.ip < self.currentFrame().instructions().len) : (self.ip = self.currentFrame().ip) {
-            if (self.is_waiting) continue;
             const instruction = self.readByte();
-            if (instruction == 170) break;
+            if (instruction == 170) {
+                self.end();
+                return;
+            }
             const op: OpCode = @enumFromInt(instruction);
             switch (op) {
                 .constant => {
@@ -421,14 +445,16 @@ pub const Vm = struct {
                     var buf: [1028]u8 = undefined;
                     var fbs = std.io.fixedBufferStream(&buf);
                     var writer = fbs.writer();
+                    // index
                     var i: usize = 0;
                     var a: usize = 0;
-                    var start: usize = 0;
+                    // start
+                    var s: usize = 0;
                     const str = value.obj.*.data.string;
                     while (i < str.len) : (i += 1) {
                         var c = str[i];
                         if (c == '{') {
-                            try writer.writeAll(str[start..i]);
+                            try writer.writeAll(str[s..i]);
                             switch (args.items[a]) {
                                 .number => |n| try std.fmt.formatFloatDecimal(n, std.fmt.FormatOptions{}, fbs.writer()),
                                 .bool => |b| try writer.writeAll(if (b) "true" else "false"),
@@ -437,11 +463,11 @@ pub const Vm = struct {
                                 else => return self.fail("Unsupported interpolated type {s} for {s}", .{ args.items[a].typeName(), str })
                             }
                             i += 1;
-                            start = i + 1;
+                            s = i + 1;
                             a += 1;
                         }
                     }
-                    try writer.writeAll(str[start..]);
+                    try writer.writeAll(str[s..]);
                     try self.pushAlloc(.{ .string = try self.allocator.dupe(u8, fbs.getWritten()) });
                 },
                 .list => {
@@ -668,7 +694,6 @@ pub const Vm = struct {
                     }
                 },
                 .dialogue => {
-                    self.is_waiting = true;
                     var has_speaker = self.readInt(u8) == 1;
                     var speaker: ?[]const u8 = null;
                     if (has_speaker) {
@@ -693,7 +718,9 @@ pub const Vm = struct {
                         .tags = tags,
                         .id = self.bytecode.uuids[id_index],
                     };
+                    self.is_waiting = true;
                     self.runner.onDialogue(self, result);
+                    return;
                 },
                 .call => {
                     const arg_count = self.readInt(OpCode.Size(.call));
@@ -776,6 +803,7 @@ pub const Vm = struct {
                     self.current_choices = try self.choices_list.toOwnedSlice();
                     self.runner.onChoices(self, self.current_choices);
                     self.choices_list.clearRetainingCapacity();
+                    return;
                 },
                 .choice => {
                     const ip = self.readInt(OpCode.Size(.jump));
@@ -808,10 +836,12 @@ pub const Vm = struct {
                         self.currentFrame().ip = self.jump_backups.pop();
                         continue;
                     }
+                    self.can_continue = false;
                     break;
                 },
             }
         }
+        self.end();
     }
 
     fn binaryNumberOp(self: *Vm, op: OpCode) !void {

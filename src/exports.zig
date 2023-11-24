@@ -50,9 +50,14 @@ export fn compile(source_ptr: [*c]const u8, length: usize, out_ptr: [*c]u8, max:
     bytecode.serialize(writer) catch @panic("Could not serialize bytecode.");
 }
 
+export fn start(vm_ptr: usize) void {
+    var vm: *Vm = @ptrFromInt(vm_ptr);
+    vm.start() catch @panic("Could not start vm");
+}
+
 export fn run(vm_ptr: usize, error_line: *c_int, error_message: [*c]u8, capacity: usize) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
-    vm.interpret() catch {
+    vm.run() catch {
         error_line.* = @intCast(vm.err.line);
         if (vm.err.msg) |msg| {
             const len = @min(msg.len, capacity - 1);
@@ -60,6 +65,16 @@ export fn run(vm_ptr: usize, error_line: *c_int, error_message: [*c]u8, capacity
             if (len < capacity) error_message[len] = 0;
         }
     };
+}
+
+export fn canContinue(vm_ptr: usize) bool {
+    var vm: *Vm = @ptrFromInt(vm_ptr);
+    return vm.can_continue;
+}
+
+export fn isWaiting(vm_ptr: usize) bool {
+    var vm: *Vm = @ptrFromInt(vm_ptr);
+    return vm.is_waiting;
 }
 
 export fn selectContinue(vm_ptr: usize) void {
