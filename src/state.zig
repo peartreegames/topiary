@@ -6,6 +6,7 @@ const UUID = @import("./utils/uuid.zig").UUID;
 
 const testing = std.testing;
 
+/// A StringHashMap of serialized Values
 pub const StateMap = struct {
     allocator: std.mem.Allocator,
     map: Map,

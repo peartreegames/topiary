@@ -154,7 +154,18 @@ pub const Vm = struct {
 
         for (self.bytecode.global_symbols) |s| {
             if (s.is_extern or self.globals[s.index] == .void) continue;
-            try state.put(s.name, self.globals[s.index]);
+            const value = self.globals[s.index];
+            if (switch (value) {
+                .visit => |v| v == 0,
+                .obj => |o| switch (o.data) {
+                    .@"enum", .class => true,
+                },
+                .range, .map_pair => unreachable,
+                else => false,
+            }) continue;
+
+            if (self.globals[s.index] == .visit)
+                try state.put(s.name, self.globals[s.index]);
         }
     }
 
