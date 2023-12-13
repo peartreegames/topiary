@@ -159,13 +159,13 @@ pub const Vm = struct {
                 .visit => |v| v == 0,
                 .obj => |o| switch (o.data) {
                     .@"enum", .class => true,
+                    else => false,
                 },
                 .range, .map_pair => unreachable,
                 else => false,
             }) continue;
 
-            if (self.globals[s.index] == .visit)
-                try state.put(s.name, self.globals[s.index]);
+            try state.put(s.name, self.globals[s.index]);
         }
     }
 
@@ -293,7 +293,7 @@ pub const Vm = struct {
     }
 
     pub fn run(self: *Vm) !void {
-        if (!self.can_continue) return;
+        if (!self.can_continue or self.is_waiting) return;
         while (self.ip < self.currentFrame().instructions().len) : (self.ip = self.currentFrame().ip) {
             const instruction = self.readByte();
             if (instruction == 170) {
@@ -726,14 +726,13 @@ pub const Vm = struct {
                         tags[tag_count - i - 1] = tag_value.obj.data.string;
                     }
                     const id_index = self.readInt(OpCode.Size(.constant));
-                    const result = Dialogue{
+                    self.is_waiting = true;
+                    self.runner.onDialogue(self, .{
                         .content = dialogue_value.obj.data.string,
                         .speaker = speaker,
                         .tags = tags,
                         .id = self.bytecode.uuids[id_index],
-                    };
-                    self.is_waiting = true;
-                    self.runner.onDialogue(self, result);
+                    });
                     return;
                 },
                 .call => {
@@ -850,7 +849,7 @@ pub const Vm = struct {
                         self.currentFrame().ip = self.jump_backups.pop();
                         continue;
                     }
-                    self.can_continue = false;
+                    self.end();
                     break;
                 },
             }
