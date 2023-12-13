@@ -31,8 +31,26 @@ const ExportChoice = extern struct {
 const OnExportValueChanged = *const fn (value: *ExportValue) void;
 const OnExportDialogue = *const fn (vm_ptr: usize, dialogue: *ExportDialogue) void;
 const OnExportChoices = *const fn (vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) void;
-const OutputLogFn = *const fn ([*c]const u8) void;
-var output_log: OutputLogFn = undefined;
+const OutputLogFn = *const fn (msg: [*c]const u8) void;
+var output_log: ?OutputLogFn = null;
+
+const Severity = enum(u8) {
+    info,
+    warn,
+    err,
+};
+
+var severity_log: Severity = .err;
+
+fn log(msg: [*c]const u8, severity: Severity) void {
+    if (@intFromEnum(severity) < @intFromEnum(severity_log)) return;
+    if (output_log) |l| l(msg);
+}
+
+export fn setLogger(logger_ptr: usize, severity_value: u8) void {
+    severity_log = @enumFromInt(severity_value);
+    output_log = @ptrFromInt(logger_ptr);
+}
 
 export fn compile(source_ptr: [*c]const u8, length: usize, out_ptr: [*c]u8, max: usize) void {
     var arena = std.heap.ArenaAllocator.init(alloc);
@@ -53,13 +71,13 @@ export fn compile(source_ptr: [*c]const u8, length: usize, out_ptr: [*c]u8, max:
 }
 
 export fn start(vm_ptr: usize) void {
-    output_log("Starting VM");
+    log("Starting VM", .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);
-    vm.start() catch output_log("Could not start vm");
+    vm.start() catch log("Could not start vm");
 }
 
 export fn run(vm_ptr: usize, error_line: *c_int, error_message: [*c]u8, capacity: usize) void {
-    output_log("Running VM");
+    log("Running VM", .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);
     vm.run() catch {
         error_line.* = @intCast(vm.err.line);
@@ -82,15 +100,15 @@ export fn isWaiting(vm_ptr: usize) bool {
 }
 
 export fn selectContinue(vm_ptr: usize) void {
-    output_log("Selecting continue");
+    log("Selecting continue", .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);
     vm.selectContinue();
 }
 
 export fn selectChoice(vm_ptr: usize, index: usize) void {
-    output_log("Selecting choice");
+    log("Selecting choice", .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);
-    vm.selectChoice(index) catch output_log("Invalid choice");
+    vm.selectChoice(index) catch log("Invalid choice", .err);
 }
 
 export fn tryGetValue(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, out: *ExportValue) callconv(.C) bool {
@@ -155,7 +173,7 @@ const ExportCallback = struct {
     pub fn onValueChanged(context_ptr: usize, value: Value) void {
         var self: *ExportCallback = @ptrFromInt(context_ptr);
         const exp = alloc.create(ExportValue) catch {
-            output_log("Could not allocate ExportValue");
+            log("Could not allocate ExportValue", .err);
             return;
         };
         exp.* = ExportValue.fromValue(value, alloc);
@@ -181,7 +199,7 @@ const ExportFunction = struct {
     pub fn call(context_ptr: usize, args: []Value) Value {
         var self: *ExportFunction = @ptrFromInt(context_ptr);
         var exp_args = alloc.alloc(ExportValue, args.len) catch {
-            output_log("Could not allocate args");
+            log("Could not allocate args", .err);
             return values.Nil;
         };
         var i: usize = 0;
@@ -223,37 +241,36 @@ export fn unsubscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize,
     }) catch @panic("Could not unsubscribe from variable");
 }
 
-export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_ptr: usize, on_choice_ptr: usize, output_log_ptr: usize) usize {
+export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_ptr: usize, on_choice_ptr: usize) usize {
     const on_dialogue: OnExportDialogue = @ptrFromInt(on_dialogue_ptr);
     const on_choices: OnExportChoices = @ptrFromInt(on_choice_ptr);
-    output_log = @ptrFromInt(output_log_ptr);
 
-    output_log("Creating VM");
+    log("Creating VM", .info);
     var fbs = std.io.fixedBufferStream(source_ptr[0..source_len]);
     const bytecode = ByteCode.deserialize(alloc, fbs.reader()) catch {
-        output_log("Could not deserialize bytecode");
+        log("Could not deserialize bytecode", .err);
         return 0;
     };
 
     var extern_runner = alloc.create(ExportRunner) catch {
-        output_log("Could not allocate runner");
+        log("Could not allocate runner", .err);
         return 0;
     };
     extern_runner.* = ExportRunner.init(alloc, on_dialogue, on_choices);
 
     const vm = alloc.create(Vm) catch {
-        output_log("Could not allocate vm");
+        log("Could not allocate vm", .err);
         return 0;
     };
     vm.* = Vm.init(alloc, bytecode, &extern_runner.runner) catch {
-        output_log("Could not initialize Vm");
+        log("Could not initialize Vm", .err);
         return 0;
     };
     return @intFromPtr(vm);
 }
 
 export fn destroyVm(vm_ptr: usize) void {
-    output_log("Destroying VM");
+    log("Destroying VM", .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const runner = @fieldParentPtr(ExportRunner, "runner", vm.runner);
     alloc.destroy(runner);
@@ -303,7 +320,7 @@ const ExportRunner = struct {
         var self = @fieldParentPtr(ExportRunner, "runner", runner);
         var i: usize = 0;
         var result = self.allocator.alloc(ExportChoice, choices.len) catch {
-            output_log("Could not allocate choices");
+            log("Could not allocate choices", .err);
             return;
         };
         while (i < choices.len) : (i += 1) {
@@ -335,7 +352,7 @@ const TestRunner = struct {
     }
 
     pub fn log(msg: [*c]const u8) void {
-        std.debug.print("{s}", .{msg});
+        std.debug.print("[debug] {s}\n", .{msg});
     }
 };
 
@@ -369,12 +386,12 @@ test "Create and Destroy Vm" {
         \\ => START
     ;
 
+    output_log = TestRunner.log;
     var buf: [4096]u8 = undefined;
     compile(text.ptr, text.len, &buf, buf.len);
     const on_dialogue: OnExportDialogue = TestRunner.onDialogue;
     const on_choices: OnExportChoices = TestRunner.onChoices;
-    const log: OutputLogFn = TestRunner.log;
-    const vm_ptr = createVm(&buf, buf.len, @intFromPtr(on_dialogue), @intFromPtr(on_choices), @intFromPtr(log));
+    const vm_ptr = createVm(&buf, buf.len, @intFromPtr(on_dialogue), @intFromPtr(on_choices));
 
     const val_name = "value";
     subscribe(
