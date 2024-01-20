@@ -13,7 +13,9 @@ const Dialogue = runners.Dialogue;
 const Choice = runners.Choice;
 
 // const alloc = std.testing.allocator;
-const alloc = std.heap.page_allocator;
+var alloc = std.heap.page_allocator;
+var debug_log: ?OnExportDebugLog = null;
+var debug_severity: Severity = .err;
 
 const ExportDialogue = extern struct {
     content: [*c]const u8,
@@ -28,28 +30,33 @@ const ExportChoice = extern struct {
     ip: u32,
 };
 
-const OnExportValueChanged = *const fn (value: *ExportValue) void;
+const OnExportValueChanged = *const fn (value: ExportValue) void;
 const OnExportDialogue = *const fn (vm_ptr: usize, dialogue: *ExportDialogue) void;
 const OnExportChoices = *const fn (vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) void;
-const OutputLogFn = *const fn (msg: [*c]const u8) void;
-var output_log: ?OutputLogFn = null;
 
+const OnExportDebugLog = *const fn (msg: [*c]const u8, severity: Severity) void;
 const Severity = enum(u8) {
+    debug,
     info,
     warn,
     err,
 };
 
-var severity_log: Severity = .err;
-
-fn log(msg: [*c]const u8, severity: Severity) void {
-    if (@intFromEnum(severity) < @intFromEnum(severity_log)) return;
-    if (output_log) |l| l(msg);
+fn log(comptime msg: []const u8, args: anytype, severity: Severity) void {
+    if (@intFromEnum(severity) < @intFromEnum(debug_severity)) return;
+    if (debug_log) |l| {
+        var buf: [2048]u8 = undefined;
+        const fmt = std.fmt.bufPrintZ(&buf, msg, args) catch msg;
+        l(fmt.ptr, severity);
+    }
 }
 
-export fn setLogger(logger_ptr: usize, severity_value: u8) void {
-    severity_log = @enumFromInt(severity_value);
-    output_log = @ptrFromInt(logger_ptr);
+export fn setDebugLog(logger_ptr: usize) void {
+    debug_log = @ptrFromInt(logger_ptr);
+}
+
+export fn setDebugSeverity(severity: u8) void {
+    debug_severity = @enumFromInt(severity);
 }
 
 export fn compile(source_ptr: [*c]const u8, length: usize, out_ptr: [*c]u8, max: usize) void {
@@ -59,32 +66,45 @@ export fn compile(source_ptr: [*c]const u8, length: usize, out_ptr: [*c]u8, max:
     var errors = Errors.init(arena.allocator());
     defer errors.deinit();
 
+    const source = source_ptr[0..length];
+
     var bytecode = compileSource(
         arena.allocator(),
-        source_ptr[0..length],
+        source,
         &errors,
-    ) catch @panic("Could not compile source");
+    ) catch |err| {
+        var buf: [2048]u8 = undefined;
+        var fbs = std.io.fixedBufferStream(&buf);
+        errors.write(source, fbs.writer()) catch |e| {
+            log("Could not write errors to string to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
+            return;
+        };
+        log("Could not compile source: {s}\n{s}", .{ @errorName(err), buf[0..] }, .err);
+        return;
+    };
 
     var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
     const writer = fbs.writer();
-    bytecode.serialize(writer) catch @panic("Could not serialize bytecode.");
+    bytecode.serialize(writer) catch log("Could not serialize bytecode.", .{}, .err);
 }
 
 export fn start(vm_ptr: usize) void {
-    log("Starting VM", .info);
+    log("Starting VM", .{}, .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);
-    vm.start() catch log("Could not start vm");
+    for (vm.bytecode.global_symbols) |sym| {
+        if (sym.is_extern and vm.globals[sym.index] == .void) {
+            log("Export \"{s}\" has not been set", .{sym.name}, .warn);
+        }
+    }
+    vm.start() catch |err| log("Could not start vm: {any}", .{err}, .err);
 }
 
-export fn run(vm_ptr: usize, error_line: *c_int, error_message: [*c]u8, capacity: usize) void {
-    log("Running VM", .info);
+export fn run(vm_ptr: usize) void {
+    log("Running VM", .{}, .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);
     vm.run() catch {
-        error_line.* = @intCast(vm.err.line);
         if (vm.err.msg) |msg| {
-            const len = @min(msg.len, capacity - 1);
-            std.mem.copy(u8, error_message[0..len], msg[0..len]);
-            if (len < capacity) error_message[len] = 0;
+            log("Error Line {d}: {s}", .{ vm.err.line, msg }, .err);
         }
     };
 }
@@ -100,18 +120,18 @@ export fn isWaiting(vm_ptr: usize) bool {
 }
 
 export fn selectContinue(vm_ptr: usize) void {
-    log("Selecting continue", .info);
+    log("Selecting continue", .{}, .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);
     vm.selectContinue();
 }
 
 export fn selectChoice(vm_ptr: usize, index: usize) void {
-    log("Selecting choice", .info);
+    log("Selecting choice", .{}, .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);
-    vm.selectChoice(index) catch log("Invalid choice", .err);
+    vm.selectChoice(index) catch log("Invalid choice", .{}, .err);
 }
 
-export fn tryGetValue(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, out: *ExportValue) callconv(.C) bool {
+export fn tryGetValue(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, out: *ExportValue) bool {
     var vm: *Vm = @ptrFromInt(vm_ptr);
 
     const index = vm.getGlobalsIndex(name_ptr[0..name_length]) catch {
@@ -122,39 +142,63 @@ export fn tryGetValue(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize,
     return true;
 }
 
-export fn setExternString(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value_ptr: [*c]const u8, value_length: usize) void {
+export fn setExportString(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value_ptr: [*c]const u8, value_length: usize) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const name = name_ptr[0..name_length];
     const value = value_ptr[0..value_length];
-    const str = vm.gc.create(vm, .{ .string = vm.allocator.dupe(u8, value) catch @panic("Cannot allocate memory for string.") }) catch @panic("Unable to create gc value");
-    vm.setExtern(name, str) catch @panic("Invalid operation");
+    const dupe = vm.allocator.dupe(u8, value) catch |err| {
+        log("Could not allocate memory for string \"{s}\": {s}", .{ name, @errorName(err) }, .err);
+        return;
+    };
+    const str = vm.gc.create(vm, .{ .string = dupe }) catch |err| {
+        log("Could not allocate GC value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
+        return;
+    };
+    vm.setExport(name, str) catch |err| {
+        log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
+    };
 }
 
-export fn setExternNumber(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value: f32) void {
+export fn setExportNumber(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value: f32) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const name = name_ptr[0..name_length];
-    vm.setExtern(name, .{ .number = value }) catch @panic("Invalid operation");
+    vm.setExport(name, .{ .number = value }) catch |err| {
+        log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
+    };
 }
 
-export fn setExternBool(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value: bool) void {
+export fn setExportBool(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value: bool) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const name = name_ptr[0..name_length];
-    vm.setExtern(name, if (value) values.True else values.False) catch @panic("Invalid operation");
+    vm.setExport(name, if (value) values.True else values.False) catch |err| {
+        log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
+    };
 }
 
-export fn setExternNil(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize) void {
+export fn setExportNil(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const name = name_ptr[0..name_length];
-    vm.setExtern(name, values.Nil) catch @panic("Invalid operation");
+    vm.setExport(name, values.Nil) catch |err| {
+        log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
+    };
 }
 
-export fn setExternFunc(vm_ptr: usize, name_ptr: [*]const u8, name_length: usize, value_ptr: usize, arity: u8) void {
+export fn setExportFunc(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value_ptr: usize, arity: u8) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const name = name_ptr[0..name_length];
-    const wrapper = alloc.create(ExportFunction) catch @panic("Could not allocate ExportFunction");
-    wrapper.* = ExportFunction.init(@as(ExportFunction.Delegate, @ptrFromInt(value_ptr)));
-    const val = vm.gc.create(vm, .{ .ext_function = .{ .arity = arity, .backing = ExportFunction.call, .context_ptr = @intFromPtr(wrapper) } }) catch @panic("Could not create value");
-    vm.setExtern(name, val) catch @panic("Invalid operation");
+    log("Setting extern function \"{s}\"", .{name}, .info);
+    const wrapper = alloc.create(ExportFunction) catch |err| {
+        log("Could not allocate ExportFunction '{s}': {s}", .{ name, @errorName(err)}, .err);
+        return;
+    };
+    wrapper.* = ExportFunction.create(@as(ExportFunction.Delegate, @ptrFromInt(value_ptr)));
+    const val = vm.gc.create(vm, .{ .ext_function = .{ .arity = arity, .backing = ExportFunction.call, .context_ptr = @intFromPtr(wrapper) } }) catch |err| {
+        log("Could not create function value '{s}': {s}", .{ name, @errorName(err)}, .err);
+        return;
+    };
+    vm.setExport(name, val) catch |err| {
+        log("Could not set Export value '{s}': {s}", .{ name, @errorName(err) }, .err);
+    };
 }
 
 export fn destroyValue(value: *ExportValue) void {
@@ -172,13 +216,8 @@ const ExportCallback = struct {
 
     pub fn onValueChanged(context_ptr: usize, value: Value) void {
         var self: *ExportCallback = @ptrFromInt(context_ptr);
-        const exp = alloc.create(ExportValue) catch {
-            log("Could not allocate ExportValue", .err);
-            return;
-        };
-        exp.* = ExportValue.fromValue(value, alloc);
-        self.callback(exp);
-        alloc.destroy(exp);
+        const ext = ExportValue.fromValue(value, alloc);
+        self.callback(ext);
     }
 
     pub fn onUnsubscribe(context_ptr: usize, allocator: std.mem.Allocator) void {
@@ -187,90 +226,109 @@ const ExportCallback = struct {
     }
 };
 
-const ExportFunction = struct {
+pub const ExportFunction = struct {
     func: Delegate,
 
-    pub const Delegate = *const fn (args: [*c]ExportValue, args_len: u8) ExportValue;
+    pub const Delegate = *const fn (args: [*c]ExportValue, args_len: u8) callconv(.C) ExportValue;
 
-    pub fn init(func: Delegate) ExportFunction {
+    pub fn create(func: Delegate) ExportFunction {
         return .{ .func = func };
     }
 
     pub fn call(context_ptr: usize, args: []Value) Value {
         var self: *ExportFunction = @ptrFromInt(context_ptr);
-        var exp_args = alloc.alloc(ExportValue, args.len) catch {
-            log("Could not allocate args", .err);
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        const arenaAlloc = arena.allocator();
+        defer arena.deinit();
+        var exp_args = arenaAlloc.alloc(ExportValue, args.len) catch |err| {
+            log("Could not allocate args: {s}", .{@errorName(err)}, .err);
             return values.Nil;
         };
         var i: usize = 0;
         while (i < args.len) : (i += 1) {
             exp_args[i] = ExportValue.fromValue(args[i], alloc);
         }
+        log("Calling ExportFunction", .{}, .info);
         var v = self.func(exp_args.ptr, @intCast(exp_args.len));
         return v.toValue();
     }
 };
 
-export fn subscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, callback_ptr: usize) void {
+export fn subscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, callback_ptr: usize) bool {
     var vm: *Vm = @ptrFromInt(vm_ptr);
 
     const name = name_ptr[0..name_length];
-    const export_callback = vm.allocator.create(ExportCallback) catch @panic("Could not allocate ExportCallback");
-    export_callback.* = ExportCallback.init(@ptrFromInt(callback_ptr));
+    const extern_callback = vm.allocator.create(ExportCallback) catch {
+        log("Could not allocate ExportCallback", .{}, .err);
+        return false;
+    };
+    extern_callback.* = ExportCallback.init(@ptrFromInt(callback_ptr));
 
     vm.subscribeDelegate(
         name,
         .{
             .onUnsubscribe = &ExportCallback.onUnsubscribe,
-            .context_ptr = @intFromPtr(export_callback),
+            .context_ptr = @intFromPtr(extern_callback),
             .callback = &ExportCallback.onValueChanged,
         },
-    ) catch @panic("Could not subscribe to variable");
+    ) catch |err| {
+        log("Could not subscribe to variable '{s}': {s}", .{name, @errorName(err)}, .warn);
+        return false;
+    };
+    return true;
 }
 
-export fn unsubscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, callback_ptr: usize) void {
+export fn unsubscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, callback_ptr: usize) bool {
     var vm: *Vm = @ptrFromInt(vm_ptr);
 
     const name = name_ptr[0..name_length];
     var callback: OnExportValueChanged = @ptrFromInt(callback_ptr);
-    const export_callback = @fieldParentPtr(ExportCallback, "callback", &callback);
+    const extern_callback = @fieldParentPtr(ExportCallback, "callback", &callback);
 
     vm.unsubscribeDelegate(name, .{
-        .context_ptr = @intFromPtr(export_callback),
+        .context_ptr = @intFromPtr(extern_callback),
         .callback = &ExportCallback.onValueChanged,
-    }) catch @panic("Could not unsubscribe from variable");
+    }) catch |err| {
+        log("Could not unsubscribe from variable '{s}': {s}", .{name, @errorName(err)}, .warn);
+        return false;
+    };
+    return true;
 }
 
 export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_ptr: usize, on_choice_ptr: usize) usize {
     const on_dialogue: OnExportDialogue = @ptrFromInt(on_dialogue_ptr);
     const on_choices: OnExportChoices = @ptrFromInt(on_choice_ptr);
 
-    log("Creating VM", .info);
     var fbs = std.io.fixedBufferStream(source_ptr[0..source_len]);
+    log("Deserializing bytecode", .{}, .info);
     const bytecode = ByteCode.deserialize(alloc, fbs.reader()) catch {
-        log("Could not deserialize bytecode", .err);
+        log("Could not deserialize bytecode", .{}, .err);
         return 0;
     };
 
+    log("Creating ExportRunner", .{}, .info);
     var extern_runner = alloc.create(ExportRunner) catch {
-        log("Could not allocate runner", .err);
+        log("Could not allocate runner", .{}, .err);
         return 0;
     };
+    log("Initializing ExportRunner", .{}, .info);
     extern_runner.* = ExportRunner.init(alloc, on_dialogue, on_choices);
 
+    log("Creating VM", .{}, .info);
     const vm = alloc.create(Vm) catch {
-        log("Could not allocate vm", .err);
+        log("Could not allocate vm", .{}, .err);
         return 0;
     };
+    log("Initializing VM", .{}, .info);
     vm.* = Vm.init(alloc, bytecode, &extern_runner.runner) catch {
-        log("Could not initialize Vm", .err);
+        log("Could not initialize Vm", .{}, .err);
         return 0;
     };
     return @intFromPtr(vm);
 }
 
 export fn destroyVm(vm_ptr: usize) void {
-    log("Destroying VM", .info);
+    log("Destroying VM", .{}, .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const runner = @fieldParentPtr(ExportRunner, "runner", vm.runner);
     alloc.destroy(runner);
@@ -313,6 +371,7 @@ const ExportRunner = struct {
             .tags = &self.tags,
             .tags_length = @intCast(dialogue.tags.len),
         };
+        log("OnDialoguePtr: {d}", .{@intFromPtr(self.onExportDialogue)}, .debug);
         self.onExportDialogue(@intFromPtr(vm), &self.dialogue);
     }
 
@@ -320,7 +379,7 @@ const ExportRunner = struct {
         var self = @fieldParentPtr(ExportRunner, "runner", runner);
         var i: usize = 0;
         var result = self.allocator.alloc(ExportChoice, choices.len) catch {
-            log("Could not allocate choices", .err);
+            log("Could not allocate choices", .{}, .err);
             return;
         };
         while (i < choices.len) : (i += 1) {
@@ -330,6 +389,8 @@ const ExportRunner = struct {
                 .ip = choices[i].ip,
             };
         }
+
+        log("OnChoicesPtr: {d}", .{@intFromPtr(self.onExportChoices)}, .debug);
         self.onExportChoices(@intFromPtr(vm), result.ptr, @intCast(result.len));
         self.allocator.free(result);
     }
@@ -386,13 +447,16 @@ test "Create and Destroy Vm" {
         \\ => START
     ;
 
-    output_log = TestRunner.log;
+    debug_log = TestRunner.log;
+    debug_severity = .info;
+    defer debug_log = null;
+    defer debug_severity = .err;
     var buf: [4096]u8 = undefined;
     compile(text.ptr, text.len, &buf, buf.len);
     const on_dialogue: OnExportDialogue = TestRunner.onDialogue;
     const on_choices: OnExportChoices = TestRunner.onChoices;
     const vm_ptr = createVm(&buf, buf.len, @intFromPtr(on_dialogue), @intFromPtr(on_choices));
-
+    const vm: *Vm = @ptrFromInt(vm_ptr);
     const val_name = "value";
     subscribe(
         vm_ptr,
@@ -400,13 +464,11 @@ test "Create and Destroy Vm" {
         val_name.len,
         @intFromPtr(&testSubscriber),
     );
-    var err_line: c_int = 0;
-    var err_msg: [2048]u8 = undefined;
     start(vm_ptr);
     while (canContinue(vm_ptr)) {
-        run(vm_ptr, &err_line, &err_msg, 2048);
-        if (err_line != 0) {
-            std.log.warn("Error line {}: {s}", .{ err_line, err_msg });
+        run(vm_ptr);
+        if (vm.err.msg) |msg| {
+            std.log.warn("Error: {s}", .{msg});
             break;
         }
     }

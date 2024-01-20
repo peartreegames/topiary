@@ -7,6 +7,7 @@ const Builtin = @import("./builtins.zig").Builtin;
 const OpCode = @import("./opcode.zig").OpCode;
 const Enum = @import("./enum.zig").Enum;
 const Class = @import("./class.zig").Class;
+const ExportFunction = @import("./export.zig").ExportFunction;
 
 const ID = UUID.ID;
 const Allocator = std.mem.Allocator;
@@ -32,7 +33,7 @@ pub const Iterator = struct {
     index: usize,
 };
 
-pub const ExternFunctionDelegate = *const fn (args: []Value) Value;
+pub const ExportFunctionDelegate = *const fn (args: []Value) Value;
 
 pub const adapter = Value.Adapter{};
 
@@ -122,7 +123,11 @@ pub const Value = union(Type) {
                     allocator.free(f.instructions);
                     allocator.free(f.lines);
                 },
-                .ext_function, .builtin => {},
+                .ext_function => |e| {
+                    const func: *ExportFunction = @ptrFromInt(e.context_ptr);
+                    allocator.destroy(func);
+                },
+                .builtin => {},
                 .closure => |c| allocator.free(c.free_values),
                 .class => |c| c.deinit(),
                 .instance => obj.data.instance.fields.deinit(),

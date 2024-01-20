@@ -32,8 +32,15 @@ pub const ByteCode = struct {
     }
 
     pub fn serialize(self: *ByteCode, writer: anytype) !void {
-        // we could make this base64 encoded as well to reduce size, but the extra cost
-        // to decode it might not be worth it
+        // Keep symbols first for easier deserialization in other systems
+        try writer.writeInt(u64, @as(u64, @intCast(self.global_symbols.len)), .little);
+        for (self.global_symbols) |sym| {
+            try writer.writeInt(u8, @as(u8, @intCast(sym.name.len)), .little);
+            try writer.writeAll(sym.name);
+            try writer.writeInt(OpCode.Size(.get_global), @as(OpCode.Size(.get_global), @intCast(sym.index)), .little);
+            try writer.writeByte(if (sym.is_extern) 1 else 0);
+        }
+
         try writer.writeInt(u64, @as(u64, @intCast(self.instructions.len)), .little);
         try writer.writeAll(self.instructions);
         try writer.writeInt(u64, @as(u64, @intCast(self.token_lines.len)), .little);
@@ -42,16 +49,25 @@ pub const ByteCode = struct {
         for (self.constants) |constant| try constant.serialize(writer);
         try writer.writeInt(u64, @as(u64, @intCast(self.uuids.len)), .little);
         for (self.uuids) |uuid| try writer.writeAll(&uuid);
-        try writer.writeInt(u64, @as(u64, @intCast(self.global_symbols.len)), .little);
-        for (self.global_symbols) |sym| {
-            try writer.writeInt(u8, @as(u8, @intCast(sym.name.len)), .little);
-            try writer.writeAll(sym.name);
-            try writer.writeInt(OpCode.Size(.get_global), @as(OpCode.Size(.get_global), @intCast(sym.index)), .little);
-            try writer.writeByte(if (sym.is_extern) 1 else 0);
-        }
     }
 
     pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !ByteCode {
+        const globals_count = try reader.readInt(u64, .little);
+        var global_symbols = try allocator.alloc(GlobalSymbol, globals_count);
+        var count: usize = 0;
+        while (count < globals_count) : (count += 1) {
+            const length = try reader.readInt(u8, .little);
+            const buf = try allocator.alloc(u8, length);
+            try reader.readNoEof(buf);
+            const index = try reader.readInt(OpCode.Size(.get_global), .little);
+            const is_extern = if (try reader.readByte() == 1) true else false;
+            global_symbols[count] = GlobalSymbol{
+                .name = buf,
+                .index = index,
+                .is_extern = is_extern,
+            };
+        }
+
         const instruction_count = try reader.readInt(u64, .little);
         const instructions = try allocator.alloc(u8, instruction_count);
         try reader.readNoEof(instructions);
@@ -67,26 +83,11 @@ pub const ByteCode = struct {
         }
         const uuid_count = try reader.readInt(u64, .little);
         var uuids = try allocator.alloc(UUID.ID, uuid_count);
-        var count: usize = 0;
+        count = 0;
         while (count < uuid_count) : (count += 1) {
             try reader.readNoEof(&uuids[count]);
         }
 
-        const globals_count = try reader.readInt(u64, .little);
-        var global_symbols = try allocator.alloc(GlobalSymbol, globals_count);
-        count = 0;
-        while (count < globals_count) : (count += 1) {
-            const length = try reader.readInt(u8, .little);
-            const buf = try allocator.alloc(u8, length);
-            try reader.readNoEof(buf);
-            const index = try reader.readInt(OpCode.Size(.get_global), .little);
-            const is_extern = if (try reader.readByte() == 1) true else false;
-            global_symbols[count] = GlobalSymbol{
-                .name = buf,
-                .index = index,
-                .is_extern = is_extern,
-            };
-        }
         return .{
             .instructions = instructions,
             .token_lines = token_lines,

@@ -35,8 +35,8 @@ pub const ExportValue = extern struct {
             .number => |n| .{ .tag = Tag.number, .data = .{ .number = n } },
             .obj => |o| switch (o.data) {
                 // We're mixing memory management here, which is a very bad idea,
-                // I'm just unsure of a better way currently.
-                // Maybe pass in a function pointer to the "add" of the managed collection type?
+                // Tried passing in a "ExportAllocator" and copying the values to the memory
+                // but that didn't work out. Will revisit one day
                 .string => |s| .{ .tag = Tag.string, .data = .{ .string = s.ptr } },
                 .list => |l| blk: {
                     var list = allocator.alloc(ExportValue, l.items.len) catch @panic("Could not allocate list items");
