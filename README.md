@@ -1,4 +1,4 @@
-![](https://github.com/peartreegames/topiary/blob/main/assets/logo_horizontal.png)
+![](https://github.com/peartreegames/topiary/blob/main/assets/logo_horizontal_outline.png)
 
 Topiary is a narrative scripting tool which uses the Topi language to write interactive stories.
 It is designed to be integrated into video games which require a large amount of state and control flow in their narrative.
