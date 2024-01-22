@@ -142,7 +142,7 @@ export fn tryGetValue(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize,
     return true;
 }
 
-export fn setExportString(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value_ptr: [*c]const u8, value_length: usize) void {
+export fn setExternString(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value_ptr: [*c]const u8, value_length: usize) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const name = name_ptr[0..name_length];
     const value = value_ptr[0..value_length];
@@ -154,49 +154,49 @@ export fn setExportString(vm_ptr: usize, name_ptr: [*c]const u8, name_length: us
         log("Could not allocate GC value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
         return;
     };
-    vm.setExport(name, str) catch |err| {
+    vm.setExtern(name, str) catch |err| {
         log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
     };
 }
 
-export fn setExportNumber(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value: f32) void {
+export fn setExternNumber(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value: f32) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const name = name_ptr[0..name_length];
-    vm.setExport(name, .{ .number = value }) catch |err| {
+    vm.setExtern(name, .{ .number = value }) catch |err| {
         log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
     };
 }
 
-export fn setExportBool(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value: bool) void {
+export fn setExternBool(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value: bool) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const name = name_ptr[0..name_length];
-    vm.setExport(name, if (value) values.True else values.False) catch |err| {
+    vm.setExtern(name, if (value) values.True else values.False) catch |err| {
         log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
     };
 }
 
-export fn setExportNil(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize) void {
+export fn setExternNil(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const name = name_ptr[0..name_length];
-    vm.setExport(name, values.Nil) catch |err| {
+    vm.setExtern(name, values.Nil) catch |err| {
         log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
     };
 }
 
-export fn setExportFunc(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value_ptr: usize, arity: u8) void {
+export fn setExternFunc(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value_ptr: usize, arity: u8) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const name = name_ptr[0..name_length];
     log("Setting extern function \"{s}\"", .{name}, .info);
     const wrapper = alloc.create(ExportFunction) catch |err| {
-        log("Could not allocate ExportFunction '{s}': {s}", .{ name, @errorName(err)}, .err);
+        log("Could not allocate ExportFunction '{s}': {s}", .{ name, @errorName(err) }, .err);
         return;
     };
     wrapper.* = ExportFunction.create(@as(ExportFunction.Delegate, @ptrFromInt(value_ptr)));
     const val = vm.gc.create(vm, .{ .ext_function = .{ .arity = arity, .backing = ExportFunction.call, .context_ptr = @intFromPtr(wrapper) } }) catch |err| {
-        log("Could not create function value '{s}': {s}", .{ name, @errorName(err)}, .err);
+        log("Could not create function value '{s}': {s}", .{ name, @errorName(err) }, .err);
         return;
     };
-    vm.setExport(name, val) catch |err| {
+    vm.setExtern(name, val) catch |err| {
         log("Could not set Export value '{s}': {s}", .{ name, @errorName(err) }, .err);
     };
 }
@@ -254,13 +254,13 @@ pub const ExportFunction = struct {
     }
 };
 
-export fn subscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, callback_ptr: usize) bool {
+export fn subscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, callback_ptr: usize) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
 
     const name = name_ptr[0..name_length];
     const extern_callback = vm.allocator.create(ExportCallback) catch {
         log("Could not allocate ExportCallback", .{}, .err);
-        return false;
+        return;
     };
     extern_callback.* = ExportCallback.init(@ptrFromInt(callback_ptr));
 
@@ -272,13 +272,12 @@ export fn subscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, c
             .callback = &ExportCallback.onValueChanged,
         },
     ) catch |err| {
-        log("Could not subscribe to variable '{s}': {s}", .{name, @errorName(err)}, .warn);
-        return false;
+        log("Could not subscribe to variable '{s}': {s}", .{ name, @errorName(err) }, .warn);
+        return;
     };
-    return true;
 }
 
-export fn unsubscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, callback_ptr: usize) bool {
+export fn unsubscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, callback_ptr: usize) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
 
     const name = name_ptr[0..name_length];
@@ -289,10 +288,9 @@ export fn unsubscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize,
         .context_ptr = @intFromPtr(extern_callback),
         .callback = &ExportCallback.onValueChanged,
     }) catch |err| {
-        log("Could not unsubscribe from variable '{s}': {s}", .{name, @errorName(err)}, .warn);
-        return false;
+        log("Could not unsubscribe from variable '{s}': {s}", .{ name, @errorName(err) }, .warn);
+        return;
     };
-    return true;
 }
 
 export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_ptr: usize, on_choice_ptr: usize) usize {
@@ -412,8 +410,8 @@ const TestRunner = struct {
         selectChoice(vm_ptr, 0);
     }
 
-    pub fn log(msg: [*c]const u8) void {
-        std.debug.print("[debug] {s}\n", .{msg});
+    pub fn log(msg: [*c]const u8, severity: Severity) void {
+        std.debug.print("[{s}] {s}\n", .{ @tagName(severity), msg });
     }
 };
 

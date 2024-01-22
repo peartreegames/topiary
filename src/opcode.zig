@@ -47,6 +47,7 @@ pub const OpCode = enum(u8) {
     dialogue,
     fork,
     choice,
+    divert,
     backup,
     return_void,
     return_value,
@@ -105,6 +106,7 @@ pub const OpCode = enum(u8) {
             .return_void => "OP_RETURN_VOID",
             .return_value => "OP_RETURN_VALUE",
             .visit => "OP_VISIT",
+            .divert => "OP_DIVERT",
             .fin => "OP_FIN",
         };
     }
@@ -113,7 +115,7 @@ pub const OpCode = enum(u8) {
         // kept separate to easily change if needed
         return switch (self) {
             .constant, .get_global, .set_global => u32,
-            .jump, .jump_if_false, .backup, .visit => u32,
+            .jump, .jump_if_false, .divert, .backup, .visit => u32,
             .get_local,
             .set_local,
             .choice,

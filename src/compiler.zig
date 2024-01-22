@@ -565,16 +565,19 @@ pub const Compiler = struct {
                 try self.writeId(d.id, token);
             },
             .divert => |d| {
-                const node = try self.getDivertNode(d.path, token);
                 var backup_pos: usize = 0;
                 if (d.is_backup) {
                     try self.writeOp(.backup, token);
                     backup_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
                 }
-                try self.writeOp(.jump, token);
-                try self.divert_log.append(.{ .node = node, .jump_ip = self.instructionPos() });
-                _ = try self.writeInt(OpCode.Size(.jump), DIVERT_HOLDER, token);
-
+                try self.writeOp(.divert, token);
+                _ = try self.writeInt(u8, @as(u8, @intCast(d.path.len)), token);
+                var i: usize = d.path.len;
+                while (i > 0) : (i -= 1) {
+                    const node = try self.getDivertNode(d.path[0..i], token);
+                    try self.divert_log.append(.{ .node = node, .jump_ip = self.instructionPos() });
+                    _ = try self.writeInt(OpCode.Size(.divert), DIVERT_HOLDER, token);
+                }
                 const end_pos = self.instructionPos();
                 if (d.is_backup) {
                     try self.replaceValue(backup_pos, OpCode.Size(.jump), end_pos);

@@ -123,6 +123,19 @@ pub const ByteCode = struct {
                     writer.print("{d: >8}", .{dest});
                     i += 4;
                 },
+                .divert => {
+                    var count = instructions[i];
+                    i += 1;
+                    const dest = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
+                    writer.print("{d: >8} ", .{dest});
+                    i += 4;
+                    count -= 1;
+                    while (count > 0) : (count -= 1) {
+                        const next = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
+                        writer.print(" {d}", .{next});
+                        i += 4;
+                    }
+                },
                 .get_local,
                 .set_local,
                 .list,

@@ -62,6 +62,8 @@ pub const Vm = struct {
     iterators: Stack(Iterator),
     /// List of positions to jump back to using `^`
     jump_backups: std.ArrayList(OpCode.Size(.jump)),
+    /// Used to ensure preceeding code is executed before arriving at Bough
+    jump_requests: std.ArrayList(OpCode.Size(.jump)),
 
     bytecode: ByteCode,
     /// Current instruction position
@@ -125,6 +127,7 @@ pub const Vm = struct {
             .stack = try Stack(Value).init(allocator, stack_size),
             .iterators = try Stack(Iterator).init(allocator, iterator_size),
             .jump_backups = std.ArrayList(OpCode.Size(.jump)).init(allocator),
+            .jump_requests = std.ArrayList(OpCode.Size(.jump)).init(allocator),
             .choices_list = std.ArrayList(Choice).init(allocator),
         };
 
@@ -140,6 +143,7 @@ pub const Vm = struct {
         self.stack.deinit();
         self.iterators.deinit();
         self.jump_backups.deinit();
+        self.jump_requests.deinit();
         self.frames.deinit();
         self.gc.deinit();
         for (self.subscribers) |*sub| sub.deinit();
@@ -301,6 +305,8 @@ pub const Vm = struct {
                 return;
             }
             const op: OpCode = @enumFromInt(instruction);
+            const is_in_jump = self.jump_requests.items.len > 0;
+
             switch (op) {
                 .constant => {
                     const index = self.readInt(OpCode.Size(.constant));
@@ -726,6 +732,7 @@ pub const Vm = struct {
                         tags[tag_count - i - 1] = tag_value.obj.data.string;
                     }
                     const id_index = self.readInt(OpCode.Size(.constant));
+                    if (is_in_jump) continue;
                     self.is_waiting = true;
                     self.runner.onDialogue(self, .{
                         .content = dialogue_value.obj.data.string,
@@ -812,6 +819,7 @@ pub const Vm = struct {
                     try self.push(values.Void);
                 },
                 .fork => {
+                    if (is_in_jump) continue;
                     self.is_waiting = true;
                     self.current_choices = try self.choices_list.toOwnedSlice();
                     self.runner.onChoices(self, self.current_choices);
@@ -836,6 +844,23 @@ pub const Vm = struct {
                     const index = self.readInt(OpCode.Size(.get_global));
                     self.globals[index].visit += 1;
                 },
+                .divert => {
+                    // already in a jump request, continue
+                    if (is_in_jump) {
+                        self.currentFrame().ip = self.jump_requests.pop();
+                        continue;
+                    }
+                    var count = self.readInt(u8);
+                    while (count > 0) : (count -= 1) {
+                        const dest = self.readInt(OpCode.Size(.divert));
+                        const len = self.currentFrame().instructions().len;
+                        if (dest > len) return self.fail("Divert {d} is out of range {d}", .{ dest, len });
+                        try self.jump_requests.append(dest);
+                    }
+                    if (self.jump_requests.items.len > 0) {
+                        self.currentFrame().ip = self.jump_requests.pop();
+                    }
+                },
                 .backup => {
                     const ip = self.readInt(OpCode.Size(.backup));
                     if (self.jump_backups.items.len > 0 and self.jump_backups.getLast() == ip) {
@@ -845,6 +870,10 @@ pub const Vm = struct {
                     try self.jump_backups.append(ip);
                 },
                 .fin => {
+                    if (is_in_jump) {
+                        self.currentFrame().ip = self.jump_requests.pop();
+                        continue;
+                    }
                     if (self.jump_backups.items.len > 0) {
                         self.currentFrame().ip = self.jump_backups.pop();
                         continue;
@@ -865,22 +894,25 @@ pub const Vm = struct {
             .multiply => left * right,
             .divide => left / right,
             .modulus => @mod(left, right),
-            else => return self.fail("Unknown binary operator {s}", .{@tagName(op)}),
+            else => return self.fail("Unknown binary operator '{s}'", .{@tagName(op)}),
         };
         try self.push(.{ .number = total });
     }
 
     fn comparisonOp(self: *Vm, op: OpCode) !void {
-        const right = self.pop();
-        const left = self.pop();
+        var right = self.pop();
+        var left = self.pop();
+        if (right == .visit) right = .{ .number = @floatFromInt(right.visit) };
+        if (left == .visit) left = .{ .number = @floatFromInt(left.visit) };
+
         if (@intFromEnum(right) != @intFromEnum(left)) {
-            return self.fail("Cannot compare mismatched types {s} and {s}", .{ @tagName(.left), @tagName(.right) });
+            return self.fail("Cannot compare mismatched types '{s}' and '{s}'", .{ @tagName(left), @tagName(right) });
         }
         switch (op) {
             .equal => try self.push(.{ .bool = right.eql(left) }),
             .not_equal => try self.push(.{ .bool = !right.eql(left) }),
             .greater_than => try self.push(.{ .bool = left.number > right.number }),
-            else => return self.fail("Unknown comparison operator {s}", .{@tagName(op)}),
+            else => return self.fail("Unknown comparison operator '{s}'", .{@tagName(op)}),
         }
     }
 

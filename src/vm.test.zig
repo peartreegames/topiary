@@ -1044,6 +1044,55 @@ test "Jump Backups" {
     }
 }
 
+test "Jump Code" {
+    const test_cases = .{
+        .{
+            .input =
+            \\ === START {
+            \\    var firstValue = 0
+            \\    :: "First: {firstValue}"
+            \\    === INNER {
+            \\        var secondValue = 0
+            \\        firstValue += 1
+            \\        :: "First: {firstValue}, Second: {secondValue}"
+            \\        if (INNER == 1) => START
+            \\        else :: "Done"
+            \\    }
+            \\ }
+            \\ => START.INNER
+            ,
+        },
+        .{
+            .input =
+            \\ => START.INNER
+            \\ === START {
+            \\    var firstValue = 0
+            \\    :: "First: {firstValue}"
+            \\    === INNER {
+            \\        var secondValue = 0
+            \\        firstValue += 1
+            \\        :: "First: {firstValue}, Second: {secondValue}"
+            \\        if (INNER == 1) => START
+            \\        else if (INNER == 2) => INNER
+            \\        else :: "Done"
+            \\    }
+            \\ }
+            ,
+        },
+    };
+
+    inline for (test_cases) |case| {
+        std.debug.print("\n======\n", .{});
+        var vm = try initTestVm(case.input, false);
+        defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| {
+            vm.err.print(std.debug);
+            return err;
+        };
+    }
+}
+
 test "Switch" {
     const test_cases = .{
         .{
