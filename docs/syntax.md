@@ -511,3 +511,30 @@ include "./other.topi"
 // other.topi
 include "./main.topi"
 ```
+
+## Code Execution and Jumps
+
+When making nested jumps be aware that preceeding code will be execuded to ensure any declarations are created.
+
+Consider the following
+
+```topi
+=== START {
+    :Speaker: "Start conversation"
+    var test = "test"
+    :Speaker: "Continue"
+    === INNER {
+        test = "test 2"
+        :Speaker: "End {test}"
+    }
+}
+
+=> START.INNER // Expected output :Speaker: "End test 2"
+```
+
+In this situation we need to creating the `test` variable before it's set to `test 2`.
+To ensure that happens when you jump to `START.INNER` first Topiary will jump to `START`
+execute all code (while skipping dialogues and forks), then when it encounters another jump
+or ends, it'll then jump to `INNER`.
+
+*For this reason it's recommended that all code be placed at the top of all files and boughs.*

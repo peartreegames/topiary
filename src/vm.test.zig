@@ -1051,6 +1051,7 @@ test "Jump Code" {
             \\ === START {
             \\    var firstValue = 0
             \\    :: "First: {firstValue}"
+            \\    => INNER
             \\    === INNER {
             \\        var secondValue = 0
             \\        firstValue += 1
