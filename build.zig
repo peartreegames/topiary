@@ -4,6 +4,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    _ = b.addModule("topi", .{
+        .root_source_file = .{ .path = "src/topi.zig" },
+    });
+
     const topidll = b.addSharedLibrary(.{
         .name = "topi",
         .root_source_file = .{ .path = "src/export.zig" },
