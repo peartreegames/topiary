@@ -280,10 +280,29 @@ test "Index" {
         .{ .input = "[1,1,1].count()", .value = 3.0 },
         .{ .input = "({\"one\"}).count()", .value = 1.0 },
         .{ .input = "({\"one\": 1 })[\"one\"]", .value = 1.0 },
+        .{
+            .input =
+            \\ const list = [1,2,3]
+            \\ list[0] = 4
+            \\ list[0]
+            ,
+            .value = 4,
+        },
+        .{
+            .input =
+            \\ const inner = [1,2,3,4,5]
+            \\ const outer = [inner,6,7,8,9]
+            \\ print(outer)
+            \\ var ref = outer[0]
+            \\ ref[0] = 10
+            \\ inner[0]
+            ,
+            .value = 10,
+        },
     };
 
     inline for (test_cases) |case| {
-        var vm = try initTestVm(case.input, false);
+        var vm = try initTestVm(case.input, true);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
