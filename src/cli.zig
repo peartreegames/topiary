@@ -13,11 +13,14 @@ const Choice = runners.Choice;
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-    const file_path = try getFilePath(arena.allocator());
+    var args = try std.process.argsWithAllocator(arena.allocator());
+    _ = args.skip();
+    const file_path = args.next();
     if (file_path == null) {
         std.log.warn("No file argument provided.", .{});
         return;
     }
+
     var allocator = arena.allocator();
     const vm_alloc = arena.allocator();
     var err = Errors.init(vm_alloc);
@@ -37,6 +40,39 @@ pub fn main() !void {
         return e;
     };
     const bytecode = try compiler.bytecode();
+
+    const is_maybe_auto = args.next();
+    if (is_maybe_auto) |is_auto| {
+        if (std.mem.eql(u8, is_auto, "--auto")) {
+            const count = try std.fmt.parseInt(u64, args.next().?, 10);
+            var i: usize = 0;
+            var visit_counts = std.StringArrayHashMap(u64).init(vm_alloc);
+            defer visit_counts.deinit();
+            while (i < count) : (i += 1) {
+                var auto_runner = AutoTestRunner.init();
+                var vm = try Vm.init(vm_alloc, bytecode, &auto_runner.runner);
+                vm.interpret() catch {
+                    try err.write(tree.source, std.io.getStdErr().writer());
+                    continue;
+                };
+                defer vm.deinit();
+                for (vm.globals, 0..) |g, idx| {
+                    if (g == .visit) {
+                        const name = bytecode.global_symbols[idx].name;
+                        const cur = try visit_counts.getOrPutValue(name, 0);
+                        try visit_counts.put(name, cur.value_ptr.* + g.visit);
+                    } else break;
+                    // all visits are first so we can break
+                }
+            }
+            var it = visit_counts.iterator();
+            while (it.next()) |entry| {
+                std.debug.print("{s} = {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+            }
+        }
+        return;
+    }
+
     var cli_runner = CliRunner.init();
     var vm = try Vm.init(vm_alloc, bytecode, &cli_runner.runner);
 
@@ -96,5 +132,32 @@ const CliRunner = struct {
             }
         }
         vm.selectChoice(index.?) catch |err| std.debug.print("Error: {}", .{err});
+    }
+};
+
+const AutoTestRunner = struct {
+    runner: Runner,
+    rnd: std.rand.Xoshiro256,
+
+    pub fn init() AutoTestRunner {
+        return .{
+            .rnd = std.rand.DefaultPrng.init(std.crypto.random.int(u64)),
+            .runner = .{
+                .onDialogueFn = AutoTestRunner.onDialogue,
+                .onChoicesFn = AutoTestRunner.onChoices,
+            },
+        };
+    }
+
+    pub fn onDialogue(_: *Runner, vm: *Vm, _: Dialogue) void {
+        vm.selectContinue();
+    }
+
+    pub fn onChoices(runner: *Runner, vm: *Vm, choices: []Choice) void {
+        var auto = @fieldParentPtr(AutoTestRunner, "runner", runner);
+        const index = auto.rnd.random().intRangeAtMost(usize, 0, choices.len - 1);
+        vm.selectChoice(index) catch |err| {
+            std.debug.print("Error: {}", .{err});
+        };
     }
 };
