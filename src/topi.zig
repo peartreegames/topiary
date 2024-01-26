@@ -14,6 +14,7 @@ pub const Compiler = compiler.Compiler;
 /// Convinence method to convert source text to bytecode
 pub const compileSource = compiler.compileSource;
 pub const CompilerErr = compilerError.CompilerErr;
+pub const CompilerErrors = compilerError.CompilerErrors;
 
 /// Bytecode
 pub const Bytecode = @import("bytecode.zig").Bytecode;
