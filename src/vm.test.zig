@@ -286,23 +286,33 @@ test "Index" {
             \\ list[0] = 4
             \\ list[0]
             ,
-            .value = 4,
+            .value = 4.0,
         },
         .{
             .input =
             \\ const inner = [1,2,3,4,5]
             \\ const outer = [inner,6,7,8,9]
-            \\ print(outer)
             \\ var ref = outer[0]
             \\ ref[0] = 10
             \\ inner[0]
             ,
-            .value = 10,
+            .value = 10.0,
+        },
+        .{
+            .input =
+            \\ const inner = [1,2,3,4,5]
+            \\ const mid = [inner, 6,7,8]
+            \\ const outer = [mid,9]
+            \\ outer[0][0][4] = 99
+            \\ print(outer)
+            \\ outer[0][0][4]
+            ,
+            .value = 99.0,
         },
     };
 
     inline for (test_cases) |case| {
-        var vm = try initTestVm(case.input, true);
+        var vm = try initTestVm(case.input, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();

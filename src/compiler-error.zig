@@ -2,7 +2,7 @@ const std = @import("std");
 const tok = @import("token.zig");
 const Token = tok.Token;
 
-pub const CompilerError = struct {
+pub const CompilerErr = struct {
     fmt: []const u8,
     severity: Severity,
     token: Token,
@@ -15,7 +15,7 @@ pub const CompilerError = struct {
 };
 
 pub const CompilerErrors = struct {
-    list: std.ArrayListUnmanaged(CompilerError),
+    list: std.ArrayListUnmanaged(CompilerErr),
     allocator: std.mem.Allocator,
 
     // used for interpolatedExpressions
@@ -24,10 +24,10 @@ pub const CompilerErrors = struct {
     offset_col: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) CompilerErrors {
-        return .{ .list = std.ArrayListUnmanaged(CompilerError){}, .allocator = allocator };
+        return .{ .list = std.ArrayListUnmanaged(CompilerErr){}, .allocator = allocator };
     }
 
-    pub fn add(self: *CompilerErrors, comptime fmt: []const u8, token: Token, severity: CompilerError.Severity, args: anytype) !void {
+    pub fn add(self: *CompilerErrors, comptime fmt: []const u8, token: Token, severity: CompilerErr.Severity, args: anytype) !void {
         const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
         errdefer self.allocator.free(msg);
 
