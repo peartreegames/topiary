@@ -428,14 +428,30 @@ pub const Vm = struct {
                     try self.push(value);
                 },
                 .set_property => {
-                    const field_name_value = self.pop();
+                    const field_value = self.pop();
                     const instance_value = self.pop();
                     const new_value = self.pop();
-                    const field_name = field_name_value.obj.data.string;
-                    var instance = instance_value.obj.data.instance;
-                    if (!instance.fields.contains(field_name))
-                        return self.fail("Instance of {s} does not contain {s}", .{ instance.class.name, field_name });
-                    try instance.fields.put(field_name, new_value);
+
+                    switch (instance_value.obj.data) {
+                        .list => |l| {
+                            const n: usize = @intFromFloat(field_value.number);
+                            if (n >= l.items.len) return self.fail("Index {d} out of bounds for list of length {d}", .{ n, l.items.len });
+                            l.items[n] = new_value;
+                        },
+                        .map => {
+                            var m = instance_value.obj.data.map;
+                            try m.put(field_value, new_value);
+                        },
+                        .instance => {
+                            var i = instance_value.obj.data.instance;
+                            const field_name = field_value.obj.data.string;
+                            if (!i.fields.contains(field_name))
+                                return self.fail("Instance of {s} does not contain {s}", .{ i.class.name, field_name });
+                            try i.fields.put(field_name, new_value);
+                        },
+                        // todo add string indexing
+                        else => return self.fail("Cannot index {s} into type {s}", .{ @tagName(field_value), @tagName(instance_value.obj.data) }),
+                    }
                 },
                 .get_builtin => {
                     const index = self.readInt(OpCode.Size(.get_builtin));
