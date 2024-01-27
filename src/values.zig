@@ -2,7 +2,7 @@ const std = @import("std");
 const ast = @import("./ast.zig");
 const Gc = @import("./gc.zig").Gc;
 const UUID = @import("./utils/uuid.zig").UUID;
-const ByteCode = @import("./bytecode.zig").ByteCode;
+const Bytecode = @import("./bytecode.zig").Bytecode;
 const Builtin = @import("./builtins.zig").Builtin;
 const OpCode = @import("./opcode.zig").OpCode;
 const Enum = @import("./enum.zig").Enum;
@@ -427,12 +427,12 @@ pub const Value = union(Type) {
                     },
                     .function => |f| {
                         writer.print("\nfn---\n", .{});
-                        ByteCode.printInstructions(writer, f.instructions, constants);
+                        Bytecode.printInstructions(writer, f.instructions, constants);
                         writer.print("---", .{});
                     },
                     .closure => |c| {
                         writer.print("\ncl---\n", .{});
-                        ByteCode.printInstructions(writer, c.data.function.instructions, constants);
+                        Bytecode.printInstructions(writer, c.data.function.instructions, constants);
                         writer.print("---", .{});
                     },
                     .class => |c| {

@@ -1,6 +1,6 @@
 const std = @import("std");
 const Value = @import("./values.zig").Value;
-const ByteCode = @import("./bytecode.zig").ByteCode;
+const Bytecode = @import("./bytecode.zig").Bytecode;
 const Vm = @import("./vm.zig").Vm;
 const UUID = @import("./utils/uuid.zig").UUID;
 

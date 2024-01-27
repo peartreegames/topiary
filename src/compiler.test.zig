@@ -7,7 +7,7 @@ const String = @import("./values.zig").String;
 const Scope = @import("./scope.zig").Scope;
 const Symbol = @import("./scope.zig").Symbol;
 const builtins = @import("./builtins.zig").builtins;
-const ByteCode = @import("./bytecode.zig").ByteCode;
+const Bytecode = @import("./bytecode.zig").Bytecode;
 const JumpTree = @import("./structures/jump-tree.zig").JumpTree;
 const VisitTree = @import("./structures/visit-tree.zig").VisitTree;
 const Enum = @import("./enum.zig").Enum;
@@ -1703,7 +1703,7 @@ test "Serialize" {
     try bytecode.serialize(file.writer());
 
     try file.seekTo(0);
-    var deserialized = try ByteCode.deserialize(allocator, file.reader());
+    var deserialized = try Bytecode.deserialize(allocator, file.reader());
     defer deserialized.free(allocator);
     try testing.expectEqualSlices(u8, bytecode.instructions, deserialized.instructions);
     for (bytecode.constants, 0..) |constant, i| {

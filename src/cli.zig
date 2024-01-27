@@ -4,6 +4,8 @@ const parseFile = @import("./parser.zig").parseFile;
 const Scope = @import("./scope.zig").Scope;
 const Compiler = @import("./compiler.zig").Compiler;
 const Errors = @import("./compiler-error.zig").CompilerErrors;
+const File = @import("file.zig").File;
+const Module = @import("file.zig").Module;
 const runners = @import("./runner.zig");
 
 const Runner = runners.Runner;
@@ -22,25 +24,32 @@ pub fn main() !void {
     }
 
     var allocator = arena.allocator();
-    const vm_alloc = arena.allocator();
-    var err = Errors.init(vm_alloc);
-    errdefer err.deinit();
+    const full_path = try std.fs.cwd().realpathAlloc(allocator, file_path.?);
+    std.log.warn("FullPath: {s}", .{full_path});
+    var module = Module{
+        .allocator = allocator,
+        .entry = undefined,
+        .includes = std.StringArrayHashMap(*File).init(allocator),
+    };
+    const file = try allocator.create(File);
+    file.* = try File.create(full_path, &module);
+    module.entry = file;
+    try module.includes.putNoClobber(file.path, file);
+    std.log.warn("Module", .{});
+    defer module.deinit();
+    try module.buildTree();
 
-    const dir = try std.fs.cwd().openDir(std.fs.path.dirname(file_path.?).?, .{});
-    const file_name = std.fs.path.basename(file_path.?);
-    var tree = parseFile(allocator, dir, file_name, &err) catch return;
-    defer tree.deinit();
-    defer allocator.free(tree.source);
-
-    var compiler = try Compiler.init(allocator, &err);
+    std.log.warn("Tree: {any}", .{module.entry.tree});
+    var compiler = try Compiler.init(allocator);
     defer compiler.deinit();
 
-    compiler.compile(tree) catch |e| {
-        try err.write(tree.source, std.io.getStdErr().writer());
+    compiler.compile(&module) catch |e| {
+        try module.writeErrors(std.io.getStdErr().writer());
         return e;
     };
     const bytecode = try compiler.bytecode();
 
+    const vm_alloc = arena.allocator();
     const is_maybe_auto = args.next();
     if (is_maybe_auto) |is_auto| {
         if (std.mem.eql(u8, is_auto, "--auto")) {
@@ -52,7 +61,7 @@ pub fn main() !void {
                 var auto_runner = AutoTestRunner.init();
                 var vm = try Vm.init(vm_alloc, bytecode, &auto_runner.runner);
                 vm.interpret() catch {
-                    try err.write(tree.source, std.io.getStdErr().writer());
+                    vm.err.print(std.debug);
                     continue;
                 };
                 defer vm.deinit();
@@ -77,7 +86,7 @@ pub fn main() !void {
     var vm = try Vm.init(vm_alloc, bytecode, &cli_runner.runner);
 
     vm.interpret() catch {
-        try err.write(tree.source, std.io.getStdErr().writer());
+        vm.err.print(std.debug);
     };
 }
 

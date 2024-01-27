@@ -3,7 +3,7 @@ const Value = @import("./values.zig").Value;
 const OpCode = @import("./opcode.zig").OpCode;
 const UUID = @import("./utils/uuid.zig").UUID;
 
-pub const ByteCode = struct {
+pub const Bytecode = struct {
     instructions: []u8,
     constants: []Value,
     global_symbols: []GlobalSymbol,
@@ -17,7 +17,7 @@ pub const ByteCode = struct {
         is_extern: bool,
     };
 
-    pub fn free(self: *const ByteCode, allocator: std.mem.Allocator) void {
+    pub fn free(self: *const Bytecode, allocator: std.mem.Allocator) void {
         allocator.free(self.instructions);
         allocator.free(self.token_lines);
         for (self.constants) |item| {
@@ -31,7 +31,7 @@ pub const ByteCode = struct {
         allocator.free(self.global_symbols);
     }
 
-    pub fn serialize(self: *ByteCode, writer: anytype) !void {
+    pub fn serialize(self: *Bytecode, writer: anytype) !void {
         // Keep symbols first for easier deserialization in other systems
         try writer.writeInt(u64, @as(u64, @intCast(self.global_symbols.len)), .little);
         for (self.global_symbols) |sym| {
@@ -51,7 +51,7 @@ pub const ByteCode = struct {
         for (self.uuids) |uuid| try writer.writeAll(&uuid);
     }
 
-    pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !ByteCode {
+    pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !Bytecode {
         const globals_count = try reader.readInt(u64, .little);
         var global_symbols = try allocator.alloc(GlobalSymbol, globals_count);
         var count: usize = 0;
@@ -98,7 +98,7 @@ pub const ByteCode = struct {
         };
     }
 
-    pub fn print(code: *ByteCode, writer: anytype) void {
+    pub fn print(code: *Bytecode, writer: anytype) void {
         writer.print("\n==BYTECODE==\n", .{});
         printInstructions(writer, code.instructions, code.constants);
     }

@@ -718,7 +718,9 @@ test "Instance" {
         \\ class Test {
         \\    value = 0,
         \\    fn = || return "func",
-        \\    incr = |i| self.value += i
+        \\    incr = |i| self.value += i,
+        \\    list = [],
+        \\    nested = []
         \\ }
         \\ const test = new Test{}
         \\ test.value = 5
@@ -729,6 +731,14 @@ test "Instance" {
         \\ print(test.fn())
         \\ test.incr(1)
         \\ print(test.value)
+        \\ test.list.add(1)
+        \\ print(test.list)
+        \\ test.list[0] = 99
+        \\ print(test.list)
+        \\ test.nested.add(2)
+        \\ test.list.add(test.nested)
+        \\ print(test.list)
+        \\ print(test.list[1][0])
     ;
     var vm = try initTestVm(input, false);
     defer vm.deinit();

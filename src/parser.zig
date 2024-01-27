@@ -6,6 +6,7 @@ const testing = std.testing;
 const Lexer = @import("./lexer.zig").Lexer;
 const tok = @import("./token.zig");
 const ast = @import("./ast.zig");
+const File = @import("./file.zig").File;
 const Errors = @import("./compiler-error.zig").CompilerErrors;
 const UUID = @import("./utils/uuid.zig").UUID;
 const Tree = ast.Tree;
@@ -103,7 +104,7 @@ pub fn parseFile(allocator: Allocator, dir: std.fs.Dir, path: []const u8, err: *
 
 /// Use for parsing source directly
 /// Cannot be used if source has "include" statements
-pub fn parse(allocator: Allocator, source: []const u8, err: *Errors) Parser.Error!Tree {
+pub fn parseSource(allocator: Allocator, source: []const u8, err: *Errors) Parser.Error!Tree {
     var lexer = Lexer.init(source);
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
@@ -138,10 +139,8 @@ pub const Parser = struct {
     arena: std.heap.ArenaAllocator.State,
     allocator: Allocator,
     lexer: *Lexer,
-    source: []const u8,
-    err: *Errors,
+    file: *File,
     depth: usize = 0,
-    directory: ?std.fs.Dir = null,
 
     pub const Error = error{
         ParserError,
@@ -160,16 +159,16 @@ pub const Parser = struct {
     }
 
     fn fail(self: *Parser, comptime msg: []const u8, token: Token, args: anytype) Error {
-        try self.err.add(msg, token, .err, args);
+        try self.file.errors.add(msg, token, .err, args);
         return Error.ParserError;
     }
 
     fn print(self: *Parser, msg: []const u8) void {
-        const peek_source = if (self.peekIs(.eof)) "[eof]" else self.source[self.peek_token.start..self.peek_token.end];
-        std.log.warn("=={s}== -- {}:{s} -- {}:{s}", .{ msg, self.current_token.token_type, self.source[self.current_token.start..self.current_token.end], self.peek_token.token_type, peek_source });
+        const peek_source = if (self.peekIs(.eof)) "[eof]" else self.file.source[self.peek_token.start..self.peek_token.end];
+        std.log.warn("=={s}== -- {}:{s} -- {}:{s}", .{ msg, self.current_token.token_type, self.file.source[self.current_token.start..self.current_token.end], self.peek_token.token_type, peek_source });
     }
 
-    fn next(self: *Parser) void {
+    pub fn next(self: *Parser) void {
         self.current_token = self.peek_token;
         self.peek_token = self.lexer.next();
     }
@@ -182,10 +181,10 @@ pub const Parser = struct {
     }
 
     fn getStringValue(self: *Parser) ![]const u8 {
-        return try self.allocator.dupe(u8, self.source[self.current_token.start..self.current_token.end]);
+        return try self.allocator.dupe(u8, self.file.source[self.current_token.start..self.current_token.end]);
     }
 
-    fn statement(self: *Parser) Error!Statement {
+    pub fn statement(self: *Parser) Error!Statement {
         return switch (self.current_token.token_type) {
             .include => try self.includeStatement(),
             .class => try self.classDeclaration(),
@@ -222,21 +221,45 @@ pub const Parser = struct {
     fn includeStatement(self: *Parser) Error!Statement {
         const start = self.current_token;
         self.next();
-
         const path = try self.getStringValue();
-        if (self.directory == null) return self.fail("Current directory not set.", self.current_token, .{});
-        const full_path = self.directory.?.realpathAlloc(self.allocator, path) catch path;
-        var dir = self.directory.?.openDir(std.fs.path.dirname(full_path).?, .{}) catch |e| {
-            return self.fail("Could not open directory {s}: {}", self.current_token, .{ path, e });
+        var current_dir = std.fs.openDirAbsolute(self.file.path, .{}) catch |err| {
+            return self.fail("Could not get current directory {s}: {}", self.current_token, .{ path, err });
+        };
+        const full_path = std.fs.realpathAlloc(self.allocator, path) catch path;
+        if (self.file.module.includes.contains(full_path)) {
+            return .{
+                .token = start,
+                .type = .{
+                    .include = .{
+                        .path = path,
+                        .contents = &.{},
+                    },
+                },
+            };
+        }
+        var dir = current_dir.openDir(std.fs.path.dirname(full_path).?, .{}) catch |err| {
+            return self.fail("Could not open directory {s}: {}", self.current_token, .{ path, err });
         };
         defer dir.close();
-        const include_tree = try parseFile(self.allocator, dir, path, self.err);
+        const file = try self.allocator.create(File);
+        file.* = File.create(full_path, file.module) catch |err| {
+            return self.fail("Could not create include file {s}: {}", self.current_token, .{ path, err });
+        };
+        file.loadSource(self.allocator) catch |err| {
+            return self.fail("Could not load include file {s}: {}", self.current_token, .{ path, err });
+        };
+
+        file.buildTree(self.allocator) catch |err| {
+            return self.fail("Could not build include file tree {s}: {}", self.current_token, .{ path, err });
+        };
+        try self.file.module.includes.putNoClobber(full_path, file);
+
         return .{
             .token = start,
             .type = .{
                 .include = .{
                     .path = path,
-                    .contents = include_tree.root,
+                    .contents = file.tree.?.root,
                 },
             },
         };
@@ -406,7 +429,7 @@ pub const Parser = struct {
         var left: Expression = switch (self.current_token.token_type) {
             .identifier => try self.identifierExpression(),
             .number => blk: {
-                const string_number = self.source[self.current_token.start..self.current_token.end];
+                const string_number = self.file.source[self.current_token.start..self.current_token.end];
                 const value = try std.fmt.parseFloat(f32, string_number);
                 break :blk .{
                     .token = start,
@@ -581,10 +604,10 @@ pub const Parser = struct {
 
         var exprs = std.ArrayList(Expression).init(self.allocator);
         errdefer exprs.deinit();
-        for (self.source[token.start..token.end], 0..) |char, i| {
+        for (self.file.source[token.start..token.end], 0..) |char, i| {
             if (char == '{') {
                 if (depth == 0) {
-                    value = try std.fmt.allocPrint(self.allocator, "{s}{s}{s}", .{ value, self.source[start..(token.start + i)], "{}" });
+                    value = try std.fmt.allocPrint(self.allocator, "{s}{s}{s}", .{ value, self.file.source[start..(token.start + i)], "{}" });
                     start = token.start + i + 1;
                 }
                 depth += 1;
@@ -592,17 +615,17 @@ pub const Parser = struct {
             if (char == '}') {
                 depth -= 1;
                 if (depth == 0) {
-                    try self.parseInterpolatedExpression(self.source[start..(token.start + i)], &exprs, token.start);
+                    try self.parseInterpolatedExpression(self.file.source[start..(token.start + i)], &exprs, token.start);
                     start = token.start + i + 1;
                 }
             }
         }
-        value = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ value, self.source[start..token.end] });
+        value = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ value, self.file.source[start..token.end] });
         return .{
             .token = token,
             .type = .{
                 .string = .{
-                    .raw = try self.allocator.dupe(u8, self.source[token.start..token.end]),
+                    .raw = try self.allocator.dupe(u8, self.file.source[token.start..token.end]),
                     .value = value,
                     .expressions = try exprs.toOwnedSlice(),
                 },
@@ -612,13 +635,14 @@ pub const Parser = struct {
 
     fn parseInterpolatedExpression(self: *Parser, source: []const u8, exprs: *std.ArrayList(Expression), offset: usize) !void {
         var lexer = Lexer.init(source);
-        const tmp_pos = self.err.offset_pos;
-        const tmp_col = self.err.offset_col;
-        const tmp_line = self.err.offset_line;
+        var err = self.file.errors;
+        const tmp_pos = err.offset_pos;
+        const tmp_col = err.offset_col;
+        const tmp_line = err.offset_line;
 
-        self.err.offset_pos += offset;
-        self.err.offset_col += self.lexer.column + 1;
-        self.err.offset_line += if (self.lexer.line >= 2) self.lexer.line - 2 else 0;
+        err.offset_pos += offset;
+        err.offset_col += lexer.column + 1;
+        err.offset_line += if (lexer.line >= 2) lexer.line - 2 else 0;
 
         var parser = Parser{
             .current_token = lexer.next(),
@@ -626,16 +650,15 @@ pub const Parser = struct {
             .arena = self.arena,
             .allocator = self.allocator,
             .lexer = &lexer,
-            .source = source,
-            .err = self.err,
+            .file = self.file,
         };
 
         while (!parser.currentIs(.eof)) : (parser.next()) {
             try exprs.append(try parser.expression(.lowest));
         }
-        self.err.offset_pos = tmp_pos;
-        self.err.offset_line = tmp_line;
-        self.err.offset_col = tmp_col;
+        err.offset_pos = tmp_pos;
+        err.offset_line = tmp_line;
+        err.offset_col = tmp_col;
     }
 
     fn listExpression(self: *Parser) Error!Expression {
@@ -880,7 +903,7 @@ pub const Parser = struct {
                 self.next();
                 speaker_end = self.current_token.end;
             }
-            speaker = try self.allocator.dupe(u8, self.source[speaker_start..speaker_end]);
+            speaker = try self.allocator.dupe(u8, self.file.source[speaker_start..speaker_end]);
         }
         try self.expectCurrent(.colon);
         self.next();
@@ -1133,7 +1156,7 @@ pub const Parser = struct {
         return false;
     }
 
-    fn currentIs(self: Parser, token_type: TokenType) bool {
+    pub fn currentIs(self: Parser, token_type: TokenType) bool {
         return self.current_token.token_type == token_type;
     }
 
@@ -1150,7 +1173,7 @@ test "Parse Include" {
     const input = "include \"./globals.topi\"";
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const err = parse(allocator, input, &errors);
+    const err = parseSource(allocator, input, &errors);
     try testing.expectError(Parser.Error.ParserError, err);
 }
 
@@ -1172,7 +1195,7 @@ test "Parse Declaration" {
 
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, t, &errors) catch |err| {
+    const tree = parseSource(allocator, t, &errors) catch |err| {
         try errors.write(t, std.io.getStdErr().writer());
         return err;
     };
@@ -1207,7 +1230,7 @@ test "Parse Function Declaration" {
     const allocator = testing.allocator;
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, t, &errors) catch |err| {
+    const tree = parseSource(allocator, t, &errors) catch |err| {
         try errors.write(t, std.io.getStdErr().writer());
         return err;
     };
@@ -1227,7 +1250,7 @@ test "Parse Function Arguments" {
     const allocator = testing.allocator;
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, t, &errors) catch |err| {
+    const tree = parseSource(allocator, t, &errors) catch |err| {
         try errors.write(t, std.io.getStdErr().writer());
         return err;
     };
@@ -1255,7 +1278,7 @@ test "Parse Enums" {
     const allocator = testing.allocator;
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, t, &errors) catch |err| {
+    const tree = parseSource(allocator, t, &errors) catch |err| {
         try errors.write(t, std.io.getStdErr().writer());
         return err;
     };
@@ -1283,7 +1306,7 @@ test "Parse Iterable Types" {
     inline for (test_cases) |case| {
         var errors = Errors.init(allocator);
         defer errors.deinit();
-        const tree = parse(allocator, case.input, &errors) catch |err| {
+        const tree = parseSource(allocator, case.input, &errors) catch |err| {
             try errors.write(case.input, std.io.getStdErr().writer());
             return err;
         };
@@ -1311,7 +1334,7 @@ test "Parse Empty Iterable Types" {
     ;
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
+    const tree = parseSource(allocator, input, &errors) catch |err| {
         try errors.write(input, std.io.getStdErr().writer());
         return err;
     };
@@ -1333,7 +1356,7 @@ test "Parse Nested Iterable Types" {
 
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
+    const tree = parseSource(allocator, input, &errors) catch |err| {
         try errors.write(input, std.io.getStdErr().writer());
         return err;
     };
@@ -1352,7 +1375,7 @@ test "Parse Extern" {
     inline for (test_cases) |case| {
         var errors = Errors.init(allocator);
         defer errors.deinit();
-        const tree = parse(allocator, case.input, &errors) catch |err| {
+        const tree = parseSource(allocator, case.input, &errors) catch |err| {
             try errors.write(case.input, std.io.getStdErr().writer());
             return err;
         };
@@ -1380,7 +1403,7 @@ test "Parse Enum" {
     ;
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
+    const tree = parseSource(allocator, input, &errors) catch |err| {
         try errors.write(input, std.io.getStdErr().writer());
         return err;
     };
@@ -1418,7 +1441,7 @@ test "Parse If" {
     ;
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
+    const tree = parseSource(allocator, input, &errors) catch |err| {
         try errors.write(input, std.io.getStdErr().writer());
         return err;
     };
@@ -1448,7 +1471,7 @@ test "Parse Call expression" {
     const allocator = testing.allocator;
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
+    const tree = parseSource(allocator, input, &errors) catch |err| {
         try errors.write(input, std.io.getStdErr().writer());
         return err;
     };
@@ -1475,7 +1498,7 @@ test "Parse For loop" {
 
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
+    const tree = parseSource(allocator, input, &errors) catch |err| {
         try errors.write(input, std.io.getStdErr().writer());
         return err;
     };
@@ -1503,7 +1526,7 @@ test "Parse While loop" {
 
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
+    const tree = parseSource(allocator, input, &errors) catch |err| {
         try errors.write(input, std.io.getStdErr().writer());
         return err;
     };
@@ -1521,7 +1544,7 @@ test "Parse Indexing" {
     const allocator = testing.allocator;
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
+    const tree = parseSource(allocator, input, &errors) catch |err| {
         try errors.write(input, std.io.getStdErr().writer());
         return err;
     };
@@ -1545,7 +1568,7 @@ test "Parse Bough" {
     const allocator = testing.allocator;
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
+    const tree = parseSource(allocator, input, &errors) catch |err| {
         try errors.write(input, std.io.getStdErr().writer());
         return err;
     };
@@ -1570,7 +1593,7 @@ test "Parse No Speaker" {
     ;
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
+    const tree = parseSource(allocator, input, &errors) catch |err| {
         try errors.write(input, std.io.getStdErr().writer());
         return err;
     };
@@ -1588,7 +1611,7 @@ test "Parse divert" {
     ;
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
+    const tree = parseSource(allocator, input, &errors) catch |err| {
         try errors.write(input, std.io.getStdErr().writer());
         return err;
     };
@@ -1612,7 +1635,7 @@ test "Parse Forks" {
     ;
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
+    const tree = parseSource(allocator, input, &errors) catch |err| {
         try errors.write(input, std.io.getStdErr().writer());
         return err;
     };
@@ -1641,7 +1664,7 @@ test "Parse Inline Code" {
     ;
     var errors = Errors.init(allocator);
     defer errors.deinit();
-    const tree = parse(allocator, input, &errors) catch |err| {
+    const tree = parseSource(allocator, input, &errors) catch |err| {
         try errors.write(input, std.io.getStdErr().writer());
         return err;
     };
