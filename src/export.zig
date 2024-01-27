@@ -4,8 +4,9 @@ const values = @import("./values.zig");
 const Value = @import("./values.zig").Value;
 const ExportValue = @import("./export-value.zig").ExportValue;
 const Errors = @import("./compiler-error.zig").CompilerErrors;
-const compileSource = @import("./compiler.zig").compileSource;
-const ByteCode = @import("./bytecode.zig").ByteCode;
+const Compiler = @import("./compiler.zig").Compiler;
+const Bytecode = @import("./bytecode.zig").Bytecode;
+const parseFile = @import("./parser.zig").parseFile;
 const runners = @import("./runner.zig");
 const Subscriber = @import("./subscriber.zig").Subscriber;
 const Runner = runners.Runner;
@@ -59,33 +60,61 @@ export fn setDebugSeverity(severity: u8) void {
     debug_severity = @enumFromInt(severity);
 }
 
-export fn compile(source_ptr: [*c]const u8, length: usize, out_ptr: [*c]u8, max: usize) void {
-    var arena = std.heap.ArenaAllocator.init(alloc);
-    defer arena.deinit();
+export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, max: usize) void {
+    _ = max;
+    _ = out_ptr;
+    _ = path_length;
+    _ = path_ptr;
+    //     var arena = std.heap.ArenaAllocator.init(alloc);
+    //     defer arena.deinit();
+    //     var comp_alloc = arena.allocator();
 
-    var errors = Errors.init(arena.allocator());
-    defer errors.deinit();
+    //     var errs = Errors.init(comp_alloc);
+    //     defer errs.deinit();
 
-    const source = source_ptr[0..length];
+    //     const file_path = path_ptr[0..path_length];
 
-    var bytecode = compileSource(
-        arena.allocator(),
-        source,
-        &errors,
-    ) catch |err| {
-        var buf: [2048]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&buf);
-        errors.write(source, fbs.writer()) catch |e| {
-            log("Could not write errors to string to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
-            return;
-        };
-        log("Could not compile source: {s}\n{s}", .{ @errorName(err), buf[0..] }, .err);
-        return;
-    };
+    //     const dir = std.fs.cwd().openDir(std.fs.path.dirname(file_path).?, .{}) catch |err| {
+    //         log("Could not open path directory '{s}': {s}", .{ file_path, @errorName(err) }, .err);
+    //         return;
+    //     };
 
-    var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
-    const writer = fbs.writer();
-    bytecode.serialize(writer) catch log("Could not serialize bytecode.", .{}, .err);
+    //     var buf: [4096]u8 = undefined;
+    //     var err_fbs = std.io.fixedBufferStream(&buf);
+    //     const file_name = std.fs.path.basename(file_path);
+    //     var tree = parseFile(comp_alloc, dir, file_name, &errs) catch |err| {
+    //         errs.write(err_fbs.writer()) catch |e| {
+    //             log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
+    //             return;
+    //         };
+    //         log("Could not parse file '{s}': {s}\n{s}", .{ file_path, @errorName(err), buf[0..] }, .err);
+    //         return;
+    //     };
+    //     defer tree.deinit();
+    //     defer comp_alloc.free(tree.source);
+
+    //     var compiler = Compiler.init(comp_alloc, &errs) catch |err| {
+    //         log("Could not create compiler: {s}", .{ @errorName(err) }, .err);
+    //         return;
+    //     };
+    //     defer compiler.deinit();
+
+    //     compiler.compile(tree) catch |err| {
+    //         errs.write(err_fbs.writer()) catch |e| {
+    //             log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
+    //             return;
+    //         };
+    //         log("Could not compile file '{s}': {s}\n{s}", .{ file_path, @errorName(err), buf[0..] }, .err);
+    //         return;
+    //     };
+    //     const bytecode = compiler.bytecode() catch |err| {
+    //         log("Could not create bytecode: {s}", .{ @errorName(err) }, .err);
+    //         return;
+    //     };
+
+    //     var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
+    //     const writer = fbs.writer();
+    //     bytecode.serialize(writer) catch |err| log("Could not serialize bytecode: {s}", .{ @errorName(err)}, .err);
 }
 
 export fn start(vm_ptr: usize) void {
@@ -299,7 +328,7 @@ export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_ptr:
 
     var fbs = std.io.fixedBufferStream(source_ptr[0..source_len]);
     log("Deserializing bytecode", .{}, .info);
-    const bytecode = ByteCode.deserialize(alloc, fbs.reader()) catch {
+    const bytecode = Bytecode.deserialize(alloc, fbs.reader()) catch {
         log("Could not deserialize bytecode", .{}, .err);
         return 0;
     };

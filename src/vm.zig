@@ -1,7 +1,7 @@
 const std = @import("std");
 const Compiler = @import("./compiler.zig").Compiler;
 const compileSource = @import("./compiler.zig").compileSource;
-const ByteCode = @import("./bytecode.zig").ByteCode;
+const Bytecode = @import("./bytecode.zig").Bytecode;
 const parser = @import("./parser.zig");
 const OpCode = @import("./opcode.zig").OpCode;
 const values = @import("./values.zig");
@@ -65,7 +65,7 @@ pub const Vm = struct {
     /// Used to ensure preceeding code is executed before arriving at Bough
     jump_requests: std.ArrayList(OpCode.Size(.jump)),
 
-    bytecode: ByteCode,
+    bytecode: Bytecode,
     /// Current instruction position
     ip: usize = 0,
     debug: bool = false,
@@ -86,7 +86,7 @@ pub const Vm = struct {
         Uninitialized,
     } || Compiler.Error;
 
-    pub fn init(allocator: std.mem.Allocator, bytecode: ByteCode, runner: anytype) !Vm {
+    pub fn init(allocator: std.mem.Allocator, bytecode: Bytecode, runner: anytype) !Vm {
         var globals = try allocator.alloc(Value, bytecode.global_symbols.len);
         var subs = try allocator.alloc(Subscriber, bytecode.global_symbols.len);
 

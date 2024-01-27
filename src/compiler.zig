@@ -10,10 +10,11 @@ const String = @import("./values.zig").String;
 const Scope = @import("./scope.zig").Scope;
 const Symbol = @import("./scope.zig").Symbol;
 const builtins = @import("./builtins.zig").builtins;
-const ByteCode = @import("./bytecode.zig").ByteCode;
+const Bytecode = @import("./bytecode.zig").Bytecode;
 const JumpTree = @import("./structures/jump-tree.zig").JumpTree;
 const VisitTree = @import("./structures/visit-tree.zig").VisitTree;
 const Enum = @import("./enum.zig").Enum;
+const Module = @import("./file.zig").Module;
 const UUID = @import("./utils/uuid.zig").UUID;
 
 const testing = std.testing;
@@ -34,8 +35,8 @@ pub const initial_constants = [_]Value{
     .{ .visit = 0 },
 };
 
-pub fn compileSource(allocator: std.mem.Allocator, source: []const u8, errors: *CompilerErrors) !ByteCode {
-    const tree = try parser.parse(allocator, source, errors);
+pub fn compileSource(allocator: std.mem.Allocator, source: []const u8, errors: *CompilerErrors) !Bytecode {
+    const tree = try parser.parseSource(allocator, source, errors);
     defer tree.deinit();
 
     var compiler = try Compiler.init(allocator, errors);
@@ -57,6 +58,7 @@ pub const Compiler = struct {
     chunk: *Chunk,
     locals_count: usize = 0,
 
+    module: *Module,
     jump_tree: JumpTree,
     divert_log: std.ArrayList(JumpTree.Entry),
     visit_tree: VisitTree,
@@ -96,7 +98,7 @@ pub const Compiler = struct {
         NotYetImplemented,
     } || parser.Parser.Error;
 
-    pub fn init(allocator: std.mem.Allocator, errors: *CompilerErrors) !Compiler {
+    pub fn init(allocator: std.mem.Allocator) !Compiler {
         const root_chunk = try Compiler.Chunk.create(allocator, null);
         const root_scope = try Scope.create(allocator, null, .global, 0);
         const root_builtins = try Scope.create(allocator, null, .builtin, 0);
@@ -106,13 +108,14 @@ pub const Compiler = struct {
             .constants = std.ArrayList(Value).init(allocator),
             .uuids = std.ArrayList(UUID.ID).init(allocator),
             .identifier_cache = std.StringHashMap(OpCode.Size(.constant)).init(allocator),
-            .err = errors,
             .chunk = root_chunk,
             .scope = root_scope,
             .root_scope = root_scope,
             .jump_tree = try JumpTree.init(allocator),
             .visit_tree = try VisitTree.init(allocator),
             .divert_log = std.ArrayList(JumpTree.Entry).init(allocator),
+            .err = undefined,
+            .module = undefined,
         };
     }
 
@@ -137,11 +140,11 @@ pub const Compiler = struct {
         return err;
     }
 
-    pub fn bytecode(self: *Compiler) !ByteCode {
+    pub fn bytecode(self: *Compiler) !Bytecode {
         if (self.scope.parent != null) return Error.OutOfScope;
-        var global_symbols = try self.allocator.alloc(ByteCode.GlobalSymbol, self.scope.symbols.count());
+        var global_symbols = try self.allocator.alloc(Bytecode.GlobalSymbol, self.scope.symbols.count());
         for (self.scope.symbols.values(), 0..) |s, i| {
-            global_symbols[i] = ByteCode.GlobalSymbol{
+            global_symbols[i] = Bytecode.GlobalSymbol{
                 .name = try self.allocator.dupe(u8, s.name),
                 .index = s.index,
                 .is_extern = s.is_extern,
@@ -157,7 +160,9 @@ pub const Compiler = struct {
         };
     }
 
-    pub fn compile(self: *Compiler, tree: ast.Tree) Error!void {
+    pub fn compile(self: *Compiler, module: *Module) Error!void {
+        self.module = module;
+        const tree = module.entry.tree.?;
         inline for (builtins) |builtin| {
             _ = try self.builtins.define(builtin.name, false, false);
         }
