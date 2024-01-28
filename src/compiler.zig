@@ -14,7 +14,7 @@ const Bytecode = @import("./bytecode.zig").Bytecode;
 const JumpTree = @import("./structures/jump-tree.zig").JumpTree;
 const VisitTree = @import("./structures/visit-tree.zig").VisitTree;
 const Enum = @import("./enum.zig").Enum;
-const Module = @import("./file.zig").Module;
+const Module = @import("./module.zig").Module;
 const UUID = @import("./utils/uuid.zig").UUID;
 
 const testing = std.testing;
@@ -34,17 +34,6 @@ pub const initial_constants = [_]Value{
     .{ .bool = true },
     .{ .visit = 0 },
 };
-
-pub fn compileSource(allocator: std.mem.Allocator, source: []const u8, errors: *CompilerErrors) !Bytecode {
-    const tree = try parser.parseSource(allocator, source, errors);
-    defer tree.deinit();
-
-    var compiler = try Compiler.init(allocator, errors);
-    defer compiler.deinit();
-
-    try compiler.compile(tree);
-    return try compiler.bytecode();
-}
 
 pub const Compiler = struct {
     allocator: std.mem.Allocator,
@@ -161,8 +150,10 @@ pub const Compiler = struct {
     }
 
     pub fn compile(self: *Compiler, module: *Module) Error!void {
+        if (!module.entry.tree_loaded) return error.CompilerError;
         self.module = module;
-        const tree = module.entry.tree.?;
+        self.err = &module.entry.errors;
+        const tree = module.entry.tree;
         inline for (builtins) |builtin| {
             _ = try self.builtins.define(builtin.name, false, false);
         }
@@ -391,11 +382,11 @@ pub const Compiler = struct {
             },
             .variable => |v| {
                 if (self.builtins.symbols.contains(v.name))
-                    return self.failError("{s} is a builtin function and cannot be used as a variable name", stmt.token, .{v.name}, Error.IllegalOperation);
+                    return self.failError("'{s}' is a builtin function and cannot be used as a variable name", stmt.token, .{v.name}, Error.IllegalOperation);
                 if (self.scope.parent != null and v.is_extern)
                     return self.failError("Only global variables can be extern.", token, .{}, Error.IllegalOperation);
                 const symbol = self.scope.define(v.name, v.is_mutable, v.is_extern) catch {
-                    return self.fail("{s} is already declared", token, .{v.name});
+                    return self.fail("'{s}' is already declared", token, .{v.name});
                 };
                 try self.compileExpression(&v.initializer);
                 try self.setSymbol(symbol, token, true);
@@ -412,7 +403,7 @@ pub const Compiler = struct {
                 try self.writeOp(.class, token);
                 _ = try self.writeInt(OpCode.Size(.class), @as(OpCode.Size(.class), @intCast(c.fields.len)), token);
                 const symbol = self.scope.define(c.name, false, false) catch {
-                    return self.fail("{s} is already declared", token, .{c.name});
+                    return self.fail("'{s}' is already declared", token, .{c.name});
                 };
                 try self.setSymbol(symbol, token, true);
             },
@@ -451,7 +442,7 @@ pub const Compiler = struct {
                 self.visit_tree.current.anon_count += 1;
                 const cur = if (self.visit_tree.current.getChild(f.name orelse fork_count)) |n| n else {
                     self.visit_tree.print(std.debug);
-                    return self.fail("Could not find {s} in visit tree node {s}", token, .{ f.name orelse fork_count, self.visit_tree.current.name });
+                    return self.fail("Could not find '{s}' in visit tree node '{s}'", token, .{ f.name orelse fork_count, self.visit_tree.current.name });
                 };
                 self.visit_tree.current = cur;
                 defer self.visit_tree.current = cur.parent.?;
@@ -491,7 +482,7 @@ pub const Compiler = struct {
                 try self.visit_tree.list.append(name);
                 const cur = if (self.visit_tree.current.getChild(name)) |n| n else {
                     self.visit_tree.print(std.debug);
-                    return self.fail("Could not find {s} in visit tree node {s}", token, .{ name, self.visit_tree.current.name });
+                    return self.fail("Could not find '{s}' in visit tree node '{s}'", token, .{ name, self.visit_tree.current.name });
                 };
                 self.visit_tree.current = cur;
                 defer self.visit_tree.current = cur.parent.?;
@@ -613,7 +604,7 @@ pub const Compiler = struct {
         // traverse back down to get the leaf node
         for (path) |name| {
             node = node.getChild(name) catch {
-                return self.fail("Could not find symbol {s}", token, .{name});
+                return self.fail("Could not find symbol '{s}'", token, .{name});
             };
         }
         return node;
@@ -652,7 +643,7 @@ pub const Compiler = struct {
         defer self.allocator.free(path);
         const symbol = self.root_scope.define(path, false, false) catch {
             self.visit_tree.print(std.debug);
-            return self.fail("Visit {s} is already declared", token, .{path});
+            return self.fail("Visit '{s}' is already declared", token, .{path});
         };
         try self.writeOp(.constant, token);
         _ = try self.writeInt(OpCode.Size(.constant), 4, token);
@@ -664,7 +655,7 @@ pub const Compiler = struct {
         if (symbol) |sym| {
             try self.writeOp(.visit, token);
             _ = try self.writeInt(OpCode.Size(.get_global), sym.index, token);
-        } else return self.failError("Unknown symbol: {s}", token, .{name}, Error.SymbolNotFound);
+        } else return self.failError("Unknown symbol '{s}'", token, .{name}, Error.SymbolNotFound);
     }
 
     pub fn compileExpression(self: *Compiler, expr: *const ast.Expression) Error!void {
@@ -717,7 +708,7 @@ pub const Compiler = struct {
                     .@"or" => .@"or",
                     .@"and" => .@"and",
                     else => {
-                        return self.failError("Unknown operation {s}", token, .{bin.operator.toString()}, Error.IllegalOperation);
+                        return self.failError("Unknown operation '{s}'", token, .{bin.operator.toString()}, Error.IllegalOperation);
                     },
                 };
                 try self.writeOp(op, token);
@@ -915,7 +906,7 @@ pub const Compiler = struct {
 
     fn setSymbol(self: *Compiler, symbol: ?*Symbol, token: Token, is_decl: bool) !void {
         if (symbol) |ptr| {
-            if (!is_decl and !ptr.is_mutable) return self.fail("Cannot assign to constant variable {s}", token, .{ptr.name});
+            if (!is_decl and !ptr.is_mutable) return self.fail("Cannot assign to constant variable '{s}'", token, .{ptr.name});
             switch (ptr.tag) {
                 .global => {
                     try self.writeOp(if (is_decl) .decl_global else .set_global, token);
@@ -927,7 +918,7 @@ pub const Compiler = struct {
                     const size = OpCode.Size(.set_free);
                     _ = try self.writeInt(size, @as(size, @intCast(ptr.index)), token);
                 },
-                .builtin, .function => return self.failError("Cannot set {s}", token, .{ptr.name}, Error.IllegalOperation),
+                .builtin, .function => return self.failError("Cannot set '{s}'", token, .{ptr.name}, Error.IllegalOperation),
                 else => {
                     try self.writeOp(.set_local, token);
                     const size = OpCode.Size(.set_local);
@@ -963,7 +954,7 @@ pub const Compiler = struct {
                     _ = try self.writeInt(size, @as(size, @intCast(ptr.index)), token);
                 },
             }
-        } else return self.failError("Unknown symbol: {s}", token, .{name}, Error.SymbolNotFound);
+        } else return self.failError("Unknown symbol '{s}'", token, .{name}, Error.SymbolNotFound);
     }
 
     fn loadVisit(self: *Compiler, node: *VisitTree.Node, token: Token) !void {

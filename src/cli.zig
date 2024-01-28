@@ -1,16 +1,17 @@
 const std = @import("std");
 const Vm = @import("./vm.zig").Vm;
-const parseFile = @import("./parser.zig").parseFile;
 const Scope = @import("./scope.zig").Scope;
 const Compiler = @import("./compiler.zig").Compiler;
 const Errors = @import("./compiler-error.zig").CompilerErrors;
-const File = @import("file.zig").File;
-const Module = @import("file.zig").Module;
+const module = @import("module.zig");
 const runners = @import("./runner.zig");
 
 const Runner = runners.Runner;
 const Dialogue = runners.Dialogue;
 const Choice = runners.Choice;
+
+const File = module.File;
+const Module = module.Module;
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -25,23 +26,20 @@ pub fn main() !void {
 
     var allocator = arena.allocator();
     const full_path = try std.fs.cwd().realpathAlloc(allocator, file_path.?);
-    std.log.warn("FullPath: {s}", .{full_path});
-    var module = Module{
+    var mod = Module{
         .allocator = allocator,
         .entry = undefined,
         .includes = std.StringArrayHashMap(*File).init(allocator),
     };
     const file = try allocator.create(File);
     file.* = try File.create(full_path, &module);
-    module.entry = file;
-    try module.includes.putNoClobber(file.path, file);
-    std.log.warn("Module", .{});
-    defer module.deinit();
-    try module.buildTree();
+    mod.entry = file;
+    try mod.includes.putNoClobber(file.path, file);
+    defer mod.deinit();
+    try file.loadSource(allocator);
+    try file.buildTree(allocator);
 
-    std.log.warn("Tree: {any}", .{module.entry.tree});
     var compiler = try Compiler.init(allocator);
-    defer compiler.deinit();
 
     compiler.compile(&module) catch |e| {
         try module.writeErrors(std.io.getStdErr().writer());
