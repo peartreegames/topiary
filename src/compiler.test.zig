@@ -1,44 +1,40 @@
 const std = @import("std");
-const Value = @import("./values.zig").Value;
-const OpCode = @import("./opcode.zig").OpCode;
-const Errors = @import("./compiler-error.zig").CompilerErrors;
-const ValueType = @import("./values.zig").Type;
-const String = @import("./values.zig").String;
-const Scope = @import("./scope.zig").Scope;
-const Symbol = @import("./scope.zig").Symbol;
-const builtins = @import("./builtins.zig").builtins;
-const Bytecode = @import("./bytecode.zig").Bytecode;
-const JumpTree = @import("./structures/jump-tree.zig").JumpTree;
-const VisitTree = @import("./structures/visit-tree.zig").VisitTree;
-const Enum = @import("./enum.zig").Enum;
-const UUID = @import("./utils/uuid.zig").UUID;
-const compiler = @import("./compiler.zig");
-const compileSource = compiler.compileSource;
+const Value = @import("values.zig").Value;
+const OpCode = @import("opcode.zig").OpCode;
+const Errors = @import("compiler-error.zig").CompilerErrors;
+const ValueType = @import("values.zig").Type;
+const String = @import("values.zig").String;
+const Scope = @import("scope.zig").Scope;
+const Symbol = @import("scope.zig").Symbol;
+const builtins = @import("builtins.zig").builtins;
+const Bytecode = @import("bytecode.zig").Bytecode;
+const JumpTree = @import("structures/jump-tree.zig").JumpTree;
+const VisitTree = @import("structures/visit-tree.zig").VisitTree;
+const Enum = @import("enum.zig").Enum;
+const UUID = @import("utils/uuid.zig").UUID;
+const compiler = @import("compiler.zig");
+const module = @import("module.zig");
+const parseSource = @import("parser.test.zig").parseSource;
 const initial_constants = compiler.initial_constants;
 
 const testing = std.testing;
 const allocator = testing.allocator;
 const cl = initial_constants.len;
+const Module = module.Module;
+const errWriter = std.io.getStdIn().writer();
+const Compiler = compiler.Compiler;
 
-fn runTestCase(case: struct { .input = []const u8, .instructions = []u8, .constants = []Value }) !void {
-    var errors = Errors.init(allocator);
-    defer errors.deinit();
-    var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-        try errors.write(case.input, std.io.getStdErr().writer());
+pub fn compileSource(source: []const u8, mod: *Module) !Bytecode {
+    parseSource(source, mod) catch |err| {
+        try mod.writeErrors(errWriter);
         return err;
     };
-    defer bytecode.free(allocator);
-    for (case.instructions, 0..) |instruction, i| {
-        errdefer std.log.warn("Error on instruction:{}", .{i});
-        try testing.expectEqual(instruction, bytecode.instructions[i]);
-    }
-    for (case.constants, 0..) |constant, i| {
-        if (i < 5) continue;
-        switch (constant) {
-            .number => |n| try testing.expectEqual(n, bytecode.constants[i - 4].number),
-            else => continue,
-        }
-    }
+
+    var comp = try Compiler.init(allocator);
+    defer comp.deinit();
+
+    try comp.compile(mod);
+    return comp.bytecode();
 }
 
 test "Basic Compile" {
@@ -64,10 +60,11 @@ test "Basic Compile" {
     };
 
     inline for (test_cases) |case| {
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        var bytecode = compileSource(case.input, &mod) catch |err| {
+            try mod.writeErrors(errWriter);
             return err;
         };
         defer bytecode.free(allocator);
@@ -155,10 +152,11 @@ test "Conditionals Compile" {
     };
 
     inline for (test_cases) |case| {
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        var bytecode = compileSource(case.input, &mod) catch |err| {
+            try mod.writeErrors(errWriter);
             return err;
         };
         defer bytecode.free(allocator);
@@ -245,10 +243,11 @@ test "Variables" {
     };
 
     inline for (test_cases) |case| {
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        var bytecode = compileSource(case.input, &mod) catch |err| {
+            try mod.writeErrors(errWriter);
             return err;
         };
         defer bytecode.free(allocator);
@@ -303,10 +302,11 @@ test "Strings" {
     };
 
     inline for (test_cases) |case| {
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        var bytecode = compileSource(case.input, &mod) catch |err| {
+            try mod.writeErrors(errWriter);
             return err;
         };
         defer bytecode.free(allocator);
@@ -403,10 +403,11 @@ test "Lists" {
     };
 
     inline for (test_cases) |case| {
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        var bytecode = compileSource(case.input, &mod) catch |err| {
+            try mod.writeErrors(errWriter);
             return err;
         };
         defer bytecode.free(allocator);
@@ -598,10 +599,11 @@ test "Maps and Sets" {
     };
 
     inline for (test_cases) |case| {
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        var bytecode = compileSource(case.input, &mod) catch |err| {
+            try mod.writeErrors(errWriter);
             return err;
         };
         defer bytecode.free(allocator);
@@ -690,10 +692,11 @@ test "Index" {
     };
 
     inline for (test_cases) |case| {
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        var bytecode = compileSource(case.input, &mod) catch |err| {
+            try mod.writeErrors(errWriter);
             return err;
         };
         defer bytecode.free(allocator);
@@ -1089,10 +1092,11 @@ test "Functions" {
 
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        var bytecode = compileSource(case.input, &mod) catch |err| {
+            try mod.writeErrors(errWriter);
             return err;
         };
         defer bytecode.free(allocator);
@@ -1238,10 +1242,11 @@ test "Locals" {
 
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        var bytecode = compileSource(case.input, &mod) catch |err| {
+            try mod.writeErrors(errWriter);
             return err;
         };
         defer bytecode.free(allocator);
@@ -1299,10 +1304,11 @@ test "Builtin Functions" {
 
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        var bytecode = compileSource(case.input, &mod) catch |err| {
+            try mod.writeErrors(errWriter);
             return err;
         };
         defer bytecode.free(allocator);
@@ -1578,10 +1584,11 @@ test "Closures" {
 
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        var bytecode = compileSource(case.input, &mod) catch |err| {
+            try mod.writeErrors(errWriter);
             return err;
         };
         defer bytecode.free(allocator);
@@ -1654,10 +1661,11 @@ test "Classes" {
 
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
-        var errors = Errors.init(allocator);
-        defer errors.deinit();
-        var bytecode = compileSource(allocator, case.input, &errors) catch |err| {
-            try errors.write(case.input, std.io.getStdErr().writer());
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        var bytecode = compileSource(case.input, &mod) catch |err| {
+            try mod.writeErrors(errWriter);
             return err;
         };
         defer bytecode.free(allocator);
@@ -1688,10 +1696,11 @@ test "Serialize" {
     ;
 
     errdefer std.log.warn("{s}", .{input});
-    var errors = Errors.init(allocator);
-    defer errors.deinit();
-    var bytecode = compileSource(allocator, input, &errors) catch |err| {
-        try errors.write(input, std.io.getStdErr().writer());
+    var mod = Module.create(allocator);
+    defer mod.deinit();
+    defer mod.entry.source_loaded = false;
+    var bytecode = compileSource(input, &mod) catch |err| {
+        try mod.writeErrors(errWriter);
         return err;
     };
     defer bytecode.free(allocator);

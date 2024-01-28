@@ -5,16 +5,18 @@ const Value = @import("./values.zig").Value;
 const ExportValue = @import("./export-value.zig").ExportValue;
 const Errors = @import("./compiler-error.zig").CompilerErrors;
 const Compiler = @import("./compiler.zig").Compiler;
+const compileSource = @import("compiler.test.zig").compileSource;
 const Bytecode = @import("./bytecode.zig").Bytecode;
-const parseFile = @import("./parser.zig").parseFile;
 const runners = @import("./runner.zig");
 const Subscriber = @import("./subscriber.zig").Subscriber;
+const Module = @import("module.zig").Module;
+const File = @import("module.zig").File;
 const Runner = runners.Runner;
 const Dialogue = runners.Dialogue;
 const Choice = runners.Choice;
 
-// const alloc = std.testing.allocator;
-var alloc = std.heap.page_allocator;
+const alloc = std.testing.allocator;
+// var alloc = std.heap.page_allocator;
 var debug_log: ?OnExportDebugLog = null;
 var debug_severity: Severity = .err;
 
@@ -61,60 +63,70 @@ export fn setDebugSeverity(severity: u8) void {
 }
 
 export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, max: usize) void {
-    _ = max;
-    _ = out_ptr;
-    _ = path_length;
-    _ = path_ptr;
-    //     var arena = std.heap.ArenaAllocator.init(alloc);
-    //     defer arena.deinit();
-    //     var comp_alloc = arena.allocator();
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    var comp_alloc = arena.allocator();
 
-    //     var errs = Errors.init(comp_alloc);
-    //     defer errs.deinit();
+    const file_path = path_ptr[0..path_length];
+    const full_path = std.fs.cwd().realpathAlloc(comp_alloc, file_path) catch |err| {
+        log("Could not get full path for '{s}': {s}", .{ file_path, @errorName(err) }, .err);
+        return;
+    };
+    var mod = Module{
+        .allocator = comp_alloc,
+        .entry = undefined,
+        .includes = std.StringArrayHashMap(*File).init(comp_alloc),
+    };
+    const file = comp_alloc.create(File) catch |err| {
+        log("Could not allocate Module File: {s}", .{@errorName(err)}, .err);
+        return;
+    };
+    file.* = File.create(full_path, &mod) catch |err| {
+        log("Could not create Module File: {s}", .{@errorName(err)}, .err);
+        return;
+    };
+    mod.entry = file;
+    mod.includes.putNoClobber(file.path, file) catch unreachable;
+    defer mod.deinit();
+    file.loadSource(comp_alloc) catch |err| {
+        log("Could not load file source: {s}", .{@errorName(err)}, .err);
+        return;
+    };
 
-    //     const file_path = path_ptr[0..path_length];
+    var buf: [4096]u8 = undefined;
+    var err_fbs = std.io.fixedBufferStream(&buf);
 
-    //     const dir = std.fs.cwd().openDir(std.fs.path.dirname(file_path).?, .{}) catch |err| {
-    //         log("Could not open path directory '{s}': {s}", .{ file_path, @errorName(err) }, .err);
-    //         return;
-    //     };
+    file.buildTree(comp_alloc) catch |err| {
+        mod.writeErrors(err_fbs.writer()) catch |e| {
+            log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
+            return;
+        };
+        log("Could not parse file '{s}': {s}\n{s}", .{ file_path, @errorName(err), buf[0..] }, .err);
+        return;
+    };
 
-    //     var buf: [4096]u8 = undefined;
-    //     var err_fbs = std.io.fixedBufferStream(&buf);
-    //     const file_name = std.fs.path.basename(file_path);
-    //     var tree = parseFile(comp_alloc, dir, file_name, &errs) catch |err| {
-    //         errs.write(err_fbs.writer()) catch |e| {
-    //             log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
-    //             return;
-    //         };
-    //         log("Could not parse file '{s}': {s}\n{s}", .{ file_path, @errorName(err), buf[0..] }, .err);
-    //         return;
-    //     };
-    //     defer tree.deinit();
-    //     defer comp_alloc.free(tree.source);
+    var compiler = Compiler.init(comp_alloc) catch |err| {
+        log("Could not create compiler: {s}", .{@errorName(err)}, .err);
+        return;
+    };
+    defer compiler.deinit();
 
-    //     var compiler = Compiler.init(comp_alloc, &errs) catch |err| {
-    //         log("Could not create compiler: {s}", .{ @errorName(err) }, .err);
-    //         return;
-    //     };
-    //     defer compiler.deinit();
+    compiler.compile(&mod) catch |err| {
+        mod.writeErrors(err_fbs.writer()) catch |e| {
+            log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
+            return;
+        };
+        log("Could not compile file '{s}': {s}\n{s}", .{ file_path, @errorName(err), buf[0..] }, .err);
+        return;
+    };
+    var bytecode = compiler.bytecode() catch |err| {
+        log("Could not create bytecode: {s}", .{@errorName(err)}, .err);
+        return;
+    };
 
-    //     compiler.compile(tree) catch |err| {
-    //         errs.write(err_fbs.writer()) catch |e| {
-    //             log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
-    //             return;
-    //         };
-    //         log("Could not compile file '{s}': {s}\n{s}", .{ file_path, @errorName(err), buf[0..] }, .err);
-    //         return;
-    //     };
-    //     const bytecode = compiler.bytecode() catch |err| {
-    //         log("Could not create bytecode: {s}", .{ @errorName(err) }, .err);
-    //         return;
-    //     };
-
-    //     var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
-    //     const writer = fbs.writer();
-    //     bytecode.serialize(writer) catch |err| log("Could not serialize bytecode: {s}", .{ @errorName(err)}, .err);
+    var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
+    const writer = fbs.writer();
+    bytecode.serialize(writer) catch |err| log("Could not serialize bytecode: {s}", .{@errorName(err)}, .err);
 }
 
 export fn start(vm_ptr: usize) void {
@@ -478,12 +490,24 @@ test "Create and Destroy Vm" {
     debug_severity = .info;
     defer debug_log = null;
     defer debug_severity = .err;
+
     var buf: [4096]u8 = undefined;
-    compile(text.ptr, text.len, &buf, buf.len);
+    const file = try std.fs.cwd().createFile("tmp.topi", .{ .read = true });
+    defer std.fs.cwd().deleteFile("tmp.topi") catch |err| {
+        std.log.warn("Could not delete file: {}", .{err});
+    };
+    defer file.close();
+    try file.writer().writeAll(text);
+
+    try file.seekTo(0);
+    compile("tmp.topi", "tmp.topi".len, &buf, buf.len);
     const on_dialogue: OnExportDialogue = TestRunner.onDialogue;
     const on_choices: OnExportChoices = TestRunner.onChoices;
+
     const vm_ptr = createVm(&buf, buf.len, @intFromPtr(on_dialogue), @intFromPtr(on_choices));
     const vm: *Vm = @ptrFromInt(vm_ptr);
+    vm.bytecode.print(std.debug);
+    std.debug.print("\n=====\n", .{});
     const val_name = "value";
     subscribe(
         vm_ptr,
@@ -548,5 +572,6 @@ test "Create and Destroy Vm" {
         }
         destroyValue(&map_value);
     }
+    vm.bytecode.free(alloc);
     destroyVm(vm_ptr);
 }

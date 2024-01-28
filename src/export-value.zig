@@ -85,10 +85,10 @@ pub const ExportValue = extern struct {
             .list, .set, .map => {
                 var count = self.data.list.count;
                 if (self.tag == .map) count *= 2;
-                for (self.data.list.items[0..self.data.list.count]) |item| {
+                for (self.data.list.items[0..count]) |item| {
                     item.deinit(allocator);
                 }
-                allocator.free(self.data.list.items[0..self.data.list.count]);
+                allocator.free(self.data.list.items[0..count]);
             },
             else => {},
         }

@@ -1,6 +1,5 @@
 const std = @import("std");
 const Compiler = @import("./compiler.zig").Compiler;
-const compileSource = @import("./compiler.zig").compileSource;
 const Bytecode = @import("./bytecode.zig").Bytecode;
 const parser = @import("./parser.zig");
 const OpCode = @import("./opcode.zig").OpCode;
