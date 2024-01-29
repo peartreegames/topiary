@@ -1,6 +1,7 @@
 const vm = @import("vm.zig");
 const runner = @import("runner.zig");
 const compiler = @import("compiler.zig");
+const module = @import("module.zig");
 const compilerError = @import("compiler-error.zig");
 
 pub const values = @import("values.zig");
@@ -12,9 +13,12 @@ pub const RuntimeErr = vm.RuntimeErr;
 /// Convert source text to bytecode
 pub const Compiler = compiler.Compiler;
 /// Convinence method to convert source text to bytecode
-pub const compileSource = compiler.compileSource;
 pub const CompilerErr = compilerError.CompilerErr;
 pub const CompilerErrors = compilerError.CompilerErrors;
+/// Group of files with all "includes" compiled into bytecode
+pub const Module = module.Module;
+/// Member of a module
+pub const File = module.File;
 
 /// Bytecode
 pub const Bytecode = @import("bytecode.zig").Bytecode;

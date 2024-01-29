@@ -15,8 +15,8 @@ const Runner = runners.Runner;
 const Dialogue = runners.Dialogue;
 const Choice = runners.Choice;
 
-const alloc = std.testing.allocator;
-// var alloc = std.heap.page_allocator;
+// const alloc = std.testing.allocator;
+var alloc = std.heap.page_allocator;
 var debug_log: ?OnExportDebugLog = null;
 var debug_severity: Severity = .err;
 
