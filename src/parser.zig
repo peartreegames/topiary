@@ -847,7 +847,6 @@ pub const Parser = struct {
             self.next();
             name = try self.getStringValue();
         }
-
         self.next();
         const text = try self.stringExpression();
         const tags = try self.getTagsList();

@@ -32,7 +32,7 @@ pub fn main() !void {
         .includes = std.StringArrayHashMap(*File).init(allocator),
     };
     const file = try allocator.create(File);
-    file.* = try File.create(full_path, &module);
+    file.* = try File.create(full_path, &mod);
     mod.entry = file;
     try mod.includes.putNoClobber(file.path, file);
     defer mod.deinit();
@@ -41,11 +41,12 @@ pub fn main() !void {
 
     var compiler = try Compiler.init(allocator);
 
-    compiler.compile(&module) catch |e| {
-        try module.writeErrors(std.io.getStdErr().writer());
+    compiler.compile(&mod) catch |e| {
+        try mod.writeErrors(std.io.getStdErr().writer());
         return e;
     };
-    const bytecode = try compiler.bytecode();
+    var bytecode = try compiler.bytecode();
+    bytecode.print(std.debug);
 
     const vm_alloc = arena.allocator();
     const is_maybe_auto = args.next();

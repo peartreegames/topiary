@@ -106,6 +106,7 @@ pub const Bytecode = struct {
     pub fn printInstructions(writer: anytype, instructions: []const u8, constants: ?[]Value) void {
         var i: usize = 0;
         while (i < instructions.len) {
+            errdefer writer.print("{any}", .{instructions[i..]});
             writer.print("{d:0>4} ", .{i});
             const op: OpCode = @enumFromInt(instructions[i]);
             writer.print("{s: <16} ", .{op.toString()});
@@ -162,6 +163,10 @@ pub const Bytecode = struct {
                     writer.print("{d: >8} ", .{index});
                     i += 4;
                     if (constants) |c| {
+                        if (index >= c.len) {
+                            writer.print("Constant Index {} out of bounds. Total length {}", .{ index, c.len });
+                            break;
+                        }
                         var value = c[index];
                         writer.print("  = ", .{});
                         value.print(writer, c);
@@ -188,7 +193,7 @@ pub const Bytecode = struct {
                     i += 4;
                     _ = visit_id;
                     writer.print("{d: >8}", .{dest});
-                    writer.print(" {}", .{is_unique});
+                    writer.print(" unique: {}", .{is_unique});
                 },
                 .string, .closure => {
                     const index = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);

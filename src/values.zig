@@ -15,7 +15,7 @@ const Allocator = std.mem.Allocator;
 pub const True = Value{ .bool = true };
 pub const False = Value{ .bool = false };
 pub const Nil = Value{ .nil = {} };
-pub const Void = Value{ .void = {}};
+pub const Void = Value{ .void = {} };
 
 pub const Type = enum(u8) {
     void,
