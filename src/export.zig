@@ -22,13 +22,16 @@ var debug_severity: Severity = .err;
 
 const ExportDialogue = extern struct {
     content: [*c]const u8,
+    content_length: usize,
     speaker: [*c]const u8,
+    speaker_length: usize,
     tags: [*][*c]const u8,
     tags_length: u8,
 };
 
 const ExportChoice = extern struct {
     content: [*c]const u8,
+    content_length: usize,
     visit_count: u32,
     ip: u32,
 };
@@ -48,8 +51,11 @@ const Severity = enum(u8) {
 fn log(comptime msg: []const u8, args: anytype, severity: Severity) void {
     if (@intFromEnum(severity) < @intFromEnum(debug_severity)) return;
     if (debug_log) |l| {
-        var buf: [2048]u8 = undefined;
-        const fmt = std.fmt.bufPrintZ(&buf, msg, args) catch msg;
+        var buf: [16_384]u8 = undefined;
+        const fmt = std.fmt.bufPrintZ(&buf, msg, args) catch |err| blk: {
+            std.log.err("Error fmt: {}", .{err});
+            break :blk msg;
+        };
         l(fmt.ptr, severity);
     }
 }
@@ -404,9 +410,12 @@ const ExportRunner = struct {
         while (i < dialogue.tags.len) : (i += 1) {
             self.tags[i] = dialogue.tags[i].ptr;
         }
+
         self.dialogue = .{
             .content = dialogue.content.ptr,
+            .content_length = dialogue.content.len,
             .speaker = if (dialogue.speaker) |s| s.ptr else "",
+            .speaker_length = @intCast(if (dialogue.speaker) |s| s.len else 0),
             .tags = &self.tags,
             .tags_length = @intCast(dialogue.tags.len),
         };
@@ -424,6 +433,7 @@ const ExportRunner = struct {
         while (i < choices.len) : (i += 1) {
             result[i] = .{
                 .content = choices[i].content.ptr,
+                .content_length = choices[i].content.len,
                 .visit_count = @intCast(choices[i].visit_count),
                 .ip = choices[i].ip,
             };
@@ -438,8 +448,8 @@ const ExportRunner = struct {
 const TestRunner = struct {
     pub fn onDialogue(vm_ptr: usize, dialogue: *ExportDialogue) void {
         std.debug.print("{s}: {s}\n", .{
-            dialogue.speaker,
-            dialogue.content,
+            dialogue.speaker[0..dialogue.speaker_length],
+            dialogue.content[0..dialogue.content_length],
         });
         selectContinue(vm_ptr);
     }
