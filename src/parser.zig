@@ -193,10 +193,7 @@ pub const Parser = struct {
         const path = try self.getStringValue();
 
         if (std.mem.eql(u8, self.file.path, "")) return self.fail("File Path not set", self.current_token, .{});
-        var current_dir = std.fs.openDirAbsolute(self.file.path, .{}) catch |err| {
-            return self.fail("Could not get current directory {s}: {}", self.current_token, .{ path, err });
-        };
-        const full_path = std.fs.realpathAlloc(self.allocator, path) catch path;
+        const full_path = try std.fs.path.resolve(self.allocator, &.{ self.file.dir_name, path });
         if (self.file.module.includes.contains(full_path)) {
             return .{
                 .token = start,
@@ -208,20 +205,17 @@ pub const Parser = struct {
                 },
             };
         }
-        var dir = current_dir.openDir(std.fs.path.dirname(full_path).?, .{}) catch |err| {
-            return self.fail("Could not open directory {s}: {}", self.current_token, .{ path, err });
-        };
-        defer dir.close();
+
         const file = try self.allocator.create(File);
-        file.* = File.create(full_path, file.module) catch |err| {
-            return self.fail("Could not create include file {s}: {}", self.current_token, .{ path, err });
+        file.* = File.create(full_path, self.file.module) catch |err| {
+            return self.fail("Could not create include file '{s}': {}", self.current_token, .{ path, err });
         };
         file.loadSource(self.allocator) catch |err| {
-            return self.fail("Could not load include file {s}: {}", self.current_token, .{ path, err });
+            return self.fail("Could not load include file '{s}': {}", self.current_token, .{ path, err });
         };
 
         file.buildTree(self.allocator) catch |err| {
-            return self.fail("Could not build include file tree {s}: {}", self.current_token, .{ path, err });
+            return self.fail("Could not build include file tree '{s}': {}", self.current_token, .{ path, err });
         };
         try self.file.module.includes.putNoClobber(full_path, file);
 

@@ -39,7 +39,10 @@ pub const Module = struct {
 
     pub fn generateBytecode(self: *Module) !Bytecode {
         try self.entry.loadSource(self.allocator);
-        try self.entry.buildTree(self.allocator);
+        self.entry.buildTree(self.allocator) catch |err| {
+            try self.writeErrors(std.io.getStdErr().writer());
+            return err;
+        };
 
         var compiler = try Compiler.init(self.allocator);
         defer compiler.deinit();
@@ -61,7 +64,19 @@ pub const Module = struct {
 
     pub fn deinit(self: *Module) void {
         var it = self.includes.iterator();
+        const maybe_first = it.next();
+        // TODO Refactor this.
+        // The file.tree arean allocator deinits all other trees
+        // that have been included, so we only deinit the first tree
+        if (maybe_first) |first| {
+            first.value_ptr.*.deinit(self.allocator);
+            first.value_ptr.*.unloadSource(self.allocator);
+            self.allocator.free(first.key_ptr.*);
+            self.allocator.destroy(first.value_ptr.*);
+        }
+
         while (it.next()) |kvp| {
+            kvp.value_ptr.*.tree_loaded = false;
             kvp.value_ptr.*.deinit(self.allocator);
             kvp.value_ptr.*.unloadSource(self.allocator);
             self.allocator.free(kvp.key_ptr.*);
