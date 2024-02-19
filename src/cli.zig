@@ -12,9 +12,9 @@ const Choice = runners.Choice;
 
 const File = module.File;
 const Module = module.Module;
-var out = std.io.getStdErr().writer();
 
 fn usage(comptime msg: []const u8) !void {
+    var out = std.io.getStdErr().writer();
     if (!std.mem.eql(u8, msg, "")) {
         try out.print(msg, .{});
         try out.print("\n", .{});
