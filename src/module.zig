@@ -4,6 +4,7 @@ const Bytecode = @import("bytecode.zig").Bytecode;
 const Lexer = @import("lexer.zig").Lexer;
 const Parser = @import("parser.zig").Parser;
 const CompilerErrors = @import("compiler-error.zig").CompilerErrors;
+const Compiler = @import("compiler.zig").Compiler;
 const std = @import("std");
 const fs = std.fs;
 
@@ -13,12 +14,41 @@ pub const Module = struct {
     entry: *File,
     includes: std.StringArrayHashMap(*File),
 
+    pub fn init(allocator: std.mem.Allocator, entry_path: []const u8) !*Module {
+        var mod = try allocator.create(Module);
+        mod.* = .{
+            .allocator = allocator,
+            .entry = undefined,
+            .includes = std.StringArrayHashMap(*File).init(allocator),
+        };
+        const file = try allocator.create(File);
+        file.* = try File.create(entry_path, mod);
+        mod.entry = file;
+        try mod.includes.putNoClobber(file.path, file);
+        return mod;
+    }
+
+    /// Used for initialzing with source direstly rather than a file path
     pub fn create(allocator: std.mem.Allocator) Module {
         return .{
             .allocator = allocator,
             .entry = undefined,
             .includes = std.StringArrayHashMap(*File).init(allocator),
         };
+    }
+
+    pub fn generateBytecode(self: *Module) !Bytecode {
+        try self.entry.loadSource(self.allocator);
+        try self.entry.buildTree(self.allocator);
+
+        var compiler = try Compiler.init(self.allocator);
+        defer compiler.deinit();
+
+        compiler.compile(self) catch |e| {
+            try self.writeErrors(std.io.getStdErr().writer());
+            return e;
+        };
+        return try compiler.bytecode();
     }
 
     pub fn writeErrors(self: *Module, writer: anytype) !void {

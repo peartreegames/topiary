@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(topidll);
 
     const exe = b.addExecutable(.{
-        .name = "topi-cli",
+        .name = "topi",
         .root_source_file = .{ .path = "src/cli.zig" },
         .target = target,
         .optimize = optimize,

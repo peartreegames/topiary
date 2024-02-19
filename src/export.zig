@@ -473,9 +473,9 @@ fn testSubscriber(value: ExportValue) void {
 test "Create and Destroy Vm" {
     const text =
         \\ var value = "test 123"
-        \\ var list = [1,2,3,4]
-        \\ var set = {"some", "string", "values"}
-        \\ var map = {0: 0.0001, 1: 1.1111, 2: 2.222 }
+        \\ var list = List{1,2,3,4}
+        \\ var set = Set{"some", "string", "values"}
+        \\ var map = Map{0: 0.0001, 1: 1.1111, 2: 2.222 }
         \\ === START {
         \\     :: "A person approaches."
         \\     :Stranger: "Hey there."

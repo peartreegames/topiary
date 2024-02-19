@@ -17,7 +17,7 @@ To run the CLI:
 
 ```
 zig build
-./zig-out/bin/topi-cli ./examples/hello.topi
+./zig-out/bin/topi ./examples/hello.topi
 ```
 
 You can then press `enter` for the next line,

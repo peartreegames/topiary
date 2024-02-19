@@ -40,11 +40,11 @@ test "Parse Declaration" {
     const t =
         \\ const intValue = 5
         \\ var mutableValue = 1.2
-        \\ class ClassType {
+        \\ class ClassType = {
         \\     intField = 0
         \\ }
         \\ var classValue = new ClassType{}
-        \\ enum EnumType {
+        \\ enum EnumType = {
         \\     one,
         \\     two,
         \\ }
@@ -127,7 +127,7 @@ test "Parse Function Arguments" {
 
 test "Parse Enums" {
     const t =
-        \\ enum Test {
+        \\ enum Test = {
         \\    one,
         \\    two  
         \\ }
@@ -152,12 +152,12 @@ test "Parse Enums" {
 
 test "Parse Iterable Types" {
     const test_cases = .{
-        .{ .input = "const stringList = [\"item\"]", .id = "stringList", .item_value = [_][]const u8{"item"}, .mutable = false, .type = .list },
-        .{ .input = "const stringList = [\"item1\", \"item2\"]", .id = "stringList", .item_value = [_][]const u8{ "item1", "item2" }, .mutable = false, .type = .list },
-        .{ .input = "var floatSet = {2.0}", .id = "floatSet", .item_value = [_]f32{2.0}, .mutable = true, .type = .set },
-        .{ .input = "var floatSet = {2.0, 3.4, 5.6}", .id = "floatSet", .item_value = [_]f32{ 2.0, 3.4, 5.6 }, .mutable = true, .type = .set },
-        .{ .input = "var stringBoolMap = {\"key\":true}", .id = "stringBoolMap", .item_value = [_]bool{true}, .mutable = true, .type = .map },
-        .{ .input = "var stringBoolMap = {\"key1\":true, \"key2\": false, \"key3\": true}", .id = "stringBoolMap", .item_value = [_]bool{ true, false, true }, .mutable = true, .type = .map },
+        .{ .input = "const stringList = List{\"item\"}", .id = "stringList", .item_value = [_][]const u8{"item"}, .mutable = false, .type = .list },
+        .{ .input = "const stringList = List{\"item1\", \"item2\"}", .id = "stringList", .item_value = [_][]const u8{ "item1", "item2" }, .mutable = false, .type = .list },
+        .{ .input = "var floatSet = Set{2.0}", .id = "floatSet", .item_value = [_]f32{2.0}, .mutable = true, .type = .set },
+        .{ .input = "var floatSet = Set{2.0, 3.4, 5.6}", .id = "floatSet", .item_value = [_]f32{ 2.0, 3.4, 5.6 }, .mutable = true, .type = .set },
+        .{ .input = "var stringBoolMap = Map{\"key\":true}", .id = "stringBoolMap", .item_value = [_]bool{true}, .mutable = true, .type = .map },
+        .{ .input = "var stringBoolMap = Map{\"key1\":true, \"key2\": false, \"key3\": true}", .id = "stringBoolMap", .item_value = [_]bool{ true, false, true }, .mutable = true, .type = .map },
     };
 
     inline for (test_cases) |case| {
@@ -186,8 +186,8 @@ test "Parse Iterable Types" {
 
 test "Parse Empty Iterable Types" {
     const input =
-        \\ const emptyMap = {:}
-        \\ const emptySet = {}
+        \\ const emptyMap = Map{}
+        \\ const emptySet = Set{}
     ;
     var mod = Module.create(allocator);
     defer mod.deinit();
@@ -208,7 +208,7 @@ test "Parse Empty Iterable Types" {
 
 test "Parse Nested Iterable Types" {
     const input =
-        \\ [[1,2]]
+        \\ List{List{1,2}}
     ;
     var mod = Module.create(allocator);
     defer mod.deinit();
@@ -247,12 +247,12 @@ test "Parse Extern" {
 
 test "Parse Enum" {
     const input =
-        \\ enum E {
+        \\ enum E = {
         \\     one,
         \\     two,
         \\ }
         \\
-        \\ enum En {
+        \\ enum En = {
         \\     three,
         \\     four
         \\ }

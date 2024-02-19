@@ -395,16 +395,16 @@ pub const Value = union(Type) {
                 switch (o.data) {
                     .string => |s| writer.print("{s}", .{s}),
                     .list => |l| {
-                        writer.print("list[", .{});
+                        writer.print("List{{", .{});
                         for (l.items, 0..) |item, i| {
                             item.print(writer, constants);
                             if (i != l.items.len - 1)
                                 writer.print(", ", .{});
                         }
-                        writer.print("]", .{});
+                        writer.print("}}", .{});
                     },
                     .map => |m| {
-                        writer.print("map{{", .{});
+                        writer.print("Map{{", .{});
                         const keys = m.keys();
                         for (keys, 0..) |k, i| {
                             k.print(writer, constants);
@@ -417,7 +417,7 @@ pub const Value = union(Type) {
                     },
                     .set => |s| {
                         const keys = s.keys();
-                        writer.print("set{{", .{});
+                        writer.print("Set{{", .{});
                         for (keys, 0..) |k, i| {
                             k.print(writer, constants);
                             if (i != keys.len - 1)

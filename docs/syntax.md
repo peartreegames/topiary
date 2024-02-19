@@ -258,21 +258,21 @@ Topi has three builtin collection types. Lists, Sets, and Maps. Each type has fi
 Lists are a collections of values in order.
 
 ```
-var list = ["one", "two", "three"] // List["one", "two", "three"]
-var emptyList = []
+var list = List{"one", "two", "three"} // List{"one", "two", "three"}
+var emptyList = List{}
 
-list.add("four") // List["one", "two", "three", "four"]
-list.remove("one") // List["two", "three", "four"]
+list.add("four") // List{"one", "two", "three", "four"}
+list.remove("one") // List{"two", "three", "four"}
 list.count() // 3
 list.has("two") // true
-list.clear() // List[]
+list.clear() // List{}
 ```
 
 Sets are a collection of unique values.
 
 ```
-var set = {"one", "two", "one"} // Set{one, two}
-const emptySet = {}
+var set = Set{"one", "two", "one"} // Set{one, two}
+const emptySet = Set{}
 
 set.add("two") // Set{one, two}
 set.count() // 2
@@ -284,8 +284,8 @@ set.clear() // Set{}
 Maps are a collection of key/value pairs.
 
 ```
-const map = {"one": 1, "two": 2} // Map{one:1, two:2}
-const emptyMap = {:}
+const map = Map{"one": 1, "two": 2} // Map{one:1, two:2}
+const emptyMap = Map{}
 
 map.add("one", 3) // Map{one:3, two:2} (add will replace values if already exists)
 map.count() // 2
@@ -322,21 +322,21 @@ for 0..10 |i| {
 ```
 
 ```topi
-var list = ["one", "two", "three"]
+var list = List{"one", "two", "three"}
 for list |item| {
     print(item) // one, two, thee
 }
 ```
 
 ```topi
-var set = {"one", "two", "one"}
+var set = Set{"one", "two", "one"}
 for set |item| {
     print(item) // one, two
 }
 ```
 
 ```topi
-var map = {"one":1.1, "two":1.2, "three":1.3}
+var map = Map{"one":1.1, "two":1.2, "three":1.3}
 for map |item| {
     print(item.key) // one, two, three
     print(item.value) // 1.1, 1.2, 1.3
@@ -430,7 +430,7 @@ const fib = |n| {
 Enums are pretty standard
 
 ```topi
-enum Cardinal {
+enum Cardinal = {
     North,
     East,
     South,
@@ -449,7 +449,7 @@ Any field not initialized will use the default value.
 
 
 ```topi
-class Person {
+class Person = {
     age = 25,
     name = ""
 }
@@ -465,7 +465,7 @@ Classes can also have functions as fields,
 references to its own fields can be achieved with `self`
 
 ```topi
-class Person {
+class Person = {
     age = 0,
     firstName = "",
     lastName = "",

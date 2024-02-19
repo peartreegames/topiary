@@ -3,10 +3,10 @@
 // and prompting a 5 minute fantasy quest.
 // Manual revisions and fixes then added.
 
-var knowledge = {}
-var inventory = {}
+var knowledge = Set{}
+var inventory = Set{}
 var torchLit = false
-var party = {"Rogue", "Druid", "Fighter", "Archer"}
+var party = Set{"Rogue", "Druid", "Fighter", "Archer"}
 var gold = 0
 var spiderDefeated = false
 
@@ -29,7 +29,7 @@ var archer = new Character{}
             :Innkeeper: "But beware, the forest is filled with traps and monsters. You'll need these items to survive."
             :: "The Innkeeper give you a Map, a Torch, and a Healing Potion. Use them wisely."
             :Rogue: "We'll do it."
-            inventory = {"Map", "Torch", "Healing Potion"}
+            inventory = Set{"Map", "Torch", "Healing Potion"}
 		    => FORBIDDEN_FOREST
         }
         ~ "Decline the quest" {
@@ -222,7 +222,7 @@ var archer = new Character{}
         }
     }
 	=== CROSS_BRIDGE {
-		var hasGone = {}
+		var hasGone = Set{}
 		var member = ""
 		:Rogue: "We should cross one at a time."
 		while hasGone.count() < party.count() {

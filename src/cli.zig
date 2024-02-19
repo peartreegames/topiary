@@ -12,71 +12,101 @@ const Choice = runners.Choice;
 
 const File = module.File;
 const Module = module.Module;
+var out = std.io.getStdErr().writer();
+
+fn usage(comptime msg: []const u8) !void {
+    if (!std.mem.eql(u8, msg, "")) {
+        try out.print(msg, .{});
+        try out.print("\n", .{});
+    } else {
+        try out.print("topi - command line topiary processor\n", .{});
+        try out.print("Usage:\n", .{});
+        try out.print("\n", .{});
+    }
+    try out.print("        topi <file> [--auto|-a <count>] [--compile|-c <output_file>]\n", .{});
+}
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     var args = try std.process.argsWithAllocator(arena.allocator());
     _ = args.skip();
+
     const file_path = args.next();
     if (file_path == null) {
-        std.log.warn("No file argument provided.", .{});
+        try usage("No file argument provided.\n");
+        return;
+    }
+    if (std.mem.eql(u8, file_path.?, "-h") or std.mem.eql(u8, file_path.?, "--help")) {
+        try usage("");
+        return;
+    }
+    const maybe_flag = args.next();
+    var is_compile = false;
+    var out_path: ?[]const u8 = null;
+    var is_auto = false;
+    var auto_count: usize = 0;
+    if (maybe_flag) |flag| {
+        if (std.mem.eql(u8, flag, "-c") or std.mem.eql(u8, flag, "--compile")) {
+            const maybe_out_file = args.next();
+            if (maybe_out_file == null) {
+                try usage("Compile requires an output file.\n");
+                return;
+            }
+            is_compile = true;
+            out_path = maybe_out_file.?;
+        }
+        if (std.mem.eql(u8, flag, "-a") or std.mem.eql(u8, flag, "--auto")) {
+            const maybe_auto_count = args.next();
+            if (maybe_auto_count == null) {
+                try usage("Auto requires a play count.\n");
+                return;
+            }
+            is_auto = true;
+            auto_count = try std.fmt.parseInt(u64, maybe_auto_count.?, 10);
+        }
+    }
+
+    const allocator = arena.allocator();
+    const full_path = try std.fs.cwd().realpathAlloc(allocator, file_path.?);
+    var mod = try Module.init(allocator, full_path);
+    var bytecode = try mod.generateBytecode();
+    defer bytecode.free(allocator);
+    mod.deinit();
+
+    if (is_compile) {
+        const file = try std.fs.cwd().createFile(out_path.?, .{});
+        defer file.close();
+        const writer = file.writer();
+        try bytecode.serialize(writer);
         return;
     }
 
-    var allocator = arena.allocator();
-    const full_path = try std.fs.cwd().realpathAlloc(allocator, file_path.?);
-    var mod = Module{
-        .allocator = allocator,
-        .entry = undefined,
-        .includes = std.StringArrayHashMap(*File).init(allocator),
-    };
-    const file = try allocator.create(File);
-    file.* = try File.create(full_path, &mod);
-    mod.entry = file;
-    try mod.includes.putNoClobber(file.path, file);
-    defer mod.deinit();
-    try file.loadSource(allocator);
-    try file.buildTree(allocator);
-
-    var compiler = try Compiler.init(allocator);
-
-    compiler.compile(&mod) catch |e| {
-        try mod.writeErrors(std.io.getStdErr().writer());
-        return e;
-    };
-    var bytecode = try compiler.bytecode();
-    bytecode.print(std.debug);
-
     const vm_alloc = arena.allocator();
-    const is_maybe_auto = args.next();
-    if (is_maybe_auto) |is_auto| {
-        if (std.mem.eql(u8, is_auto, "--auto")) {
-            const count = try std.fmt.parseInt(u64, args.next().?, 10);
-            var i: usize = 0;
-            var visit_counts = std.StringArrayHashMap(u64).init(vm_alloc);
-            defer visit_counts.deinit();
-            while (i < count) : (i += 1) {
-                var auto_runner = AutoTestRunner.init();
-                var vm = try Vm.init(vm_alloc, bytecode, &auto_runner.runner);
-                vm.interpret() catch {
-                    vm.err.print(std.debug);
-                    continue;
-                };
-                defer vm.deinit();
-                for (vm.globals, 0..) |g, idx| {
-                    if (g == .visit) {
-                        const name = bytecode.global_symbols[idx].name;
-                        const cur = try visit_counts.getOrPutValue(name, 0);
-                        try visit_counts.put(name, cur.value_ptr.* + g.visit);
-                    } else break;
-                    // all visits are first so we can break
-                }
+    if (is_auto) {
+        var i: usize = 0;
+        var visit_counts = std.StringArrayHashMap(u64).init(vm_alloc);
+        defer visit_counts.deinit();
+        while (i < auto_count) : (i += 1) {
+            var auto_runner = AutoTestRunner.init();
+            var vm = try Vm.init(vm_alloc, bytecode, &auto_runner.runner);
+            vm.interpret() catch {
+                vm.err.print(std.debug);
+                continue;
+            };
+            defer vm.deinit();
+            for (vm.globals, 0..) |g, idx| {
+                if (g == .visit) {
+                    const name = bytecode.global_symbols[idx].name;
+                    const cur = try visit_counts.getOrPutValue(name, 0);
+                    try visit_counts.put(name, cur.value_ptr.* + g.visit);
+                } else break;
+                // all visits are first so we can break
             }
-            var it = visit_counts.iterator();
-            while (it.next()) |entry| {
-                std.debug.print("{s} = {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
-            }
+        }
+        var it = visit_counts.iterator();
+        while (it.next()) |entry| {
+            std.debug.print("{s} = {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
         }
         return;
     }

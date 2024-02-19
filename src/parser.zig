@@ -240,6 +240,8 @@ pub const Parser = struct {
         const start = self.current_token;
         self.next();
         const name = try self.consumeIdentifier();
+        try self.expectCurrent(.equal);
+        self.next();
         try self.expectCurrent(.left_brace);
         self.next();
 
@@ -275,6 +277,8 @@ pub const Parser = struct {
         const start = self.current_token;
         self.next();
         const name = try self.consumeIdentifier();
+        try self.expectCurrent(.equal);
+        self.next();
         try self.expectCurrent(.left_brace);
         self.next();
         var values = std.ArrayList([]const u8).init(self.allocator);
@@ -436,8 +440,9 @@ pub const Parser = struct {
                 try self.expectPeek(.right_paren);
                 break :blk exp;
             },
-            .left_brace => try self.mapSetExpression(),
-            .left_bracket => try self.listExpression(),
+            .list => try self.listExpression(),
+            .map => try self.mapExpression(),
+            .set => try self.setExpression(),
             .new => try self.instanceExpression(),
             .pipe => try self.functionExpression(),
             .nil => .{ .token = self.current_token, .type = .nil },
@@ -649,10 +654,11 @@ pub const Parser = struct {
 
     fn listExpression(self: *Parser) Error!Expression {
         const start_token = self.current_token;
+        try self.expectPeek(.left_brace);
         var list = std.ArrayList(Expression).init(self.allocator);
         errdefer list.deinit();
         self.next();
-        if (self.currentIs(.right_bracket)) {
+        if (self.currentIs(.right_brace)) {
             return .{
                 .token = start_token,
                 .type = .{
@@ -667,7 +673,7 @@ pub const Parser = struct {
             try list.append(try self.expression(.lowest));
         }
         self.next();
-        try self.expectCurrent(.right_bracket);
+        try self.expectCurrent(.right_brace);
         return .{
             .token = start_token,
             .type = .{
@@ -695,8 +701,35 @@ pub const Parser = struct {
         };
     }
 
-    fn mapSetExpression(self: *Parser) Error!Expression {
+    fn mapExpression(self: *Parser) Error!Expression {
         const start_token = self.current_token;
+        try self.expectPeek(.left_brace);
+        var list = std.ArrayList(Expression).init(self.allocator);
+        errdefer list.deinit();
+        self.next();
+
+        if (self.currentIs(.right_brace)) {
+            return .{ .token = start_token, .type = .{ .map = try list.toOwnedSlice() } };
+        }
+
+        const first = try self.mapPairSetKey();
+        self.next();
+        if (self.currentIs(.comma)) self.next();
+        try list.append(first);
+        while (!self.currentIs(.right_brace)) {
+            const item = try self.mapPairSetKey();
+            if (item.type != .map_pair)
+                return self.fail("Item type '{s}' cannot be added to map", item.token, .{@tagName(item.type)});
+            try list.append(item);
+            self.next();
+            if (self.currentIs(.comma) or self.peekIs(.right_brace)) self.next();
+        }
+        return .{ .token = start_token, .type = .{ .map = try list.toOwnedSlice() } };
+    }
+
+    fn setExpression(self: *Parser) Error!Expression {
+        const start_token = self.current_token;
+        try self.expectPeek(.left_brace);
         var list = std.ArrayList(Expression).init(self.allocator);
         errdefer list.deinit();
         self.next();
@@ -704,27 +737,19 @@ pub const Parser = struct {
         if (self.currentIs(.right_brace)) {
             return .{ .token = start_token, .type = .{ .set = try list.toOwnedSlice() } };
         }
-        if (self.currentIs(.colon)) {
-            self.next();
-            try self.expectCurrent(.right_brace);
-            return .{ .token = start_token, .type = .{ .map = try list.toOwnedSlice() } };
-        }
 
         const first = try self.mapPairSetKey();
         self.next();
         if (self.currentIs(.comma)) self.next();
-        const is_map = first.type == .map_pair;
-        const type_name = if (is_map) "map" else "set";
         try list.append(first);
         while (!self.currentIs(.right_brace)) {
             const item = try self.mapPairSetKey();
-            if ((is_map and item.type != .map_pair) or (!is_map and item.type == .map_pair))
-                return self.fail("Item type '{s}' cannot be added to type {s}", item.token, .{ @tagName(item.type), type_name });
+            if (item.type == .map_pair)
+                return self.fail("Item type '{s}' cannot be added set", item.token, .{@tagName(item.type)});
             try list.append(item);
             self.next();
             if (self.currentIs(.comma) or self.peekIs(.right_brace)) self.next();
         }
-        if (is_map) return .{ .token = start_token, .type = .{ .map = try list.toOwnedSlice() } };
         return .{ .token = start_token, .type = .{ .set = try list.toOwnedSlice() } };
     }
 

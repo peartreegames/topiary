@@ -323,7 +323,7 @@ test "Strings" {
 test "Lists" {
     const test_cases = .{
         .{
-            .input = "[]",
+            .input = "List{}",
             .constants = [_]f32{},
             .instructions = [_]u8{
                 @intFromEnum(OpCode.list),
@@ -333,7 +333,7 @@ test "Lists" {
             },
         },
         .{
-            .input = "[1,2,3]",
+            .input = "List{1,2,3}",
             .constants = [_]f32{ 1, 2, 3 },
             .instructions = [_]u8{
                 @intFromEnum(OpCode.constant),
@@ -358,7 +358,7 @@ test "Lists" {
             },
         },
         .{
-            .input = "[1 + 2, 3 - 4, 5 * 6]",
+            .input = "List{1 + 2, 3 - 4, 5 * 6}",
             .constants = [_]f32{ 1, 2, 3, 4, 5, 6 },
             .instructions = [_]u8{
                 @intFromEnum(OpCode.constant),
@@ -427,7 +427,7 @@ test "Maps and Sets" {
     // wrap it in a () to force group expression statements
     const test_cases = .{
         .{
-            .input = "({:})",
+            .input = "Map{}",
             .constants = [_]f32{},
             .instructions = [_]u8{
                 @intFromEnum(OpCode.map),
@@ -437,7 +437,7 @@ test "Maps and Sets" {
             },
         },
         .{
-            .input = "({1: 2, 3: 4, 5: 6})",
+            .input = "Map{1: 2, 3: 4, 5: 6}",
             .constants = [_]f32{ 1, 2, 3, 4, 5, 6 },
             .instructions = [_]u8{
                 @intFromEnum(OpCode.constant),
@@ -477,7 +477,7 @@ test "Maps and Sets" {
             },
         },
         .{
-            .input = "({1: 2 + 3, 4: 5 * 6})",
+            .input = "Map{1: 2 + 3, 4: 5 * 6}",
             .constants = [_]f32{ 1, 2, 3, 4, 5, 6 },
             .instructions = [_]u8{
                 @intFromEnum(OpCode.constant),
@@ -519,7 +519,7 @@ test "Maps and Sets" {
             },
         },
         .{
-            .input = "({})",
+            .input = "Set{}",
             .constants = [_]f32{},
             .instructions = [_]u8{
                 @intFromEnum(OpCode.set),
@@ -529,7 +529,7 @@ test "Maps and Sets" {
             },
         },
         .{
-            .input = "({1, 2, 3})",
+            .input = "Set{1, 2, 3}",
             .constants = [_]f32{ 1, 2, 3 },
             .instructions = [_]u8{
                 @intFromEnum(OpCode.constant),
@@ -554,7 +554,7 @@ test "Maps and Sets" {
             },
         },
         .{
-            .input = "({1 + 2, 3 * 4, 5 - 6})",
+            .input = "Set{1 + 2, 3 * 4, 5 - 6}",
             .constants = [_]f32{ 1, 2, 3, 4, 5, 6 },
             .instructions = [_]u8{
                 @intFromEnum(OpCode.constant),
@@ -621,7 +621,7 @@ test "Maps and Sets" {
 test "Index" {
     const test_cases = .{
         .{
-            .input = "[1,2,3][1 + 1]",
+            .input = "List{1,2,3}[1 + 1]",
             .constants = [_]f32{ 1, 2, 3, 1, 1 },
             .instructions = [_]u8{
                 @intFromEnum(OpCode.constant),
@@ -658,7 +658,7 @@ test "Index" {
             },
         },
         .{
-            .input = "({1: 2})[2 - 1]",
+            .input = "Map{1: 2}[2 - 1]",
             .constants = [_]f32{ 1, 2, 2, 1 },
             .instructions = [_]u8{
                 @intFromEnum(OpCode.constant),
@@ -1615,7 +1615,7 @@ test "Classes" {
     const test_cases = .{
         .{
             .input =
-            \\ class Test {
+            \\ class Test = {
             \\     value = 0    
             \\ }
             \\ new Test{}.value
@@ -1690,9 +1690,9 @@ test "Serialize" {
         \\ const fun = |x| {
         \\     return x * 2
         \\ }
-        \\ var list = ["one", "two"]
-        \\ const set = {1, 2, 3.3}
-        \\ const map = {1:2.2, 3: 4.4}
+        \\ var list = List{"one", "two"}
+        \\ const set = Set{1, 2, 3.3}
+        \\ const map = Map{1:2.2, 3: 4.4}
     ;
 
     errdefer std.log.warn("{s}", .{input});

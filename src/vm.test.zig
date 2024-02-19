@@ -209,13 +209,13 @@ test "Strings" {
 
 test "Lists" {
     const test_cases = .{
-        .{ .input = "[]", .value = [_]f32{} },
-        .{ .input = "[1,2,3]", .value = [_]f32{ 1, 2, 3 } },
-        .{ .input = "[1 + 2, 3 * 4, 5 + 6]", .value = [_]f32{ 3, 12, 11 } },
-        .{ .input = "var l = [] l.add(1) l", .value = [_]f32{1} },
-        .{ .input = "var l = [] l.add(1) l.add(2) l", .value = [_]f32{ 1, 2 } },
-        .{ .input = "var l = [] l.add(1) l.add(2) l.remove(1) l", .value = [_]f32{2} },
-        .{ .input = "var l = [1,2,3,4,5] l.remove(3) l", .value = [_]f32{ 1, 2, 4, 5 } },
+        .{ .input = "List{}", .value = [_]f32{} },
+        .{ .input = "List{1,2,3}", .value = [_]f32{ 1, 2, 3 } },
+        .{ .input = "List{1 + 2, 3 * 4, 5 + 6}", .value = [_]f32{ 3, 12, 11 } },
+        .{ .input = "var l = List{} l.add(1) l", .value = [_]f32{1} },
+        .{ .input = "var l = List{} l.add(1) l.add(2) l", .value = [_]f32{ 1, 2 } },
+        .{ .input = "var l = List{} l.add(1) l.add(2) l.remove(1) l", .value = [_]f32{2} },
+        .{ .input = "var l = List{1,2,3,4,5} l.remove(3) l", .value = [_]f32{ 1, 2, 4, 5 } },
     };
 
     inline for (test_cases) |case| {
@@ -235,11 +235,11 @@ test "Lists" {
 
 test "Maps" {
     const test_cases = .{
-        .{ .input = "({:})", .keys = [_]f32{}, .values = [_]f32{} },
-        .{ .input = "({1:2, 3: 4})", .keys = [_]f32{ 1, 3 }, .values = [_]f32{ 2, 4 } },
-        .{ .input = "({1 + 1: 2 * 2, 3 + 3: 4 * 4})", .keys = [_]f32{ 2, 6 }, .values = [_]f32{ 4, 16 } },
-        .{ .input = "var m = {1:2} m.add(3, 4) m", .keys = [_]f32{ 1, 3 }, .values = [_]f32{ 2, 4 } },
-        .{ .input = "var m = {1:2} m.add(3, 4) m.remove(1) m", .keys = [_]f32{3}, .values = [_]f32{4} },
+        .{ .input = "Map{}", .keys = [_]f32{}, .values = [_]f32{} },
+        .{ .input = "Map{1:2, 3: 4}", .keys = [_]f32{ 1, 3 }, .values = [_]f32{ 2, 4 } },
+        .{ .input = "Map{1 + 1: 2 * 2, 3 + 3: 4 * 4}", .keys = [_]f32{ 2, 6 }, .values = [_]f32{ 4, 16 } },
+        .{ .input = "var m = Map{1:2} m.add(3, 4) m", .keys = [_]f32{ 1, 3 }, .values = [_]f32{ 2, 4 } },
+        .{ .input = "var m = Map{1:2} m.add(3, 4) m.remove(1) m", .keys = [_]f32{3}, .values = [_]f32{4} },
     };
 
     inline for (test_cases) |case| {
@@ -264,11 +264,11 @@ test "Maps" {
 
 test "Sets" {
     const test_cases = .{
-        .{ .input = "({})", .values = [_]f32{} },
-        .{ .input = "({1, 2})", .values = [_]f32{ 1, 2 } },
-        .{ .input = "({1 + 1, 3 + 3})", .values = [_]f32{ 2, 6 } },
-        .{ .input = "var s = {1} s.add(2) s.add(1) s", .values = [_]f32{ 1, 2 } },
-        .{ .input = "var s = {1} s.add(2) s.remove(1) s", .values = [_]f32{2} },
+        .{ .input = "Set{}", .values = [_]f32{} },
+        .{ .input = "Set{1, 2}", .values = [_]f32{ 1, 2 } },
+        .{ .input = "Set{1 + 1, 3 + 3}", .values = [_]f32{ 2, 6 } },
+        .{ .input = "var s = Set{1} s.add(2) s.add(1) s", .values = [_]f32{ 1, 2 } },
+        .{ .input = "var s = Set{1} s.add(2) s.remove(1) s", .values = [_]f32{2} },
     };
 
     inline for (test_cases) |case| {
@@ -292,21 +292,21 @@ test "Sets" {
 
 test "Index" {
     const test_cases = .{
-        .{ .input = "[1,2,3][1]", .value = 2.0 },
-        .{ .input = "[1,2,3][0 + 2]", .value = 3.0 },
-        .{ .input = "[[1,2,3]][0][0]", .value = 1.0 },
-        .{ .input = "[][0]", .value = null },
-        .{ .input = "[1,2,3][99]", .value = null },
-        .{ .input = "({1: 1, 2: 2})[1]", .value = 1.0 },
-        .{ .input = "({1: 1, 2: 2})[2]", .value = 2.0 },
-        .{ .input = "({1: 1})[2]", .value = null },
-        .{ .input = "({:})[0]", .value = null },
-        .{ .input = "[1,1,1].count()", .value = 3.0 },
-        .{ .input = "({\"one\"}).count()", .value = 1.0 },
-        .{ .input = "({\"one\": 1 })[\"one\"]", .value = 1.0 },
+        .{ .input = "List{1,2,3}[1]", .value = 2.0 },
+        .{ .input = "List{1,2,3}[0 + 2]", .value = 3.0 },
+        .{ .input = "List{List{1,2,3}}[0][0]", .value = 1.0 },
+        .{ .input = "List{}[0]", .value = null },
+        .{ .input = "List{1,2,3}[99]", .value = null },
+        .{ .input = "Map{1: 1, 2: 2}[1]", .value = 1.0 },
+        .{ .input = "Map{1: 1, 2: 2}[2]", .value = 2.0 },
+        .{ .input = "Map{1: 1}[2]", .value = null },
+        .{ .input = "Map{}[0]", .value = null },
+        .{ .input = "List{1,1,1}.count()", .value = 3.0 },
+        .{ .input = "Set{\"one\"}.count()", .value = 1.0 },
+        .{ .input = "Map{\"one\": 1 }[\"one\"]", .value = 1.0 },
         .{
             .input =
-            \\ const list = [1,2,3]
+            \\ const list = List{1,2,3}
             \\ list[0] = 4
             \\ list[0]
             ,
@@ -314,8 +314,8 @@ test "Index" {
         },
         .{
             .input =
-            \\ const inner = [1,2,3,4,5]
-            \\ const outer = [inner,6,7,8,9]
+            \\ const inner = List{1,2,3,4,5}
+            \\ const outer = List{inner,6,7,8,9}
             \\ var ref = outer[0]
             \\ ref[0] = 10
             \\ inner[0]
@@ -324,9 +324,9 @@ test "Index" {
         },
         .{
             .input =
-            \\ const inner = [1,2,3,4,5]
-            \\ const mid = [inner, 6,7,8]
-            \\ const outer = [mid,9]
+            \\ const inner = List{1,2,3,4,5}
+            \\ const mid = List{inner, 6,7,8}
+            \\ const outer = List{mid,9}
             \\ outer[0][0][4] = 99
             \\ print(outer)
             \\ outer[0][0][4]
@@ -687,7 +687,7 @@ test "Loops" {
         \\ x
         , .value = 10 },
         .{ .input = 
-        \\ const list = [1,2,3,4,5]
+        \\ const list = List{1,2,3,4,5}
         \\ var sum = 0
         \\ for list |item| {
         \\     sum += item
@@ -695,7 +695,7 @@ test "Loops" {
         \\ sum
         , .value = 15 },
         .{ .input = 
-        \\ const set = {1,2,3,3,3}
+        \\ const set = Set{1,2,3,3,3}
         \\ var sum = 0
         \\ for set |item| {
         \\     sum += item
@@ -703,7 +703,7 @@ test "Loops" {
         \\ sum
         , .value = 6 },
         .{ .input = 
-        \\ const map = {1:2,3:4,5:6}
+        \\ const map = Map{1:2,3:4,5:6}
         \\ var sum = 0
         \\ for map |kvp| {
         \\     sum += kvp.key + kvp.value
@@ -718,7 +718,7 @@ test "Loops" {
         \\ sum
         , .value = 55 },
         .{ .input = 
-        \\ const list = [1,2,3,4,5]
+        \\ const list = List{1,2,3,4,5}
         \\ var sum = 0
         \\ for 0..(list.count() - 1) |i| {
         \\     sum += list[i]
@@ -745,7 +745,7 @@ test "Loops" {
 
 test "Classes" {
     const input =
-        \\ class Test {
+        \\ class Test = {
         \\    value = 0
         \\ }
     ;
@@ -763,12 +763,12 @@ test "Classes" {
 
 test "Instance" {
     const input =
-        \\ class Test {
+        \\ class Test = {
         \\    value = 0,
         \\    fn = || return "func",
         \\    incr = |i| self.value += i,
-        \\    list = [],
-        \\    nested = []
+        \\    list = List{},
+        \\    nested = List{}
         \\ }
         \\ const test = new Test{}
         \\ test.value = 5
