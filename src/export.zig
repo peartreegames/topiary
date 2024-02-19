@@ -19,6 +19,7 @@ const Choice = runners.Choice;
 var alloc = std.heap.page_allocator;
 var debug_log: ?OnExportDebugLog = null;
 var debug_severity: Severity = .err;
+var buf: [1_048_576]u8 = undefined;
 
 const ExportDialogue = extern struct {
     content: [*c]const u8,
@@ -51,7 +52,6 @@ const Severity = enum(u8) {
 fn log(comptime msg: []const u8, args: anytype, severity: Severity) void {
     if (@intFromEnum(severity) < @intFromEnum(debug_severity)) return;
     if (debug_log) |l| {
-        var buf: [16_384]u8 = undefined;
         const fmt = std.fmt.bufPrintZ(&buf, msg, args) catch |err| blk: {
             std.log.err("Error fmt: {}", .{err});
             break :blk msg;
@@ -73,11 +73,7 @@ export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, m
     defer arena.deinit();
     var comp_alloc = arena.allocator();
 
-    const file_path = path_ptr[0..path_length];
-    const full_path = std.fs.cwd().realpathAlloc(comp_alloc, file_path) catch |err| {
-        log("Could not get full path for '{s}': {s}", .{ file_path, @errorName(err) }, .err);
-        return;
-    };
+    const full_path = path_ptr[0..path_length];
     var mod = Module{
         .allocator = comp_alloc,
         .entry = undefined,
@@ -99,7 +95,6 @@ export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, m
         return;
     };
 
-    var buf: [4096]u8 = undefined;
     var err_fbs = std.io.fixedBufferStream(&buf);
 
     file.buildTree(comp_alloc) catch |err| {
@@ -107,7 +102,7 @@ export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, m
             log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
             return;
         };
-        log("Could not parse file '{s}': {s}\n{s}", .{ file_path, @errorName(err), buf[0..] }, .err);
+        log("Could not parse file '{s}': {s}\n{s}", .{ full_path, @errorName(err), buf[0..] }, .err);
         return;
     };
 
@@ -122,7 +117,7 @@ export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, m
             log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
             return;
         };
-        log("Could not compile file '{s}': {s}\n{s}", .{ file_path, @errorName(err), buf[0..] }, .err);
+        log("Could not compile file '{s}': {s}\n{s}", .{ full_path, @errorName(err), buf[0..] }, .err);
         return;
     };
     var bytecode = compiler.bytecode() catch |err| {
@@ -501,7 +496,6 @@ test "Create and Destroy Vm" {
     defer debug_log = null;
     defer debug_severity = .err;
 
-    var buf: [4096]u8 = undefined;
     const file = try std.fs.cwd().createFile("tmp.topi", .{ .read = true });
     defer std.fs.cwd().deleteFile("tmp.topi") catch |err| {
         std.log.warn("Could not delete file: {}", .{err});
