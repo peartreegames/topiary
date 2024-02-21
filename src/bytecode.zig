@@ -190,8 +190,8 @@ pub const Bytecode = struct {
                     _ = id;
                     i += 4;
                     const visit_id = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
-                    i += 4;
                     _ = visit_id;
+                    i += 4;
                     writer.print("{d: >8}", .{dest});
                     writer.print(" unique: {}", .{is_unique});
                 },

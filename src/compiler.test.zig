@@ -21,10 +21,10 @@ const testing = std.testing;
 const allocator = testing.allocator;
 const cl = initial_constants.len;
 const Module = module.Module;
-const errWriter = std.io.getStdIn().writer();
 const Compiler = compiler.Compiler;
 
 pub fn compileSource(source: []const u8, mod: *Module) !Bytecode {
+    const errWriter = std.io.getStdIn().writer();
     parseSource(source, mod) catch |err| {
         try mod.writeErrors(errWriter);
         return err;
@@ -59,6 +59,7 @@ test "Basic Compile" {
         },
     };
 
+    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         var mod = Module.create(allocator);
         defer mod.deinit();
@@ -151,6 +152,7 @@ test "Conditionals Compile" {
         },
     };
 
+    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         var mod = Module.create(allocator);
         defer mod.deinit();
@@ -242,6 +244,7 @@ test "Variables" {
         },
     };
 
+    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         var mod = Module.create(allocator);
         defer mod.deinit();
@@ -301,6 +304,7 @@ test "Strings" {
         },
     };
 
+    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         var mod = Module.create(allocator);
         defer mod.deinit();
@@ -402,6 +406,7 @@ test "Lists" {
         },
     };
 
+    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         var mod = Module.create(allocator);
         defer mod.deinit();
@@ -598,6 +603,7 @@ test "Maps and Sets" {
         },
     };
 
+    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         var mod = Module.create(allocator);
         defer mod.deinit();
@@ -691,6 +697,7 @@ test "Index" {
         },
     };
 
+    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         var mod = Module.create(allocator);
         defer mod.deinit();
@@ -1090,6 +1097,7 @@ test "Functions" {
         },
     };
 
+    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
         var mod = Module.create(allocator);
@@ -1240,6 +1248,7 @@ test "Locals" {
         },
     };
 
+    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
         var mod = Module.create(allocator);
@@ -1302,6 +1311,7 @@ test "Builtin Functions" {
         },
     };
 
+    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
         var mod = Module.create(allocator);
@@ -1582,6 +1592,7 @@ test "Closures" {
         },
     };
 
+    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
         var mod = Module.create(allocator);
@@ -1659,6 +1670,7 @@ test "Classes" {
         },
     };
 
+    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
         var mod = Module.create(allocator);
@@ -1695,6 +1707,7 @@ test "Serialize" {
         \\ const map = Map{1:2.2, 3: 4.4}
     ;
 
+    const errWriter = std.io.getStdIn().writer();
     errdefer std.log.warn("{s}", .{input});
     var mod = Module.create(allocator);
     defer mod.deinit();

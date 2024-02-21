@@ -477,7 +477,7 @@ pub const Vm = struct {
                         try args.append(self.pop());
                     }
                     std.mem.reverse(Value, args.items);
-                    var buf: [1028]u8 = undefined;
+                    var buf: [4096]u8 = undefined;
                     var fbs = std.io.fixedBufferStream(&buf);
                     var writer = fbs.writer();
                     // index

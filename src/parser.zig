@@ -899,11 +899,12 @@ pub const Parser = struct {
         const start_token = self.current_token;
         self.next();
         var speaker: ?[]const u8 = null;
+        if (self.currentIs(.string)) return self.fail("Strings are not permitted as Speakers", start_token, .{});
         if (!self.currentIs(.colon)) {
             const speaker_start = self.current_token.start;
             var speaker_end = self.current_token.end;
             // allow any character including spaces for speaker
-            while (!self.currentIs(.colon)) {
+            while (!self.currentIs(.colon) and !self.currentIs(.eof)) {
                 self.next();
                 speaker_end = self.current_token.end;
             }

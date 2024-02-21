@@ -19,7 +19,6 @@ const Choice = runners.Choice;
 var alloc = std.heap.page_allocator;
 var debug_log: ?OnExportDebugLog = null;
 var debug_severity: Severity = .err;
-var buf: [1_048_576]u8 = undefined;
 
 const ExportDialogue = extern struct {
     content: [*c]const u8,
@@ -52,11 +51,12 @@ const Severity = enum(u8) {
 fn log(comptime msg: []const u8, args: anytype, severity: Severity) void {
     if (@intFromEnum(severity) < @intFromEnum(debug_severity)) return;
     if (debug_log) |l| {
-        const fmt = std.fmt.bufPrintZ(&buf, msg, args) catch |err| blk: {
+        var buf: [65535]u8 = [_]u8{0} ** 65535;
+        const fmt = std.fmt.bufPrint(&buf, msg, args) catch |err| blk: {
             std.log.err("Error fmt: {}", .{err});
             break :blk msg;
         };
-        l(fmt.ptr, severity);
+        l(buf[0..fmt.len].ptr, severity);
     }
 }
 
@@ -68,7 +68,7 @@ export fn setDebugSeverity(severity: u8) void {
     debug_severity = @enumFromInt(severity);
 }
 
-export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, max: usize) void {
+export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, max: usize) usize {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     var comp_alloc = arena.allocator();
@@ -81,53 +81,58 @@ export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, m
     };
     const file = comp_alloc.create(File) catch |err| {
         log("Could not allocate Module File: {s}", .{@errorName(err)}, .err);
-        return;
+        return 0;
     };
     file.* = File.create(full_path, &mod) catch |err| {
         log("Could not create Module File: {s}", .{@errorName(err)}, .err);
-        return;
+        return 0;
     };
     mod.entry = file;
     mod.includes.putNoClobber(file.path, file) catch unreachable;
     defer mod.deinit();
     file.loadSource(comp_alloc) catch |err| {
         log("Could not load file source: {s}", .{@errorName(err)}, .err);
-        return;
+        return 0;
     };
 
+    var buf: [65535]u8 = [_]u8{0} ** 65535;
     var err_fbs = std.io.fixedBufferStream(&buf);
 
     file.buildTree(comp_alloc) catch |err| {
         mod.writeErrors(err_fbs.writer()) catch |e| {
             log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
-            return;
+            return 0;
         };
-        log("Could not parse file '{s}': {s}\n{s}", .{ full_path, @errorName(err), buf[0..] }, .err);
-        return;
+        log("Could not parse file '{s}': {s}\n{s}", .{ full_path, @errorName(err), buf[0..err_fbs.pos] }, .err);
+        return 0;
     };
 
     var compiler = Compiler.init(comp_alloc) catch |err| {
         log("Could not create compiler: {s}", .{@errorName(err)}, .err);
-        return;
+        return 0;
     };
     defer compiler.deinit();
 
     compiler.compile(&mod) catch |err| {
         mod.writeErrors(err_fbs.writer()) catch |e| {
             log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
-            return;
+            return 0;
         };
-        log("Could not compile file '{s}': {s}\n{s}", .{ full_path, @errorName(err), buf[0..] }, .err);
-        return;
+        log("Could not compile file '{s}': {s}\n{s}", .{ full_path, @errorName(err), buf[0..err_fbs.pos] }, .err);
+        return 0;
     };
     var bytecode = compiler.bytecode() catch |err| {
         log("Could not create bytecode: {s}", .{@errorName(err)}, .err);
-        return;
+        return 0;
     };
 
     var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
     const writer = fbs.writer();
-    bytecode.serialize(writer) catch |err| log("Could not serialize bytecode: {s}", .{@errorName(err)}, .err);
+    bytecode.serialize(writer) catch |err| {
+        log("Could not serialize bytecode: {s}", .{@errorName(err)}, .err);
+        return 0;
+    };
+    return fbs.pos;
 }
 
 export fn start(vm_ptr: usize) void {
@@ -504,7 +509,13 @@ test "Create and Destroy Vm" {
     try file.writer().writeAll(text);
 
     try file.seekTo(0);
-    compile("tmp.topi", "tmp.topi".len, &buf, buf.len);
+    var buf: [6553]u8 = [_]u8{0} ** 6553;
+    const dir_path = try std.fs.cwd().realpathAlloc(std.testing.allocator,".");
+    defer std.testing.allocator.free(dir_path);
+    const path = try std.fs.path.resolve(std.testing.allocator, &.{dir_path,"tmp.topi"});
+    defer std.testing.allocator.free(path);
+    try std.testing.expect(compile(path.ptr, path.len, &buf, buf.len) > 0);
+
     const on_dialogue: OnExportDialogue = TestRunner.onDialogue;
     const on_choices: OnExportChoices = TestRunner.onChoices;
 

@@ -16,7 +16,6 @@ const Choice = runners.Choice;
 
 const Compiler = compiler.Compiler;
 const Module = module.Module;
-const errWriter = std.io.getStdIn().writer();
 const allocator = std.testing.allocator;
 
 pub const TestRunner = struct {
@@ -59,6 +58,8 @@ pub const TestRunner = struct {
 
 var test_runner = TestRunner.init();
 pub fn initTestVm(source: []const u8, mod: *Module, debug: bool) !Vm {
+
+    const errWriter = std.io.getStdIn().writer();
     var bytecode = compileSource(source, mod) catch |err| {
         try mod.writeErrors(errWriter);
         return err;

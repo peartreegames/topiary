@@ -7,7 +7,6 @@ const module = @import("module.zig");
 const Module = module.Module;
 const File = module.File;
 const testing = std.testing;
-const errWriter = std.io.getStdErr().writer();
 const allocator = testing.allocator;
 
 pub fn parseSource(source: []const u8, mod: *Module) !void {
@@ -55,6 +54,7 @@ test "Parse Declaration" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(t, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -90,6 +90,7 @@ test "Parse Function Declaration" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(t, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -110,6 +111,7 @@ test "Parse Function Arguments" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(t, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -137,6 +139,7 @@ test "Parse Enums" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(t, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -165,6 +168,7 @@ test "Parse Iterable Types" {
         defer mod.deinit();
         defer mod.entry.source_loaded = false;
         parseSource(case.input, &mod) catch |err| {
+            const errWriter = std.io.getStdErr().writer();
             try mod.writeErrors(errWriter);
             return err;
         };
@@ -193,6 +197,7 @@ test "Parse Empty Iterable Types" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(input, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -214,6 +219,7 @@ test "Parse Nested Iterable Types" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(input, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -234,6 +240,7 @@ test "Parse Extern" {
         defer mod.deinit();
         defer mod.entry.source_loaded = false;
         parseSource(case.input, &mod) catch |err| {
+            const errWriter = std.io.getStdErr().writer();
             try mod.writeErrors(errWriter);
             return err;
         };
@@ -262,6 +269,7 @@ test "Parse Enum" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(input, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -300,6 +308,7 @@ test "Parse If" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(input, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -330,6 +339,7 @@ test "Parse Call expression" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(input, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -357,6 +367,7 @@ test "Parse For loop" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(input, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -385,6 +396,7 @@ test "Parse While loop" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(input, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -403,6 +415,7 @@ test "Parse Indexing" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(input, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -427,6 +440,7 @@ test "Parse Bough" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(input, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -452,6 +466,7 @@ test "Parse No Speaker" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(input, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -470,6 +485,7 @@ test "Parse divert" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(input, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -494,6 +510,7 @@ test "Parse Forks" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(input, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -523,6 +540,7 @@ test "Parse Inline Code" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     parseSource(input, &mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
