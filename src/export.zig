@@ -51,12 +51,12 @@ const Severity = enum(u8) {
 fn log(comptime msg: []const u8, args: anytype, severity: Severity) void {
     if (@intFromEnum(severity) < @intFromEnum(debug_severity)) return;
     if (debug_log) |l| {
-        var buf: [65535]u8 = [_]u8{0} ** 65535;
-        const fmt = std.fmt.bufPrint(&buf, msg, args) catch |err| blk: {
+        const fmt = std.fmt.allocPrint(alloc, msg, args) catch |err| blk: {
             std.log.err("Error fmt: {}", .{err});
             break :blk msg;
         };
-        l(buf[0..fmt.len].ptr, severity);
+        defer alloc.free(fmt);
+        l(fmt.ptr, severity);
     }
 }
 
@@ -95,15 +95,16 @@ export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, m
         return 0;
     };
 
-    var buf: [65535]u8 = [_]u8{0} ** 65535;
-    var err_fbs = std.io.fixedBufferStream(&buf);
+    var output_log = std.ArrayList(u8).init(alloc);
+    defer output_log.deinit();
+    const output_writer = output_log.writer();
 
     file.buildTree(comp_alloc) catch |err| {
-        mod.writeErrors(err_fbs.writer()) catch |e| {
+        mod.writeErrors(output_writer) catch |e| {
             log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
             return 0;
         };
-        log("Could not parse file '{s}': {s}\n{s}", .{ full_path, @errorName(err), buf[0..err_fbs.pos] }, .err);
+        log("Could not parse file '{s}': {s}\n{s}", .{ full_path, @errorName(err), output_log.items }, .err);
         return 0;
     };
 
@@ -114,11 +115,11 @@ export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, m
     defer compiler.deinit();
 
     compiler.compile(&mod) catch |err| {
-        mod.writeErrors(err_fbs.writer()) catch |e| {
+        mod.writeErrors(output_writer) catch |e| {
             log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
             return 0;
         };
-        log("Could not compile file '{s}': {s}\n{s}", .{ full_path, @errorName(err), buf[0..err_fbs.pos] }, .err);
+        log("Could not compile file '{s}': {s}\n{s}", .{ full_path, @errorName(err), output_log.items }, .err);
         return 0;
     };
     var bytecode = compiler.bytecode() catch |err| {
@@ -509,17 +510,18 @@ test "Create and Destroy Vm" {
     try file.writer().writeAll(text);
 
     try file.seekTo(0);
-    var buf: [6553]u8 = [_]u8{0} ** 6553;
+    const buf = try std.testing.allocator.alloc(u8, 4096);
+    defer std.testing.allocator.free(buf);
     const dir_path = try std.fs.cwd().realpathAlloc(std.testing.allocator,".");
     defer std.testing.allocator.free(dir_path);
     const path = try std.fs.path.resolve(std.testing.allocator, &.{dir_path,"tmp.topi"});
     defer std.testing.allocator.free(path);
-    try std.testing.expect(compile(path.ptr, path.len, &buf, buf.len) > 0);
+    try std.testing.expect(compile(path.ptr, path.len, buf.ptr, buf.len) > 0);
 
     const on_dialogue: OnExportDialogue = TestRunner.onDialogue;
     const on_choices: OnExportChoices = TestRunner.onChoices;
 
-    const vm_ptr = createVm(&buf, buf.len, @intFromPtr(on_dialogue), @intFromPtr(on_choices));
+    const vm_ptr = createVm(buf.ptr, buf.len, @intFromPtr(on_dialogue), @intFromPtr(on_choices));
     const vm: *Vm = @ptrFromInt(vm_ptr);
     vm.bytecode.print(std.debug);
     std.debug.print("\n=====\n", .{});

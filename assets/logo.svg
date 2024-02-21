@@ -7,7 +7,7 @@
    viewBox="0 0 339.99999 340"
    version="1.1"
    id="svg1"
-   inkscape:version="1.3.2 (091e20e, 2023-11-25)"
+   inkscape:version="1.3.2 (091e20e, 2023-11-25, custom)"
    sodipodi:docname="logo.svg"
    inkscape:export-filename="logo.png"
    inkscape:export-xdpi="76.797646"
@@ -26,14 +26,14 @@
      inkscape:pagecheckerboard="true"
      inkscape:deskcolor="#d1d1d1"
      inkscape:document-units="mm"
-     inkscape:zoom="0.22627417"
-     inkscape:cx="1814.1708"
-     inkscape:cy="967.85241"
-     inkscape:window-width="1760"
-     inkscape:window-height="955"
-     inkscape:window-x="0"
-     inkscape:window-y="44"
-     inkscape:window-maximized="0"
+     inkscape:zoom="0.32"
+     inkscape:cx="5682.8125"
+     inkscape:cy="904.6875"
+     inkscape:window-width="3840"
+     inkscape:window-height="2137"
+     inkscape:window-x="-8"
+     inkscape:window-y="-8"
+     inkscape:window-maximized="1"
      inkscape:current-layer="layer1">
     <inkscape:page
        x="0"
@@ -110,6 +110,18 @@
        margin="0"
        bleed="0"
        inkscape:label="horizontal_outline" />
+    <inkscape:page
+       x="1749.9998"
+       y="0"
+       width="339.99997"
+       height="339.99997"
+       id="page2"
+       margin="0"
+       bleed="0"
+       inkscape:label="error"
+       inkscape:export-filename="..\..\..\Users\blake\Unity\Modules\com.peartreegames.topiaryunity\Editor\Resources\error.png"
+       inkscape:export-xdpi="76.797646"
+       inkscape:export-ydpi="76.797646" />
   </sodipodi:namedview>
   <defs
      id="defs1">
@@ -658,6 +670,19 @@
        horizontal_mirror="false"
        vertical_mirror="true"
        overflow_perspective="false" />
+    <inkscape:path-effect
+       effect="perspective-envelope"
+       up_left_point="441.81299,570.46594"
+       up_right_point="587.41045,570.46594"
+       down_left_point="465.42571,648.99292"
+       down_right_point="563.79773,648.99292"
+       id="path-effect24-5-6-0-0-2"
+       is_visible="true"
+       lpeversion="1"
+       deform_type="perspective"
+       horizontal_mirror="false"
+       vertical_mirror="true"
+       overflow_perspective="false" />
   </defs>
   <g
      inkscape:label="Layer 1"
@@ -1169,6 +1194,66 @@
          style="font-style:normal;font-variant:normal;font-weight:900;font-stretch:normal;font-size:166.547px;font-family:'Source Code Pro';-inkscape-font-specification:'Source Code Pro Heavy';fill:#ffffff;fill-opacity:1;stroke-width:0.264582"
          x="2020.5312"
          y="591.70764">BYTE</tspan></text>
+    <g
+       id="g59-0-4-6-7-7"
+       transform="translate(1751.3138,28.600756)"
+       style="stroke:none">
+      <rect
+         style="fill:#231f20;fill-opacity:1;stroke:none;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1"
+         id="rect21-8-1-9-1-9"
+         width="22.188135"
+         height="101.19357"
+         x="513.80426"
+         y="482.49274"
+         rx="10.041204"
+         ry="10.041204" />
+      <path
+         id="rect24-4-8-8-2-9"
+         style="fill:#231f20;stroke:none;stroke-width:13.0538;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none"
+         d="m 453.02567,570.46594 123.1721,0 c 6.21182,0 9.05093,7.18916 6.53814,15.54577 l -16.54699,55.02903 c -1.35269,4.49853 -5.76999,7.95218 -9.96697,7.95218 l -83.22046,0 c -4.19699,0 -8.61428,-3.45365 -9.96697,-7.95218 l -16.54699,-55.02903 c -2.51279,-8.35661 0.32631,-15.54577 6.53814,-15.54577 z"
+         inkscape:original-d="m 453.02567,570.46594 h 123.1721 c 6.21182,0 11.21268,5.00086 11.21268,11.21268 v 56.02155 c 0,6.21183 -5.00086,11.21268 -11.21268,11.21268 h -123.1721 c -6.21183,0 -11.21268,-5.00085 -11.21268,-11.21268 v -56.02155 c 0,-6.21182 5.00085,-11.21268 11.21268,-11.21268 z"
+         inkscape:path-effect="#path-effect24-5-6-0-0-2"
+         transform="matrix(0.6128476,0,0,0.6128476,210.13148,211.87095)" />
+      <g
+         id="g52-4-9-4-6-4"
+         style="stroke:none">
+        <path
+           id="path17-2-9-8-1-3-3-3"
+           style="fill:#3f7e3b;fill-opacity:1;stroke:none;stroke-width:6;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1"
+           inkscape:transform-center-x="7.91606"
+           inkscape:transform-center-y="0.098570098"
+           d="m 476.97758,392.11903 c -11.08,0 -19.99982,8.91982 -19.99982,19.99982 l -10e-6,100.00009 c 10e-6,11.07999 8.91983,20.00033 19.99982,20.00033 h 90.23945 l 18.85001,15.04146 22.1878,17.70487 0.14779,-32.74633 h 18.5751 c 11.07999,10e-6 19.99981,-8.92034 19.99981,-20.00033 V 412.11885 c 0,-11.07999 -8.91982,-19.99982 -19.99981,-19.99982 z" />
+        <path
+           id="path17-2-1-6-3-0-8-5"
+           style="fill:#7cb45b;fill-opacity:1;stroke:none;stroke-width:6;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1"
+           inkscape:transform-center-x="-7.9160631"
+           inkscape:transform-center-y="0.098570098"
+           d="m 421.41506,374.71647 c -11.07998,0 -20.00033,8.91982 -20.00032,19.99982 v 100.0001 c 0,11.07998 8.92033,19.99981 20.00032,19.9998 l 16.88942,10e-6 0.13848,30.71906 22.1878,-17.70487 16.30959,-13.0142 134.47449,10e-6 c 11.07998,-10e-6 20.00033,-8.91983 20.00033,-19.99981 V 394.71628 c -10e-6,-11.07998 -8.92035,-19.99981 -20.00034,-19.9998 z" />
+        <g
+           id="g51-7-7-7-0-3"
+           transform="translate(11.714943)"
+           style="stroke:none">
+          <rect
+             style="fill:#3f7e3b;fill-opacity:1;stroke:none;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1"
+             id="rect23-3-0-7-0-3-1"
+             width="190"
+             height="19.639254"
+             x="409.70001"
+             y="414.84012"
+             rx="7.2188139"
+             ry="7.2188139" />
+          <rect
+             style="fill:#3f7e3b;fill-opacity:1;stroke:none;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1"
+             id="rect23-5-4-6-6-6-9-3"
+             width="133.8681"
+             height="19.639254"
+             x="409.70001"
+             y="453.897"
+             rx="7.2188139"
+             ry="7.2188139" />
+        </g>
+      </g>
+    </g>
     <text
        xml:space="preserve"
        style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:188.384px;line-height:1.05;font-family:'MV Boli';-inkscape-font-specification:'MV Boli';stroke-width:0.264583"
@@ -1312,5 +1397,22 @@
          style="font-style:normal;font-variant:normal;font-weight:900;font-stretch:normal;font-size:188.384px;font-family:'Zen Maru Gothic';-inkscape-font-specification:'Zen Maru Gothic Heavy';fill:#ffffff;fill-opacity:1;stroke-width:12;stroke:#231f20;stroke-opacity:1;stroke-dasharray:none;paint-order:stroke fill markers"
          x="688.2442"
          y="1422.3053">topiary</tspan></text>
+    <path
+       style="fill:#f9f9f9;fill-opacity:1;stroke:#782121;stroke-width:30;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1;paint-order:stroke markers fill"
+       d="m 2316.653,480.31869 -112.1417,192.90324 h 220.5306 z"
+       id="path2"
+       sodipodi:nodetypes="cccc" />
+    <text
+       xml:space="preserve"
+       style="font-size:185.444px;line-height:1.05;font-family:'JetBrainsMono Nerd Font';-inkscape-font-specification:'JetBrainsMono Nerd Font';fill:#782121;fill-opacity:1;stroke-width:0.264582"
+       x="2266.2002"
+       y="653.84686"
+       id="text68-8-7"
+       transform="scale(0.99745986,1.0025466)"><tspan
+         sodipodi:role="line"
+         id="tspan68-4-6"
+         style="font-style:normal;font-variant:normal;font-weight:900;font-stretch:normal;font-size:185.444px;font-family:'Source Code Pro';-inkscape-font-specification:'Source Code Pro Heavy';fill:#782121;fill-opacity:1;stroke-width:0.264582"
+         x="2266.2002"
+         y="653.84686">!</tspan></text>
   </g>
 </svg>
