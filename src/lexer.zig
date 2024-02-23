@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const token = @import("./token.zig");
+const token = @import("token.zig");
 const Token = token.Token;
 const TokenType = token.TokenType;
 
@@ -13,7 +13,13 @@ pub const Lexer = struct {
     column: usize = 0,
 
     pub fn init(source: []const u8) Lexer {
-        var lexer = Lexer{ .source = source };
+        // Skip utf-8 BOM
+        const src_start = if (std.mem.startsWith(u8, source, "\xEF\xBB\xBF")) 3 else @as(usize, 0);
+        var lexer = Lexer{
+            .source = source,
+            .position = src_start,
+            .read_position = src_start,
+        };
         lexer.readChar();
         return lexer;
     }

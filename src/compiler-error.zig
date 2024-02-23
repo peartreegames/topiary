@@ -60,19 +60,22 @@ pub const CompilerErrors = struct {
             const line = err.token.line + self.offset_line;
             const column = err.token.column + self.offset_col;
 
+            if (start == end) end += 1;
             start = @min(start, source.len - 1);
             end = @min(end, source.len);
 
-            try writer.print("type: {s}, line: {}, column: {}\n", .{ tok.toString(err.token.token_type), line, column });
+            try writer.print("type: {s}, line: {}, column_start: {}, column_end: {}, source_start: {}, source_end: {}\n", .{ tok.toString(err.token.token_type), line, column, column + end - start, start, end });
 
             var lines = std.mem.splitSequence(u8, source, "\n");
             var lineNumber: usize = 1;
             while (lines.next()) |l| : (lineNumber += 1) {
                 if (lineNumber < line) continue;
-                try writer.print("{s}\n", .{l});
+                var lineStart: usize = 0;
+                if (lineNumber == 1) lineStart = if (std.mem.startsWith(u8, l, "\xEF\xBB\xBF")) 3 else @as(usize, 0);
+                try writer.print("{s}\n", .{l[lineStart..]});
                 try writer.writeByteNTimes(' ', column - 1);
                 try writer.writeByteNTimes('~', end - start);
-                try writer.writeAll("\x1b[0;35m^\n\x1b[0m");
+                try writer.writeAll("\n\x1b[0m");
                 break;
             }
         }

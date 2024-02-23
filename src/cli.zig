@@ -1,10 +1,10 @@
 const std = @import("std");
-const Vm = @import("./vm.zig").Vm;
-const Scope = @import("./scope.zig").Scope;
-const Compiler = @import("./compiler.zig").Compiler;
-const Errors = @import("./compiler-error.zig").CompilerErrors;
+const Vm = @import("vm.zig").Vm;
+const Scope = @import("scope.zig").Scope;
+const Compiler = @import("compiler.zig").Compiler;
+const Errors = @import("compiler-error.zig").CompilerErrors;
 const module = @import("module.zig");
-const runners = @import("./runner.zig");
+const runners = @import("runner.zig");
 
 const Runner = runners.Runner;
 const Dialogue = runners.Dialogue;
@@ -41,12 +41,13 @@ pub fn main() !void {
         try usage("");
         return;
     }
-    const maybe_flag = args.next();
     var is_compile = false;
     var out_path: ?[]const u8 = null;
     var is_auto = false;
     var auto_count: usize = 0;
-    if (maybe_flag) |flag| {
+    var is_dry = false;
+    var is_verbose = false;
+    while (args.next()) |flag| {
         if (std.mem.eql(u8, flag, "-c") or std.mem.eql(u8, flag, "--compile")) {
             const maybe_out_file = args.next();
             if (maybe_out_file == null) {
@@ -65,20 +66,45 @@ pub fn main() !void {
             is_auto = true;
             auto_count = try std.fmt.parseInt(u64, maybe_auto_count.?, 10);
         }
+        if (std.mem.eql(u8, flag, "-d") or std.mem.eql(u8, flag, "--dry")) {
+            is_dry = true;
+        }
+        if (std.mem.eql(u8, flag, "-v") or std.mem.eql(u8, flag, "--verbose")) {
+            is_verbose = true;
+        }
     }
 
     const allocator = arena.allocator();
-    const full_path = try std.fs.cwd().realpathAlloc(allocator, file_path.?);
-    var mod = try Module.init(allocator, full_path);
-    var bytecode = try mod.generateBytecode();
+    const full_path = std.fs.cwd().realpathAlloc(allocator, file_path.?) catch |err| {
+        try std.io.getStdErr().writer().print("Could not find file at {s}", .{file_path.?});
+        if (is_verbose) return err;
+        return;
+    };
+    var mod = Module.init(allocator, full_path) catch |err| {
+        if (is_verbose) return err;
+        return;
+    };
+    var bytecode = mod.generateBytecode() catch |err| {
+        if (is_verbose) return err;
+        return;
+    };
     defer bytecode.free(allocator);
     mod.deinit();
+
+    if (is_dry) {
+        var out = std.io.getStdOut().writer();
+        try out.writeAll("Success");
+        return;
+    }
 
     if (is_compile) {
         const file = try std.fs.cwd().createFile(out_path.?, .{});
         defer file.close();
         const writer = file.writer();
-        try bytecode.serialize(writer);
+        bytecode.serialize(writer) catch |err| {
+            if (is_verbose) return err;
+            return;
+        };
         return;
     }
 
@@ -112,7 +138,11 @@ pub fn main() !void {
     }
 
     var cli_runner = CliRunner.init();
-    var vm = try Vm.init(vm_alloc, bytecode, &cli_runner.runner);
+    var vm = Vm.init(vm_alloc, bytecode, &cli_runner.runner) catch |err| {
+        try std.io.getStdErr().writeAll("Could not initialize Vm");
+        if (is_verbose) return err;
+        return;
+    };
 
     vm.interpret() catch {
         vm.err.print(std.debug);
