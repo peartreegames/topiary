@@ -186,7 +186,7 @@ pub const Lexer = struct {
     fn readString(self: *Lexer) void {
         var count: usize = 0;
         var is_string = true;
-        while ((self.char != '"' or count > 0) and self.char != 0) {
+        while ((self.char != '"' or count > 0) and self.char != '\n' and self.char != 0) {
             if (self.source[self.position] == '\\') {
                 self.readChar();
                 self.readChar();
