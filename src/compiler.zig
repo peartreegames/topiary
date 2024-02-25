@@ -411,13 +411,6 @@ pub const Compiler = struct {
                 var values = std.ArrayList(Enum.Value).init(self.allocator);
                 const obj = try self.allocator.create(Value.Obj);
 
-                for (e.values, 0..) |value, i| {
-                    try values.append(.{
-                        .index = i,
-                        .name = try self.allocator.dupe(u8, value),
-                        .base = &obj.data.@"enum",
-                    });
-                }
                 obj.* = .{ .data = .{
                     .@"enum" = .{
                         .allocator = self.allocator,
@@ -425,6 +418,14 @@ pub const Compiler = struct {
                         .values = try values.toOwnedSlice(),
                     },
                 } };
+
+                for (e.values, 0..) |value, i| {
+                    try values.append(.{
+                        .index = i,
+                        .name = try self.allocator.dupe(u8, value),
+                        .base = &obj.data.@"enum",
+                    });
+                }
                 const i = try self.addConstant(.{ .obj = obj });
                 try self.writeOp(.constant, token);
                 _ = try self.writeInt(OpCode.Size(.constant), i, token);
