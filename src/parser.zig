@@ -901,14 +901,7 @@ pub const Parser = struct {
         var speaker: ?[]const u8 = null;
         if (self.currentIs(.string)) return self.fail("Strings are not permitted as Speakers", start_token, .{});
         if (!self.currentIs(.colon)) {
-            const speaker_start = self.current_token.start;
-            var speaker_end = self.current_token.end;
-            // allow any character including spaces for speaker
-            while (!self.currentIs(.colon) and !self.currentIs(.eof)) {
-                self.next();
-                speaker_end = self.current_token.end;
-            }
-            speaker = try self.allocator.dupe(u8, self.file.source[speaker_start..speaker_end]);
+            speaker = try self.consumeIdentifier();
         }
         try self.expectCurrent(.colon);
         self.next();
