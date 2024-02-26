@@ -26,6 +26,7 @@ pub const Type = enum(u8) {
     obj,
     map_pair,
     visit,
+    enum_value,
 };
 
 pub const Iterator = struct {
@@ -52,6 +53,7 @@ pub const Value = union(Type) {
         value: *Value,
     },
     visit: u32,
+    enum_value: Enum.Value,
 
     pub const Obj = struct {
         is_marked: bool = false,
@@ -157,6 +159,7 @@ pub const Value = union(Type) {
             .range => "range",
             .map_pair => "map_pair",
             .visit => "visit",
+            .enum_value => "enum_value",
             .obj => |o| switch (o.data) {
                 .string => "string",
                 .list => "list",
@@ -249,6 +252,10 @@ pub const Value = union(Type) {
             .visit => |v| {
                 try writer.writeInt(u32, v, .little);
             },
+            .enum_value => |e| {
+                try writer.writeByte(e.index);
+                // try writer.writeInt(OpCode.SizeOf(.constant));
+            },
             .obj => |o| {
                 try writer.writeByte(@intFromEnum(@as(Obj.DataType, o.data)));
                 try writer.writeAll(&o.id);
@@ -283,6 +290,15 @@ pub const Value = union(Type) {
                         try writer.writeInt(u16, @as(u16, @intCast(f.lines.len)), .little);
                         for (f.lines) |l| try writer.writeInt(u32, l, .little);
                     },
+                    .@"enum" => |e| {
+                        try writer.writeByte(@intCast(e.name.len));
+                        try writer.writeAll(e.name);
+                        try writer.writeByte(@intCast(e.values.len));
+                        for (e.values) |val| {
+                            try writer.writeByte(@intCast(val.len));
+                            try writer.writeAll(val);
+                        }
+                    },
                     else => {},
                 }
             },
@@ -304,6 +320,10 @@ pub const Value = union(Type) {
             },
             .visit => {
                 return .{ .visit = try reader.readInt(u32, .little) };
+            },
+            .enum_value => {
+                const index = try reader.readByte();
+                return .{ .enum_value = .{ .index = index, .base = undefined }};
             },
             .obj => {
                 const data_type: Obj.DataType = @enumFromInt(try reader.readByte());
@@ -378,6 +398,29 @@ pub const Value = union(Type) {
                         } };
                         return .{ .obj = obj };
                     },
+                    .@"enum" => {
+                        const name_length = try reader.readByte();
+                        const name_buf = try allocator.alloc(u8, name_length);
+                        try reader.readNoEof(name_buf);
+                        const values_length = try reader.readByte();
+                        const obj = try allocator.create(Value.Obj);
+                        obj.* = .{
+                            .data = .{
+                                .@"enum" = .{
+                                    .allocator = allocator,
+                                    .name = name_buf,
+                                    .values = try allocator.alloc([]const u8, values_length)
+                                }
+                            }
+                        };
+                        for (0..values_length) |i| {
+                            const value_name_length = try reader.readByte();
+                            const value_name_buf = try allocator.alloc(u8, value_name_length);
+                            try reader.readNoEof(value_name_buf);
+                            obj.data.@"enum".values[i] = value_name_buf;
+                        }
+                        return .{ .obj = obj };
+                    },
                     else => return error.Unknown,
                 }
             },
@@ -391,6 +434,7 @@ pub const Value = union(Type) {
             .bool => |b| writer.print("{}", .{b}),
             .nil => writer.print("nil", .{}),
             .visit => |v| writer.print("{d}", .{v}),
+            .enum_value => |e| writer.print("{s}.{s}", .{e.base.name, e.base.values[e.index]}),
             .obj => |o| {
                 switch (o.data) {
                     .string => |s| writer.print("{s}", .{s}),
@@ -446,6 +490,15 @@ pub const Value = union(Type) {
                             writer.print("    {s}: ", .{key.*});
                             i.fields.get(key.*).?.print(writer, constants);
                             writer.print("\n", .{});
+                        }
+                        writer.print("}}", .{});
+                    },
+                    .@"enum" => |e| {
+                        writer.print("{s}{{", .{e.name});
+                        for(e.values, 0..) |val, i| {
+                            writer.print("{s}", .{val});
+                            if (i != e.values.len - 1)
+                                writer.print(", ", .{});
                         }
                         writer.print("}}", .{});
                     },

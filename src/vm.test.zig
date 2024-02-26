@@ -797,6 +797,37 @@ test "Instance" {
     try vm.interpret();
 }
 
+test "Enums" {
+    const input =
+        \\ enum TimeOfDay = {
+        \\  Morning,
+        \\  Afternoon,
+        \\  Evening,
+        \\  Night
+        \\ }
+        \\
+        \\  switch (5) {
+        \\      0..4: print(TimeOfDay.Night),
+        \\      5..11: print(TimeOfDay.Morning),
+        \\      12..16: print(TimeOfDay.Afternoon),
+        \\      16..21: print(TimeOfDay.Evening),
+        \\      22..24: print(TimeOfDay.Night),
+        \\      else: print(TimeOfDay.Morning)
+        \\  }
+        \\
+        \\ print(timeOfDay(5))
+        \\
+;
+
+    var mod = Module.create(allocator);
+    defer mod.deinit();
+    defer mod.entry.source_loaded = false;
+    var vm = try initTestVm(input, &mod,  true);
+    defer vm.deinit();
+    defer vm.bytecode.free(testing.allocator);
+    try vm.interpret();
+}
+
 test "Boughs" {
     const test_cases = .{
         .{ .input = 

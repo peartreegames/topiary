@@ -408,24 +408,23 @@ pub const Compiler = struct {
                 try self.setSymbol(symbol, token, true);
             },
             .@"enum" => |e| {
-                var values = std.ArrayList(Enum.Value).init(self.allocator);
+                var names = std.ArrayList([]const u8).init(self.allocator);
+                defer names.deinit();
                 const obj = try self.allocator.create(Value.Obj);
 
-                obj.* = .{ .data = .{
-                    .@"enum" = .{
-                        .allocator = self.allocator,
-                        .name = try self.allocator.dupe(u8, e.name),
-                        .values = try values.toOwnedSlice(),
-                    },
-                } };
-
-                for (e.values, 0..) |value, i| {
-                    try values.append(.{
-                        .index = i,
-                        .name = try self.allocator.dupe(u8, value),
-                        .base = &obj.data.@"enum",
-                    });
+                for (e.values) |value| {
+                    try names.append(try self.allocator.dupe(u8, value));
                 }
+
+                obj.* = .{
+                    .data = .{
+                        .@"enum" = .{
+                            .allocator = self.allocator,
+                            .name = try self.allocator.dupe(u8, e.name),
+                            .values = try names.toOwnedSlice(),
+                        },
+                    },
+                };
                 const i = try self.addConstant(.{ .obj = obj });
                 try self.writeOp(.constant, token);
                 _ = try self.writeInt(OpCode.Size(.constant), i, token);
