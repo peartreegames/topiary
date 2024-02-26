@@ -58,7 +58,6 @@ pub const TestRunner = struct {
 
 var test_runner = TestRunner.init();
 pub fn initTestVm(source: []const u8, mod: *Module, debug: bool) !Vm {
-
     const errWriter = std.io.getStdIn().writer();
     var bytecode = compileSource(source, mod) catch |err| {
         try mod.writeErrors(errWriter);

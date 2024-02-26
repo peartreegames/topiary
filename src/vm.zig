@@ -267,8 +267,7 @@ pub const Vm = struct {
     }
 
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {
-        var buf: [2048]u8 = undefined;
-        self.err.msg = try std.fmt.bufPrint(buf[0..], msg, args);
+        self.err.msg = try std.fmt.allocPrint(self.allocator, msg, args);
         self.err.line = self.currentFrame().cl.data.closure.data.function.lines[self.currentFrame().ip];
         return Error.RuntimeError;
     }
@@ -477,9 +476,9 @@ pub const Vm = struct {
                         try args.append(self.pop());
                     }
                     std.mem.reverse(Value, args.items);
-                    var buf: [4096]u8 = undefined;
-                    var fbs = std.io.fixedBufferStream(&buf);
-                    var writer = fbs.writer();
+                    var list = std.ArrayList(u8).init(self.allocator);
+                    defer list.deinit();
+                    var writer = list.writer();
                     // index
                     var i: usize = 0;
                     var a: usize = 0;
@@ -491,10 +490,10 @@ pub const Vm = struct {
                         if (c == '{') {
                             try writer.writeAll(str[s..i]);
                             switch (args.items[a]) {
-                                .number => |n| try std.fmt.formatFloatDecimal(n, std.fmt.FormatOptions{}, fbs.writer()),
+                                .number => |n| try std.fmt.formatFloatDecimal(n, std.fmt.FormatOptions{}, list.writer()),
                                 .bool => |b| try writer.writeAll(if (b) "true" else "false"),
                                 .obj => |o| try writer.writeAll(o.data.string),
-                                .visit => |v| try std.fmt.formatIntValue(v, "", .{}, fbs.writer()),
+                                .visit => |v| try std.fmt.formatIntValue(v, "", .{}, list.writer()),
                                 else => return self.fail("Unsupported interpolated type {s} for {s}", .{ args.items[a].typeName(), str }),
                             }
                             i += 1;
@@ -503,7 +502,7 @@ pub const Vm = struct {
                         }
                     }
                     try writer.writeAll(str[s..]);
-                    try self.pushAlloc(.{ .string = try self.allocator.dupe(u8, fbs.getWritten()) });
+                    try self.pushAlloc(.{ .string = try list.toOwnedSlice() });
                 },
                 .list => {
                     var count = self.readInt(OpCode.Size(.list));
