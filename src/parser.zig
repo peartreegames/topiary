@@ -360,7 +360,7 @@ pub const Parser = struct {
     fn returnStatement(self: *Parser) Error!Statement {
         const start_token = self.current_token;
         self.next();
-        if (self.currentIsOneOf(&[_]TokenType{ .eof, .right_brace })) {
+        if (self.currentIs(.void)) {
             return .{
                 .token = start_token,
                 .type = .return_void,
@@ -518,7 +518,8 @@ pub const Parser = struct {
     // if no braces used will parse a single statement into a list
     fn block(self: *Parser) Error![]const Statement {
         var list = std.ArrayList(Statement).init(self.allocator);
-        if (!self.currentIs(.left_brace)) {
+        const has_brace = self.currentIs(.left_brace);
+        if (!has_brace) {
             try list.append(try self.statement());
             return try list.toOwnedSlice();
         }
@@ -526,6 +527,9 @@ pub const Parser = struct {
         while (!self.currentIsOneOf([2]TokenType{ .right_brace, .eof })) {
             try list.append(try self.statement());
             self.next();
+        }
+        if (has_brace and self.currentIs(.eof)) {
+            return self.fail("Missing closing brace", self.current_token, .{});
         }
         return try list.toOwnedSlice();
     }

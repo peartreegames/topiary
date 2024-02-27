@@ -806,23 +806,24 @@ test "Enums" {
         \\  Night
         \\ }
         \\
-        \\  switch (5) {
-        \\      0..4: print(TimeOfDay.Night),
-        \\      5..11: print(TimeOfDay.Morning),
-        \\      12..16: print(TimeOfDay.Afternoon),
-        \\      16..21: print(TimeOfDay.Evening),
-        \\      22..24: print(TimeOfDay.Night),
-        \\      else: print(TimeOfDay.Morning)
+        \\ const timeOfDay = |hour| {
+        \\  switch (hour) {
+        \\      0..4: return TimeOfDay.Night,
+        \\      5..11: return TimeOfDay.Morning,
+        \\      12..16: return TimeOfDay.Afternoon,
+        \\      16..21: return TimeOfDay.Evening,
+        \\      22..24: return TimeOfDay.Night,
         \\  }
+        \\ }
         \\
         \\ print(timeOfDay(5))
         \\
-;
+    ;
 
     var mod = Module.create(allocator);
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
-    var vm = try initTestVm(input, &mod,  true);
+    var vm = try initTestVm(input, &mod, false);
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
     try vm.interpret();

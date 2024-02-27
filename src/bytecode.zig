@@ -207,8 +207,8 @@ pub const Bytecode = struct {
                     }
                 },
                 .prong => {
-                    const index = std.mem.readVarInt(u16, instructions[i..(i + 2)], .little);
-                    i += 2;
+                    const index = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
+                    i += 4;
                     writer.print("{d: >8}", .{index});
                     const count = instructions[i];
                     i += 1;
