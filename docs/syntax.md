@@ -425,6 +425,16 @@ const fib = |n| {
 }
 ```
 
+## Return Void
+
+If you want to return out of a function early you have to specify `return void` and not just `return` like most langauges.
+
+```topi
+const early = || {
+    if (true) return void
+}
+```
+
 ### Enums
 
 Enums are pretty standard

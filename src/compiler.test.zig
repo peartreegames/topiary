@@ -784,7 +784,7 @@ test "Functions" {
             },
         },
         .{
-            .input = "|| { 5 + 10 return }",
+            .input = "|| { 5 + 10 return void }",
             .instructions = [_]u8{
                 @intFromEnum(OpCode.closure),
                 2 + cl,

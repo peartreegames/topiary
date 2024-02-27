@@ -117,7 +117,11 @@ pub const Value = union(Type) {
         pub fn destroy(allocator: std.mem.Allocator, obj: *Obj) void {
             switch (obj.data) {
                 .string => |s| allocator.free(s),
-                .@"enum" => {},
+                .@"enum" => |e| {
+                    allocator.free(e.name);
+                    for (e.values) |val| allocator.free(val);
+                    allocator.free(e.values);
+                },
                 .list => |l| l.deinit(),
                 .map => obj.data.map.deinit(),
                 .set => obj.data.set.deinit(),
@@ -323,7 +327,7 @@ pub const Value = union(Type) {
             },
             .enum_value => {
                 const index = try reader.readByte();
-                return .{ .enum_value = .{ .index = index, .base = undefined }};
+                return .{ .enum_value = .{ .index = index, .base = undefined } };
             },
             .obj => {
                 const data_type: Obj.DataType = @enumFromInt(try reader.readByte());
@@ -404,15 +408,7 @@ pub const Value = union(Type) {
                         try reader.readNoEof(name_buf);
                         const values_length = try reader.readByte();
                         const obj = try allocator.create(Value.Obj);
-                        obj.* = .{
-                            .data = .{
-                                .@"enum" = .{
-                                    .allocator = allocator,
-                                    .name = name_buf,
-                                    .values = try allocator.alloc([]const u8, values_length)
-                                }
-                            }
-                        };
+                        obj.* = .{ .data = .{ .@"enum" = .{ .allocator = allocator, .name = name_buf, .values = try allocator.alloc([]const u8, values_length) } } };
                         for (0..values_length) |i| {
                             const value_name_length = try reader.readByte();
                             const value_name_buf = try allocator.alloc(u8, value_name_length);
@@ -434,7 +430,7 @@ pub const Value = union(Type) {
             .bool => |b| writer.print("{}", .{b}),
             .nil => writer.print("nil", .{}),
             .visit => |v| writer.print("{d}", .{v}),
-            .enum_value => |e| writer.print("{s}.{s}", .{e.base.name, e.base.values[e.index]}),
+            .enum_value => |e| writer.print("{s}.{s}", .{ e.base.name, e.base.values[e.index] }),
             .obj => |o| {
                 switch (o.data) {
                     .string => |s| writer.print("{s}", .{s}),
@@ -495,7 +491,7 @@ pub const Value = union(Type) {
                     },
                     .@"enum" => |e| {
                         writer.print("{s}{{", .{e.name});
-                        for(e.values, 0..) |val, i| {
+                        for (e.values, 0..) |val, i| {
                             writer.print("{s}", .{val});
                             if (i != e.values.len - 1)
                                 writer.print(", ", .{});
@@ -575,6 +571,7 @@ pub const Value = union(Type) {
                 .bool => |bl| bl == b.bool,
                 .nil => b == .nil,
                 .visit => |v| v == b.visit,
+                .enum_value => |e| e.base == b.enum_value.base and e.index == b.enum_value.index,
                 .obj => |o| {
                     const b_data = b.obj.data;
                     if (@intFromEnum(o.data) != @intFromEnum(b_data))
