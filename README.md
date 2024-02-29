@@ -15,9 +15,9 @@ It is recommended to start there to see how you can use topiary in your projects
 
 To run the CLI:
 
-```
-zig build
-./zig-out/bin/topi ./examples/hello.topi
+```sh
+zig build //or download from release page
+./zig-out/bin/topi run ./examples/hello.topi
 ```
 
 You can then press `enter` for the next line,
@@ -32,7 +32,7 @@ And examples in the [example folder](https://github.com/peartreegames/topiary/tr
 
 Here you can see what writing in topi looks like
 
-```
+```topi
 === START {
     :User: "How does this work?"
     :Author: "You write your dialogue like this, then you can use the compiler and virtual matchine to run it in game."
@@ -50,7 +50,6 @@ Here you can see what writing in topi looks like
         ~ "Okay, thanks." :Author: "Let me know in the issues if you have any questions!"
     }
 }
-=> START
 ```
 
 ## Future
