@@ -157,7 +157,7 @@ pub const Lexer = struct {
     }
 
     fn skipWhitespace(self: *Lexer) void {
-        while (isWhitespace(self.char)) {
+        while (isWhitespace(self.char) or self.char == ';') {
             if (isEndOfLine(self.char)) {
                 self.line += 1;
                 self.column = 1;

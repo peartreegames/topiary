@@ -18,12 +18,21 @@ fn usage(comptime msg: []const u8) !void {
     if (!std.mem.eql(u8, msg, "")) {
         try out.print(msg, .{});
         try out.print("\n", .{});
-    } else {
-        try out.print("topi - command line topiary processor\n", .{});
-        try out.print("Usage:\n", .{});
-        try out.print("\n", .{});
     }
-    try out.print("        topi <file> [--auto|-a <count>] [--compile|-c <output_file>]\n", .{});
+    try out.print("topi - command line topiary processor\n", .{});
+    try out.print("Usage:\n", .{});
+    try out.print("        topi [-v | --version] [-h | --help] <command> <file> [flags]\n", .{});
+    try out.print("\n", .{});
+    try out.print("Commands:\n", .{});
+    try out.print("        topi run <file> [start_bough] [--verbose]\n", .{});
+    try out.print("        topi auto <file> <count> [-verbose]\n", .{});
+    try out.print("        topi compile <file> [output_file] [--verbose] [--dry|-d]\n", .{});
+    try out.print("\n", .{});
+    try out.print("Flags:\n", .{});
+    try out.print("\n", .{});
+    try out.print("        --version, -v: Output current version\n", .{});
+    try out.print("        --verbose: Output debug logs\n", .{});
+    try out.print("        --dry, -d: Compile only\n", .{});
 }
 
 pub fn main() !void {
@@ -32,51 +41,64 @@ pub fn main() !void {
     var args = try std.process.argsWithAllocator(arena.allocator());
     _ = args.skip();
 
-    const file_path = args.next();
-    if (file_path == null) {
-        try usage("No file argument provided.\n");
-        return;
+    const maybe_cmd = args.next();
+    if (maybe_cmd == null) return usage("");
+    const cmd = maybe_cmd.?;
+
+    const is_version = std.mem.eql(u8, cmd, "-v") or std.mem.eql(u8, cmd, "--version");
+    if (is_version) return usage("");
+    const is_help = std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "--help");
+    if (is_help) return usage("");
+
+    const is_run = std.mem.eql(u8, cmd, "run");
+    const is_auto = std.mem.eql(u8, cmd, "auto");
+    const is_compile = std.mem.eql(u8, cmd, "compile");
+    if (!is_run and !is_auto and !is_compile) return usage("Unknown command");
+
+    const maybe_file_path = args.next();
+    if (maybe_file_path == null) {
+        return usage("No file argument provided.\n");
     }
-    if (std.mem.eql(u8, file_path.?, "-h") or std.mem.eql(u8, file_path.?, "--help")) {
-        try usage("");
-        return;
-    }
-    var is_compile = false;
+    const file_path = maybe_file_path.?;
+
     var out_path: ?[]const u8 = null;
-    var is_auto = false;
+    var bough_path: ?[]const u8 = null;
     var auto_count: usize = 0;
     var is_dry = false;
     var is_verbose = false;
-    while (args.next()) |flag| {
-        if (std.mem.eql(u8, flag, "-c") or std.mem.eql(u8, flag, "--compile")) {
-            const maybe_out_file = args.next();
-            if (maybe_out_file == null) {
-                try usage("Compile requires an output file.\n");
-                return;
+
+    if (is_run) {
+        bough_path = args.next();
+        if (bough_path) |b| {
+            if (std.mem.eql(u8, b, "--verbose")) {
+                bough_path = null;
+                is_verbose = true;
             }
-            is_compile = true;
-            out_path = maybe_out_file.?;
         }
-        if (std.mem.eql(u8, flag, "-a") or std.mem.eql(u8, flag, "--auto")) {
-            const maybe_auto_count = args.next();
-            if (maybe_auto_count == null) {
-                try usage("Auto requires a play count.\n");
-                return;
-            }
-            is_auto = true;
-            auto_count = try std.fmt.parseInt(u64, maybe_auto_count.?, 10);
-        }
-        if (std.mem.eql(u8, flag, "-d") or std.mem.eql(u8, flag, "--dry")) {
-            is_dry = true;
-        }
-        if (std.mem.eql(u8, flag, "-v") or std.mem.eql(u8, flag, "--verbose")) {
+    }
+    if (is_compile) {
+        out_path = args.next();
+        if (out_path == null) return usage("Compile requires an output path or --dry flag.");
+        is_dry = std.mem.eql(u8, out_path.?, "--dry") or std.mem.eql(u8, out_path.?, "-d");
+    }
+
+    if (is_auto) {
+        const maybe_count = args.next();
+        if (maybe_count == null) return usage("Auto requires a play count.\n");
+        auto_count = std.fmt.parseInt(u64, maybe_count.?, 10) catch {
+            return usage("Invalid auto count specified");
+        };
+    }
+    const flag = args.next();
+    if (flag) |f| {
+        if (std.mem.eql(u8, f, "--verbose")) {
             is_verbose = true;
         }
     }
 
     const allocator = arena.allocator();
-    const full_path = std.fs.cwd().realpathAlloc(allocator, file_path.?) catch |err| {
-        try std.io.getStdErr().writer().print("Could not find file at {s}", .{file_path.?});
+    const full_path = std.fs.cwd().realpathAlloc(allocator, file_path) catch |err| {
+        try std.io.getStdErr().writer().print("Could not find file at {s}", .{file_path});
         if (is_verbose) return err;
         return;
     };
@@ -117,7 +139,7 @@ pub fn main() !void {
             var auto_runner = AutoTestRunner.init();
             var vm = try Vm.init(vm_alloc, bytecode, &auto_runner.runner);
             vm.interpret() catch {
-                vm.err.print(std.debug);
+                vm.err.print(std.io.getStdErr().writer());
                 continue;
             };
             defer vm.deinit();
@@ -144,9 +166,13 @@ pub fn main() !void {
         return;
     };
 
-    vm.interpret() catch {
-        vm.err.print(std.debug);
-    };
+    try vm.start(bough_path);
+    while (vm.can_continue) {
+        vm.run() catch {
+            vm.err.print(std.io.getStdErr().writer());
+            break;
+        };
+    }
 }
 
 fn getFilePath(allocator: std.mem.Allocator) !?[]const u8 {

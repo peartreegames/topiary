@@ -58,9 +58,10 @@ pub const JumpTree = struct {
                 node = n.parent;
             }
             std.mem.reverse(*const Node, list.items);
-            for (list.items) |n| {
+            for (list.items, 0..) |n, i| {
+                if (i == 0) continue;
                 writer.writeAll(n.name) catch break;
-                writer.writeAll(".") catch break;
+                if (i != list.items.len - 1) writer.writeAll(".") catch break;
             }
         }
 

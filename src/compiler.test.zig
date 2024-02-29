@@ -1695,6 +1695,22 @@ test "Classes" {
     }
 }
 
+test "Global Jump Error" {
+    const input =
+        \\ === START {}
+        \\ => START
+    ;
+
+    var mod = Module.create(allocator);
+    defer mod.deinit();
+    defer mod.entry.source_loaded = false;
+    const err = compileSource(input, &mod);
+    const errWriter = std.io.getStdIn().writer();
+    try mod.writeErrors(errWriter);
+
+    try testing.expect(Compiler.Error.CompilerError == err);
+}
+
 test "Serialize" {
     const input =
         \\ var str = "string value"

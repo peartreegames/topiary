@@ -217,7 +217,6 @@ pub const Value = union(Type) {
             bool => if (value) True else False,
             @TypeOf(null) => Nil,
             f32 => .{ .number = value },
-            u32 => .{ .visit = value },
             else => unreachable,
         };
     }
@@ -258,7 +257,8 @@ pub const Value = union(Type) {
             },
             .enum_value => |e| {
                 try writer.writeByte(e.index);
-                // try writer.writeInt(OpCode.SizeOf(.constant));
+                try writer.writeByte(@intCast(e.base.name.len));
+                try writer.writeAll(e.base.name);
             },
             .obj => |o| {
                 try writer.writeByte(@intFromEnum(@as(Obj.DataType, o.data)));
@@ -294,14 +294,8 @@ pub const Value = union(Type) {
                         try writer.writeInt(u16, @as(u16, @intCast(f.lines.len)), .little);
                         for (f.lines) |l| try writer.writeInt(u32, l, .little);
                     },
-                    .@"enum" => |e| {
-                        try writer.writeByte(@intCast(e.name.len));
-                        try writer.writeAll(e.name);
-                        try writer.writeByte(@intCast(e.values.len));
-                        for (e.values) |val| {
-                            try writer.writeByte(@intCast(val.len));
-                            try writer.writeAll(val);
-                        }
+                    .instance => |i| {
+                        _ = i;
                     },
                     else => {},
                 }

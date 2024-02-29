@@ -10,6 +10,9 @@ pub const Bytecode = struct {
     uuids: []UUID.ID,
     locals_count: usize,
     token_lines: []u32,
+    boughs: []BoughJump,
+
+    pub const BoughJump = struct { name: []const u8, ip: OpCode.Size(.jump) };
 
     pub const GlobalSymbol = struct {
         name: []const u8,
@@ -29,6 +32,8 @@ pub const Bytecode = struct {
         allocator.free(self.uuids);
         for (self.global_symbols) |s| allocator.free(s.name);
         allocator.free(self.global_symbols);
+        for (self.boughs) |b| allocator.free(b.name);
+        allocator.free(self.boughs);
     }
 
     pub fn serialize(self: *Bytecode, writer: anytype) !void {
@@ -39,6 +44,13 @@ pub const Bytecode = struct {
             try writer.writeAll(sym.name);
             try writer.writeInt(OpCode.Size(.get_global), @as(OpCode.Size(.get_global), @intCast(sym.index)), .little);
             try writer.writeByte(if (sym.is_extern) 1 else 0);
+        }
+
+        try writer.writeInt(u64, @as(u64, @intCast(self.boughs.len)), .little);
+        for (self.boughs) |bough| {
+            try writer.writeInt(u16, @as(u16, @intCast(bough.name.len)), .little);
+            try writer.writeAll(bough.name);
+            try writer.writeInt(OpCode.Size(.jump), bough.ip, .little);
         }
 
         try writer.writeInt(u64, @as(u64, @intCast(self.instructions.len)), .little);
@@ -68,6 +80,19 @@ pub const Bytecode = struct {
             };
         }
 
+        const bough_count = try reader.readInt(u64, .little);
+        var boughs = try allocator.alloc(BoughJump, bough_count);
+        count = 0;
+        while (count < bough_count) : (count += 1) {
+            const length = try reader.readInt(u16, .little);
+            const buf = try allocator.alloc(u8, length);
+            try reader.readNoEof(buf);
+            boughs[count] = BoughJump{
+                .name = buf,
+                .ip = try reader.readInt(OpCode.Size(.jump), .little),
+            };
+        }
+
         const instruction_count = try reader.readInt(u64, .little);
         const instructions = try allocator.alloc(u8, instruction_count);
         try reader.readNoEof(instructions);
@@ -91,6 +116,7 @@ pub const Bytecode = struct {
         return .{
             .instructions = instructions,
             .token_lines = token_lines,
+            .boughs = boughs,
             .constants = constants,
             .global_symbols = global_symbols,
             .uuids = uuids,

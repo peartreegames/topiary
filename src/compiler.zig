@@ -139,8 +139,34 @@ pub const Compiler = struct {
                 .is_extern = s.is_extern,
             };
         }
+        var boughs = std.ArrayList(Bytecode.BoughJump).init(self.allocator);
+        defer boughs.deinit();
+        var stack = std.ArrayList(*const JumpTree.Node).init(self.allocator);
+        defer stack.deinit();
+        // reverse iterate so we keep the order when popping off stack
+        var i: usize = self.jump_tree.root.children.items.len;
+        while (i > 0) {
+            i -= 1;
+            try stack.append(self.jump_tree.root.children.items[i]);
+        }
+        while (stack.items.len > 0) {
+            var node = stack.pop();
+            var path = std.ArrayList(u8).init(self.allocator);
+            defer path.deinit();
+            try node.writePath(path.writer());
+            try boughs.append(.{
+                .name = try path.toOwnedSlice(),
+                .ip = node.dest_ip,
+            });
+            var child_i: usize = node.children.items.len;
+            while (child_i > 0) {
+                child_i -= 1;
+                try stack.append(node.children.items[child_i]);
+            }
+        }
         return .{
             .instructions = try self.chunk.instructions.toOwnedSlice(),
+            .boughs = try boughs.toOwnedSlice(),
             .token_lines = try self.chunk.token_lines.toOwnedSlice(),
             .constants = try self.constants.toOwnedSlice(),
             .global_symbols = global_symbols,
@@ -175,6 +201,9 @@ pub const Compiler = struct {
         }
 
         try self.replaceDiverts();
+        // Add one final fin at the end of file to grab the initial jump_request
+        try self.chunk.token_lines.append(self.chunk.token_lines.items[self.chunk.instructions.items.len - 1]);
+        try self.chunk.instructions.append(@intFromEnum(OpCode.fin));
     }
 
     fn enterChunk(self: *Compiler) !void {
@@ -561,6 +590,11 @@ pub const Compiler = struct {
                 try self.writeId(d.id, token);
             },
             .divert => |d| {
+                if (self.scope == self.root_scope) {
+                    const path = try std.mem.join(self.allocator, ".", d.path);
+                    defer self.allocator.free(path);
+                    return self.fail("Cannot execute jump \"{s}\" in global scope", token, .{path});
+                }
                 var backup_pos: usize = 0;
                 if (d.is_backup) {
                     try self.writeOp(.backup, token);
