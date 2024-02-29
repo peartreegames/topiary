@@ -10,7 +10,7 @@ var party = Set{"Rogue", "Druid", "Fighter", "Archer"}
 var gold = 0
 var spiderDefeated = false
 
-class Character {
+class Character = {
 	injured = false,
 }
 var rogue = new Character{}
@@ -18,7 +18,6 @@ var druid = new Character{}
 var fighter = new Character{}
 var archer = new Character{}
 
-=> TAVERN
 === TAVERN {
     :Innkeeper: "Welcome to the Rusty Tankard, travelers. A dire quest awaits those who are brave."
     :Innkeeper: "A terrible curse plagues our town, and we need your help. Are you four up for the challenge?"

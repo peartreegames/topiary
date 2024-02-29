@@ -571,7 +571,7 @@ test "Builtin Functions" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
-            vm.err.print(std.debug);
+            vm.err.print(std.io.getStdErr().writer());
             return err;
         };
         const value = vm.stack.previous();
@@ -734,7 +734,7 @@ test "Loops" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
-            vm.err.print(std.debug);
+            vm.err.print(std.io.getStdErr().writer());
             return err;
         };
         const value = vm.stack.previous();
@@ -836,7 +836,6 @@ test "Boughs" {
         \\    :speaker: "Text goes here" #tag1 #tag2
         \\    :speaker: "More text here"
         \\ }
-        \\ => START
         },
         .{ .input = 
         \\ === START {
@@ -845,7 +844,6 @@ test "Boughs" {
         \\    :speaker_one: "{before} and then more text here"
         \\    :speaker_two: "Text goes here {after}"
         \\ }
-        \\ => START
         },
         .{ .input = 
         \\ const repeat = |str, count| {
@@ -861,14 +859,12 @@ test "Boughs" {
         \\    :speaker_one: "Hello, {repeat("Yo ", 5)}!"
         \\    :speaker_two: "Uh.. hello?"
         \\ }
-        \\ => START
         },
         .{ .input = 
         \\ === START {
         \\     if true { :speaker: "This is true" }
         \\     else { :speaker: "This is false" }
         \\ }
-        \\ => START
         },
         .{ .input = 
         \\ === START {
@@ -877,7 +873,6 @@ test "Boughs" {
         \\    if false :speaker: "False text doesn't appear"
         \\    :speaker: "Final text here"
         \\ }
-        \\ => START
         },
         .{ .input = 
         \\ === START {
@@ -889,7 +884,6 @@ test "Boughs" {
         \\    => INNER
         \\    :speaker: "Final goes here" // should not be printed
         \\ }
-        \\ => START
         },
         .{ .input = 
         \\ === START {
@@ -904,7 +898,6 @@ test "Boughs" {
         \\    => OUTER.INNER
         \\    :speaker: "Text doesn't appear here" // should not be printed
         \\ }
-        \\ => START
         },
     };
 
@@ -932,9 +925,8 @@ test "Bough Loops" {
             \\         str = "{i}"
             \\         :Speaker: "Testing {str}"
             \\     }
-            \\ }
-            \\ => START^
             \\ i
+            \\ }
             ,
             .value = 5,
         },
@@ -947,7 +939,7 @@ test "Bough Loops" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
-            vm.err.print(std.debug);
+            vm.err.print(std.io.getStdErr().writer());
             return err;
         };
         const value = vm.stack.previous();
@@ -970,7 +962,6 @@ test "Forks" {
             \\        }
             \\    }
             \\ }
-            \\ => START
             ,
         },
         .{
@@ -989,7 +980,6 @@ test "Forks" {
             \\        }
             \\    }
             \\ }
-            \\ => START
             \\ === DONE {
             \\     :speaker: "Done"
             \\ }
@@ -1024,12 +1014,11 @@ test "Visits" {
             \\            :speaker: "You chose two"
             \\        }
             \\    }
-            \\ }
-            \\ => START^
             \\ print("START: {START}")
             \\ print("START.NAMED: {START.NAMED}")
             \\ print("START.NAMED.ONE: {START.NAMED.ONE}")
             \\ print("START.NAMED.TWO: {START.NAMED.TWO}")
+            \\ }
             ,
         },
         .{
@@ -1044,11 +1033,10 @@ test "Visits" {
             \\            :speaker: "You chose two"
             \\        }
             \\    }
-            \\ }
-            \\ => START^
             \\ print("START: {START}")
             \\ print("START._0.ONE: {START._0.ONE}")
             \\ print("START._0.TWO: {START._0.TWO}")
+            \\ }
             ,
         },
         .{
@@ -1066,12 +1054,11 @@ test "Visits" {
             \\            }
             \\        }
             \\    }
-            \\ }
-            \\ => START.INNER^
             \\ print(START)
             \\ print(START.INNER)
             \\ print(START.INNER._0.ONE)
             \\ print(START.INNER._0.TWO)
+            \\ }
             ,
         },
         .{
@@ -1091,7 +1078,6 @@ test "Visits" {
             \\         }
             \\     }
             \\ }
-            \\ => START
             ,
         },
     };
@@ -1112,7 +1098,6 @@ test "Jump Backups" {
     const test_cases = .{
         .{
             .input =
-            \\ => START
             \\ === START {
             \\     :speaker: "Question"
             \\     => MIDDLE^
@@ -1137,7 +1122,6 @@ test "Jump Backups" {
             \\    }
             \\    :speaker: "Continue here after fork"
             \\ }
-            \\ => START
             ,
         },
         .{
@@ -1164,7 +1148,6 @@ test "Jump Backups" {
             \\        :speaker: "Not done yet"
             \\     } else :speaker: "Done"
             \\ }
-            \\ => START
             ,
         },
     };
@@ -1197,12 +1180,10 @@ test "Jump Code" {
             \\        else :: "Done"
             \\    }
             \\ }
-            \\ => START.INNER
             ,
         },
         .{
             .input =
-            \\ => START.INNER
             \\ === START {
             \\    var firstValue = 0
             \\    :: "First: {firstValue}"
@@ -1228,7 +1209,7 @@ test "Jump Code" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
-            vm.err.print(std.debug);
+            vm.err.print(std.io.getStdErr().writer());
             return err;
         };
     }

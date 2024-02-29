@@ -43,7 +43,7 @@ pub const RuntimeErr = struct {
     msg: ?[]const u8 = null,
     pub fn print(self: @This(), writer: anytype) void {
         if (self.msg) |m| {
-            writer.print("Error at line {}: {s}\n", .{ self.line, m });
+            writer.print("Error at line {}: {s}\n", .{ self.line, m }) catch {};
         }
     }
 };
@@ -81,6 +81,7 @@ pub const Vm = struct {
 
     pub const Error = error{
         RuntimeError,
+        BoughNotFound,
         InvalidChoice,
         Uninitialized,
     } || Compiler.Error;
@@ -246,7 +247,8 @@ pub const Vm = struct {
     }
 
     pub fn interpret(self: *Vm) !void {
-        try self.start();
+        const path = if (self.bytecode.boughs.len == 0) null else self.bytecode.boughs[0].name;
+        try self.start(path);
         while (self.can_continue) {
             try self.run();
         }
@@ -257,13 +259,36 @@ pub const Vm = struct {
         // }
     }
 
-    pub fn start(self: *Vm) !void {
+    pub fn start(self: *Vm, bough_path: ?[]const u8) !void {
         self.can_continue = true;
         self.stack.resize(self.bytecode.locals_count);
         while (self.frames.count > 1) {
             _ = self.frames.pop();
         }
         self.currentFrame().ip = 0;
+        if (bough_path) |path| {
+            var split_it = std.mem.split(u8, path, ".");
+            var path_parts = std.ArrayList([]const u8).init(self.allocator);
+            defer path_parts.deinit();
+            while (split_it.next()) |split| {
+                try path_parts.append(split);
+                const current_path = try std.mem.join(self.allocator, ".", path_parts.items);
+                defer self.allocator.free(current_path);
+                var found = false;
+                for (self.bytecode.boughs) |b| {
+                    if (std.mem.eql(u8, current_path, b.name)) {
+                        try self.jump_requests.append(b.ip);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    self.err.msg = "Could not find starting path";
+                    self.err.line = 0;
+                    return Error.BoughNotFound;
+                }
+            }
+        }
     }
 
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {

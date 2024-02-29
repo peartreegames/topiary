@@ -55,9 +55,9 @@ pub const VisitTree = struct {
                 node = n.parent;
             }
             std.mem.reverse(*const Node, list.items);
-            for (list.items) |n| {
+            for (list.items, 0..) |n, i| {
                 writer.writeAll(n.name) catch break;
-                writer.writeByte('.') catch break;
+                if (i != list.items.len - 1) writer.writeByte('.') catch break;
             }
         }
 

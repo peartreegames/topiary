@@ -17,17 +17,24 @@ Tags can are also optional and can be omitted or multiple can be separated each 
 
 ### Jumps
 
-Boughs can be started with jumps, denoted with `=> [Name]`.
-
-So with that we can write a very simple program.
+Boughs can be started with jumps, denoted with `=> [Name]`. The first jump must be passed in to the `start` function,
+or if using the CLI the second parameter of the run command.
 
 ```topi
+# topi run file.topi START
+
 === START {
     :John: "Hello Jane!" #greet
     :Jane: "Great to see you, John"
 }
+```
 
-=> START
+#### Automatic Jump Starts
+
+As a convenience, if you don't pass in a jump to the CLI the first bough in the file will be used. 
+
+```topi
+# topi run file.topi // START will run in the above example
 ```
 
 ### Nesting
@@ -35,12 +42,13 @@ So with that we can write a very simple program.
 Boughs can be nested and jumped to with `.` like so:
 
 ```topi
+# topi run file.topi START.INNER
+
 === START {
     === INNER {
         :Speaker: "Start here"
     }
 }
-=> START.INNER
 ```
 
 ### Forks
@@ -63,8 +71,6 @@ Fork bodies can be either a jump or a block surrounded by braces.
 === END {
     :John: "This is hard"
 }
-
-=> START
 ```
 
 Forks can also be named to revisit, useful if wanting to loop choices.
@@ -82,7 +88,6 @@ Forks can also be named to revisit, useful if wanting to loop choices.
 === END {
     :John: "The hard way it is"
 }
-=> START
 ```
 
 Choices can also be unique with `~*`, this means once they are visited, 
@@ -103,7 +108,6 @@ they won't be added to the choice list again.
 === END {
     :John: "The hard way it is"
 }
-=> START
 ```
 
 Choices can also be named to get the visit count in the story, 
@@ -126,7 +130,6 @@ to be used in your runner code.
     print(START.DIFFICULTY.EASY) // everytime EASY was chosen
     print(START.DIFFICULTY.HARD) // everytime HARD was chosen
 }
-=> START
 ```
 
 ### Visits
@@ -180,7 +183,6 @@ Visit paths can be found within scopes and don't need the full path written out.
         }
     }
 }
-=> START
 ```
 
 ### Flow and Jump Back Ups
@@ -225,7 +227,6 @@ However named forks with backups should be used with caution.
     }
     :Jane: "Good choice."
 }
-=> START
 ```
 
 
@@ -406,7 +407,6 @@ const value = 42
     greeting = "Hello"
     :Jane: "{greeting}, John. The password is {value}." // Hello, John. The password is 42.
 }
-=> START
 ```
 
 ### Functions
@@ -529,6 +529,8 @@ When making nested jumps be aware that preceeding code will be execuded to ensur
 Consider the following
 
 ```topi
+# topi run file.topi
+// Expected output :Speaker: "End test 2"
 === START {
     :Speaker: "Start conversation"
     var test = "test"
@@ -538,11 +540,9 @@ Consider the following
         :Speaker: "End {test}"
     }
 }
-
-=> START.INNER // Expected output :Speaker: "End test 2"
 ```
 
-In this situation we need to creating the `test` variable before it's set to `test 2`.
+In this situation we need to create the `test` variable before it's set to `test 2`.
 To ensure that happens when you jump to `START.INNER` first Topiary will jump to `START`
 execute all code (while skipping dialogues and forks), then when it encounters another jump
 or ends, it'll then jump to `INNER`.

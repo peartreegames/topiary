@@ -136,7 +136,7 @@ export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, m
     return fbs.pos;
 }
 
-export fn start(vm_ptr: usize) void {
+export fn start(vm_ptr: usize, path_ptr: [*]const u8, path_len: usize) void {
     log("Starting VM", .{}, .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);
     for (vm.bytecode.global_symbols) |sym| {
@@ -144,7 +144,11 @@ export fn start(vm_ptr: usize) void {
             log("Export \"{s}\" has not been set", .{sym.name}, .warn);
         }
     }
-    vm.start() catch |err| log("Could not start vm: {any}", .{err}, .err);
+    const path = if (path_len > 0) path_ptr[0..path_len] else if (vm.bytecode.boughs.len > 0) vm.bytecode.boughs[0].name else {
+        log("Topi file does not have a start bough", .{}, .err);
+        return;
+    };
+    vm.start(path) catch |err| log("Could not start vm: {any}", .{err}, .err);
 }
 
 export fn run(vm_ptr: usize) void {
@@ -494,7 +498,6 @@ test "Create and Destroy Vm" {
         \\     :: "They walk away..."
         \\ }
         \\
-        \\ => START
     ;
 
     debug_log = TestRunner.log;
@@ -512,9 +515,9 @@ test "Create and Destroy Vm" {
     try file.seekTo(0);
     const buf = try std.testing.allocator.alloc(u8, 4096);
     defer std.testing.allocator.free(buf);
-    const dir_path = try std.fs.cwd().realpathAlloc(std.testing.allocator,".");
+    const dir_path = try std.fs.cwd().realpathAlloc(std.testing.allocator, ".");
     defer std.testing.allocator.free(dir_path);
-    const path = try std.fs.path.resolve(std.testing.allocator, &.{dir_path,"tmp.topi"});
+    const path = try std.fs.path.resolve(std.testing.allocator, &.{ dir_path, "tmp.topi" });
     defer std.testing.allocator.free(path);
     try std.testing.expect(compile(path.ptr, path.len, buf.ptr, buf.len) > 0);
 
@@ -532,7 +535,7 @@ test "Create and Destroy Vm" {
         val_name.len,
         @intFromPtr(&testSubscriber),
     );
-    start(vm_ptr);
+    start(vm_ptr, "", 0);
     while (canContinue(vm_ptr)) {
         run(vm_ptr);
         if (vm.err.msg) |msg| {
