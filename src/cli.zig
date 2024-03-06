@@ -166,7 +166,7 @@ pub fn main() !void {
         return;
     };
 
-    try vm.start(bough_path);
+    try vm.start(bough_path orelse vm.bytecode.boughs[0].name);
     while (vm.can_continue) {
         vm.run() catch {
             vm.err.print(std.io.getStdErr().writer());

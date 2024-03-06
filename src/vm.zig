@@ -411,7 +411,7 @@ pub const Vm = struct {
                         break;
                     }
 
-                    if (match) {
+                    if (match or values_count == 0) {
                         self.currentFrame().ip = dest;
                     }
                 },
@@ -973,7 +973,7 @@ pub const Vm = struct {
     fn prongIsMatch(self: *Vm, capture: Value, case: Value) bool {
         _ = self;
         return switch (case) {
-            .range => |r| @as(i32, @intFromFloat(capture.number)) >= r.start or @as(i32, @intFromFloat(capture.number)) <= r.end,
+            .range => |r| @as(i32, @intFromFloat(capture.number)) >= r.start and @as(i32, @intFromFloat(capture.number)) <= r.end,
             else => capture.eql(case),
         };
     }

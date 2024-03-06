@@ -414,7 +414,7 @@ const value = 42
 Functions are declared same as variables, with parameters between pipes (`|`)
 Braces are optional if only one line is used.
 
-**Functions cannot contain Boughs or Jumps, only logic. And currently functions can only be declared in global scope**
+**Functions cannot contain Boughs or Jumps, only logic.**
 
 ```topi
 const sum = |x, y| return x + y

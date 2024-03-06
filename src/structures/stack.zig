@@ -49,12 +49,13 @@ pub fn Stack(comptime T: type) type {
             return self.backing[self.count];
         }
 
-        pub fn print(self: *Self, writer: anytype, count: usize) void {
-            var i: usize = self.count - 1;
-            while (i >= count) : (i -= 1) {
+        pub fn print(self: *Self, writer: anytype) void {
+            var i: usize = self.count;
+            while (i > 0) {
+                i -= 1;
+                writer.print("[{d:0>4}]  ", .{i});
                 self.items[i].print(writer, null);
                 writer.print("\n", .{});
-                if (i == self.count - count) break;
             }
         }
     };

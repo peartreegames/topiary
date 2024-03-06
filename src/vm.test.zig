@@ -947,6 +947,86 @@ test "Bough Loops" {
     }
 }
 
+test "Bough Functions" {
+    const test_cases = .{
+        .{
+            .input =
+            \\ === START {
+            \\   const t = || return "test"
+            \\   :Speaker: "This is a {t()}"
+            \\ }
+            ,
+        },
+        .{
+            .input =
+            \\ === START {
+            \\   const sum = |x, y| return x + y
+            \\   :Speaker: "1 + 7 equals {sum(1, 7)}"
+            \\ }
+            ,
+        },
+        .{
+            .input =
+            \\ === START {
+            \\   const sum = |x, y| return x + y
+            \\   => INNER
+            \\   === INNER {
+            \\     :Speaker: "2 + 7 equals {sum(2, 7)}"
+            \\   }
+            \\ }
+            ,
+        },
+        .{
+            .input =
+            \\ const t = "test"
+            \\ === START {
+            \\   const value = 10
+            \\   const sum = |x, y| return x + y + value
+            \\   => INNER
+            \\   === INNER {
+            \\     :Speaker: "3 + 7 + {value} equals {sum(3, 7)}"
+            \\     :Speaker: "Testing 123 {t} 123"
+            \\   }
+            \\ }
+            ,
+        },
+        .{
+            .input =
+            \\ === START {
+            \\   const greet = |time| {
+            \\     switch time {
+            \\       5..11: return "Morning",
+            \\       12..16: return "Afternoon",
+            \\       17..21: return "Evening",
+            \\       else: return "Hello"
+            \\     }
+            \\   }
+            \\   => GREETING
+            \\   === GREETING {
+            \\     :Speaker: "{greet(1)}"
+            \\     :Speaker: "{greet(5)}"
+            \\     :Speaker: "{greet(10)}"
+            \\     :Speaker: "{greet(13)}"
+            \\     :Speaker: "{greet(21)}"
+            \\     :Speaker: "{greet(24)}"
+            \\   }
+            \\ }
+            ,
+        },
+    };
+
+    inline for (test_cases) |case| {
+        std.debug.print("\n======\n", .{});
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        var vm = try initTestVm(case.input, &mod, false);
+        defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
+        try vm.interpret();
+    }
+}
+
 test "Forks" {
     const test_cases = .{
         .{

@@ -98,6 +98,7 @@ pub const Value = union(Type) {
                 arity: u8,
                 backing: Builtin,
                 is_method: bool,
+                name: []const u8,
             },
             closure: struct {
                 data: *Data,
@@ -491,6 +492,9 @@ pub const Value = union(Type) {
                                 writer.print(", ", .{});
                         }
                         writer.print("}}", .{});
+                    },
+                    .builtin => |b| {
+                        writer.print("builtin {s}", .{b.name});
                     },
                     else => {
                         writer.print("{s}", .{@tagName(o.data)});

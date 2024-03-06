@@ -89,8 +89,8 @@ pub const Compiler = struct {
 
     pub fn init(allocator: std.mem.Allocator) !Compiler {
         const root_chunk = try Compiler.Chunk.create(allocator, null);
-        const root_scope = try Scope.create(allocator, null, .global, 0);
-        const root_builtins = try Scope.create(allocator, null, .builtin, 0);
+        const root_scope = try Scope.create(allocator, null, .global);
+        const root_builtins = try Scope.create(allocator, null, .builtin);
         return .{
             .allocator = allocator,
             .builtins = root_builtins,
@@ -218,12 +218,7 @@ pub const Compiler = struct {
     }
 
     fn enterScope(self: *Compiler, tag: Scope.Tag) !void {
-        self.scope = try Scope.create(
-            self.allocator,
-            self.scope,
-            tag,
-            if (self.scope.tag == .global or self.scope.tag == .closure) 0 else self.scope.count,
-        );
+        self.scope = try Scope.create(self.allocator, self.scope, tag);
     }
 
     fn exitScope(self: *Compiler) !void {
@@ -322,22 +317,24 @@ pub const Compiler = struct {
                 try self.compileExpression(&s.capture);
                 var prong_jumps = try self.allocator.alloc(usize, s.prongs.len);
                 defer self.allocator.free(prong_jumps);
+                // compile expressions and jumps
                 for (s.prongs, 0..) |prong_stmt, i| {
                     const prong = prong_stmt.type.switch_prong;
-                    if (prong.values == null) break;
-                    for (prong.values.?) |value| {
-                        try self.compileExpression(&value);
+                    if (prong.values) |p| {
+                        for (p) |value| {
+                            try self.compileExpression(&value);
+                        }
                     }
                     try self.writeOp(.prong, prong_stmt.token);
                     const prong_jump = try self.writeInt(OpCode.Size(.jump), PRONG_HOLDER, prong_stmt.token);
-                    _ = try self.writeInt(u8, @as(u8, @intCast(prong.values.?.len)), prong_stmt.token);
+                    _ = try self.writeInt(u8, @as(u8, @intCast(if (prong.values) |p| p.len else 0)), prong_stmt.token);
                     prong_jumps[i] = prong_jump;
                 }
 
+                // replace jumps and compile body
                 for (s.prongs, 0..) |prong_stmt, i| {
                     const prong = prong_stmt.type.switch_prong;
-                    if (prong.values != null)
-                        try self.replaceValue(prong_jumps[i], OpCode.Size(.jump), self.instructionPos());
+                    try self.replaceValue(prong_jumps[i], OpCode.Size(.jump), self.instructionPos());
                     try self.enterScope(.local);
                     try self.compileBlock(prong.body);
                     try self.writeOp(.jump, prong_stmt.token);
@@ -887,7 +884,6 @@ pub const Compiler = struct {
                     try self.loadSymbol(s, s.name, token);
                 }
                 try self.exitScope();
-                // defer self.allocator.free(free_symbols);
                 const obj = try self.allocator.create(Value.Obj);
 
                 obj.* = .{
