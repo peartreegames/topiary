@@ -193,39 +193,51 @@ const CliRunner = struct {
         };
     }
 
-    pub fn onDialogue(_: *Runner, vm: *Vm, dialogue: Dialogue) void {
-        if (dialogue.speaker) |speaker| {
-            std.debug.print("{s}: ", .{speaker});
-        }
+    pub fn print(_: *CliRunner, comptime msg: []const u8, args: anytype) void {
+        const stdout = std.io.getStdOut().writer();
+        stdout.print(msg, args) catch {
+            std.debug.print("Could not print message", .{});
+        };
+    }
+
+    pub fn onDialogue(runner: *Runner, vm: *Vm, dialogue: Dialogue) void {
         const stdin = std.io.getStdIn().reader();
-        std.debug.print("{s}", .{dialogue.content});
+        const self = @fieldParentPtr(CliRunner, "runner", runner);
+        self.print(":", .{});
+        if (dialogue.speaker) |speaker| {
+            self.print("{s}", .{speaker});
+        }
+        self.print(": ", .{});
+        self.print("{s}", .{dialogue.content});
         var buf: [2]u8 = undefined;
         if (stdin.readUntilDelimiterOrEof(&buf, '\n') catch &buf) |_| {
             vm.selectContinue();
         }
     }
 
-    pub fn onChoices(_: *Runner, vm: *Vm, choices: []Choice) void {
+    pub fn onChoices(runner: *Runner, vm: *Vm, choices: []Choice) void {
         const stdin = std.io.getStdIn().reader();
+        const stderr = std.io.getStdErr().writer();
+        const self = @fieldParentPtr(CliRunner, "runner", runner);
         var index: ?usize = null;
         while (index == null) {
             for (choices, 0..) |choice, i| {
-                std.debug.print("[{d}] {s}\n", .{ i, choice.content });
+                self.print("[{d}] {s}\n", .{ i, choice.content });
             }
             var buf: [10]u8 = undefined;
             if (stdin.readUntilDelimiterOrEof(&buf, '\n') catch &buf) |user_input| {
                 const input = std.mem.trim(u8, user_input, "\r\n");
                 index = std.fmt.parseInt(usize, input, 10) catch |err| blk: {
-                    std.debug.print("Invliad value: {}.\n", .{err});
+                    stderr.print("Invalid value: {}.\n", .{err}) catch {};
                     break :blk null;
                 };
                 if (index != null and index.? >= choices.len) {
                     index = null;
-                    std.debug.print("Invalid value.\n", .{});
+                    stderr.print("Invalid value.\n", .{}) catch {};
                 }
             }
         }
-        vm.selectChoice(index.?) catch |err| std.debug.print("Error: {}", .{err});
+        vm.selectChoice(index.?) catch |err| self.print("Error: {}", .{err});
     }
 };
 

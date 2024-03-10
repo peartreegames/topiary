@@ -64,8 +64,9 @@ const Print = struct {
         },
     };
     fn builtin(_: *Gc, args: []Value) Value {
-        args[0].print(std.debug, null);
-        std.debug.print("\n", .{});
+        const writer = std.debug;
+        args[0].print(writer, null);
+        writer.print("\n", .{});
         return values.Nil;
     }
 };
