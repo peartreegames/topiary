@@ -45,6 +45,7 @@ pub const TestRunner = struct {
     pub fn onChoices(_: *Runner, vm: *Vm, choices: []Choice) void {
         for (choices, 0..) |choice, i| {
             std.debug.print("[{d}] {s} ", .{ i, choice.content });
+            for (choice.tags) |tag| std.debug.print("#{s} ", .{tag});
             std.debug.print("    ID:{s}\n", .{choice.id});
         }
 
@@ -58,7 +59,7 @@ pub const TestRunner = struct {
 
 var test_runner = TestRunner.init();
 pub fn initTestVm(source: []const u8, mod: *Module, debug: bool) !Vm {
-    const errWriter = std.io.getStdIn().writer();
+    const errWriter = std.io.getStdErr().writer();
     var bytecode = compileSource(source, mod) catch |err| {
         try mod.writeErrors(errWriter);
         return err;
@@ -173,7 +174,7 @@ test "Constant Variables" {
         defer mod.deinit();
         defer mod.entry.source_loaded = false;
         const err = initTestVm(case, &mod, false);
-        try testing.expect(Vm.Error.CompilerError == err);
+        try testing.expectError(Vm.Error.CompilerError, err);
     }
 }
 
@@ -193,6 +194,7 @@ test "Strings" {
 
     inline for (test_cases) |case| {
         var mod = Module.create(allocator);
+        errdefer std.log.err("Error on: {s}", .{case.input});
         defer mod.deinit();
         defer mod.entry.source_loaded = false;
         var vm = try initTestVm(case.input, &mod, false);
@@ -201,7 +203,7 @@ test "Strings" {
         try vm.interpret();
         switch (@TypeOf(case.value)) {
             []const u8 => try testing.expectEqualStrings(case.value, vm.stack.previous().obj.data.string),
-            bool => try testing.expect(case.value == vm.stack.previous().bool),
+            bool => try testing.expectEqual(case.value, vm.stack.previous().bool),
             else => {},
         }
     }
@@ -1034,10 +1036,10 @@ test "Forks" {
             \\ === START {
             \\     :speaker: "Question"
             \\    fork {
-            \\        ~ "Answer one" {
+            \\        ~ "Answer one" #one #of #many #tags #here {
             \\            :speaker: "You chose one"
             \\        }
-            \\        ~ "Answer two" {
+            \\        ~ "Answer two" #two {
             \\            :speaker: "You chose two"
             \\        }
             \\    }

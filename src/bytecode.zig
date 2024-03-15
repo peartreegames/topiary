@@ -218,6 +218,9 @@ pub const Bytecode = struct {
                     const visit_id = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
                     _ = visit_id;
                     i += 4;
+                    const tag_count = instructions[i + 1];
+                    _ = tag_count;
+                    i += 1;
                     writer.print("{d: >8}", .{dest});
                     writer.print(" unique: {}", .{is_unique});
                 },

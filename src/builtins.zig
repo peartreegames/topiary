@@ -202,12 +202,9 @@ pub const Has = struct {
             .map => args[0].obj.data.map.contains(item),
             .string => |s| blk: {
                 if (item.obj.data != .string) break :blk false;
-                const len = item.obj.data.string.len;
-                for (0..s.len) |i| {
-                    if (i + len > s.len) break;
-                    if (std.mem.eql(u8, s[i..(i + len)], item.obj.data.string)) break :blk true;
-                }
-                break :blk false;
+                // need to remove the null termination of the needle
+                const indexOf =  std.mem.indexOf(u8, s, item.obj.data.string[0..item.obj.data.string.len - 1]);
+                break :blk indexOf != null;
             },
             else => false,
         };

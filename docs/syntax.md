@@ -132,6 +132,22 @@ to be used in your runner code.
 }
 ```
 
+Lastly you can also tag choices. 
+This is useful for things like displaying a choice in a different way to signify various outcomes or
+that it will end a particular conversation or not
+
+```topi
+=== START {
+    fork DIFFICULTY {
+        ~ "Easy route" #repeat {
+            :John: "Maybe this is too easy..."
+            => DIFFICULTY
+        }
+        ~ "Hard route" #final => {}
+    }
+}
+```
+
 ### Visits
 
 All boughs, forks, and choices have visit counts. 

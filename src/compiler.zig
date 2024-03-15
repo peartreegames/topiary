@@ -504,6 +504,13 @@ pub const Compiler = struct {
                 }
             },
             .choice => |c| {
+                for (c.tags) |tag| {
+                    const obj = try self.allocator.create(Value.Obj);
+                    obj.* = .{ .data = .{ .string = try self.allocator.dupe(u8, tag) } };
+                    const i = try self.addConstant(.{ .obj = obj });
+                    try self.writeOp(.constant, token);
+                    _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                }
                 const name = c.name orelse &c.id;
                 try self.visit_tree.list.append(name);
                 const cur = if (self.visit_tree.current.getChild(name)) |n| n else {
@@ -524,6 +531,7 @@ pub const Compiler = struct {
                 _ = try self.writeInt(u8, if (c.is_unique) 1 else 0, token);
                 try self.writeId(c.id, token);
                 _ = try self.writeInt(OpCode.Size(.get_global), visit_symbol.?.index, token);
+                _ = try self.writeInt(u8, @as(u8, @intCast(c.tags.len)), token);
 
                 try self.writeOp(.jump, token);
                 const jump_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);

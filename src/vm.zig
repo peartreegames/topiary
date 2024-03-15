@@ -197,9 +197,13 @@ pub const Vm = struct {
         if (index < 0 or index >= self.current_choices.len) {
             return Error.InvalidChoice;
         }
+
         const choice = self.current_choices[index];
         self.currentFrame().ip = choice.ip;
         self.is_waiting = false;
+        for (self.current_choices) |c| {
+            self.allocator.free(c.tags);
+        }
         self.allocator.free(self.current_choices);
     }
 
@@ -527,6 +531,7 @@ pub const Vm = struct {
                         }
                     }
                     try writer.writeAll(str[s..]);
+                    try list.append(0);
                     try self.pushAlloc(.{ .string = try list.toOwnedSlice() });
                 },
                 .list => {
@@ -886,9 +891,20 @@ pub const Vm = struct {
                     const id_index = self.readInt(OpCode.Size(.constant));
                     const visit_index = self.readInt(OpCode.Size(.get_global));
                     const visit_count = self.globals[visit_index].visit;
+                    const content = self.pop().obj.data.string;
+
+                    const tag_count = self.readInt(u8);
+                    var tags = try self.allocator.alloc([]const u8, tag_count);
+                    var i: usize = 0;
+                    while (i < tag_count) : (i += 1) {
+                        const tag_value = self.pop();
+                        tags[tag_count - i - 1] = tag_value.obj.data.string;
+                    }
                     if (visit_count > 0 and is_unique) continue;
+
                     try self.choices_list.append(.{
-                        .content = self.pop().obj.data.string,
+                        .content = content,
+                        .tags = tags,
                         .visit_count = visit_count,
                         .ip = ip,
                         .id = self.bytecode.uuids[id_index],

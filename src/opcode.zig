@@ -128,7 +128,7 @@ pub const OpCode = enum(u8) {
             .set_free,
             => u8,
             .string, .closure, .prong => u40, // u32 for constant, u8 for expressions count
-            .choice => u96, // 32 for choice dest, 32 for visit id, 32 for jump dest
+            .choice => u100, // 32 for choice dest, 32 for visit id, 32 for jump dest, u8 for tag count
             else => void,
         };
     }

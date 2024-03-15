@@ -32,6 +32,8 @@ const ExportDialogue = extern struct {
 const ExportChoice = extern struct {
     content: [*c]const u8,
     content_length: usize,
+    tags: [*][*c]const u8,
+    tags_length: u8,
     visit_count: u32,
     ip: u32,
 };
@@ -392,7 +394,7 @@ const ExportRunner = struct {
     allocator: std.mem.Allocator,
 
     runner: Runner,
-    tags: [255][*c]const u8,
+    tags: [512][*c]const u8,
     dialogue: ExportDialogue = undefined,
 
     pub fn init(allocator: std.mem.Allocator, on_dialogue: OnExportDialogue, on_choices: OnExportChoices) ExportRunner {
@@ -400,7 +402,7 @@ const ExportRunner = struct {
             .allocator = allocator,
             .onExportDialogue = on_dialogue,
             .onExportChoices = on_choices,
-            .tags = [_][*c]const u8{0} ** 255,
+            .tags = [_][*c]const u8{0} ** 512,
             .runner = .{
                 .onDialogueFn = onDialogue,
                 .onChoicesFn = onChoices,
@@ -435,10 +437,20 @@ const ExportRunner = struct {
             log("Could not allocate choices", .{}, .err);
             return;
         };
+        var t_count: usize = 0;
         while (i < choices.len) : (i += 1) {
+            var t: usize = 0;
+            const t_start = t_count;
+            while (t < choices[i].tags.len) : (t += 1) {
+                self.tags[t_count + t] = choices[i].tags[t].ptr;
+            }
+            t_count += t;
+
             result[i] = .{
                 .content = choices[i].content.ptr,
                 .content_length = choices[i].content.len,
+                .tags = self.tags[t_start..t_count].ptr,
+                .tags_length = @intCast(choices[i].tags.len),
                 .visit_count = @intCast(choices[i].visit_count),
                 .ip = choices[i].ip,
             };
@@ -452,16 +464,24 @@ const ExportRunner = struct {
 
 const TestRunner = struct {
     pub fn onDialogue(vm_ptr: usize, dialogue: *ExportDialogue) void {
-        std.debug.print("{s}: {s}\n", .{
+        std.debug.print("{s}: {s} ", .{
             dialogue.speaker[0..dialogue.speaker_length],
             dialogue.content[0..dialogue.content_length],
         });
+        for (dialogue.tags[0..dialogue.tags_length]) |t| {
+            std.debug.print("#{s} ", .{t});
+        }
+        std.debug.print("\n", .{});
         selectContinue(vm_ptr);
     }
 
     pub fn onChoices(vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) void {
         for (choices, 0..choices_len) |choice, i| {
-            std.debug.print("[{d}] {s}\n", .{ i, choice.content });
+            std.debug.print("[{d}] {s} ", .{ i, choice.content });
+            for (choice.tags[0..choice.tags_length]) |t| {
+                std.debug.print("#{s} ", .{t});
+            }
+            std.debug.print("\n", .{});
         }
         selectChoice(vm_ptr, 0);
     }
@@ -482,16 +502,16 @@ test "Create and Destroy Vm" {
         \\ var set = Set{"some", "string", "values"}
         \\ var map = Map{0: 0.0001, 1: 1.1111, 2: 2.222 }
         \\ === START {
-        \\     :: "A person approaches."
+        \\     :: "A person approaches." #starting
         \\     :Stranger: "Hey there."
         \\     value = "321 test"
         \\     fork^ {
-        \\         ~ "Greet them." {
+        \\         ~ "Greet them." #lots #of #tags #here {
         \\             :Drew: "Oh, uh, nice to meet you. My name is Drew."
         \\             :Drew: "Sorry, I thought you were someone I knew."
         \\             :Drew: "I'd love to stay and chat, but this is just a short demo."
         \\         }
-        \\         ~ "Say nothing." {
+        \\         ~ "Say nothing." #one #here {
         \\             :: "The person acts as though they were addressing someone else."
         \\         }
         \\     }

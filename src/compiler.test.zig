@@ -1705,7 +1705,7 @@ test "Global Jump Error" {
     defer mod.deinit();
     defer mod.entry.source_loaded = false;
     const err = compileSource(input, &mod);
-    const errWriter = std.io.getStdIn().writer();
+    const errWriter = std.io.getStdErr().writer();
     try mod.writeErrors(errWriter);
 
     try testing.expect(Compiler.Error.CompilerError == err);
