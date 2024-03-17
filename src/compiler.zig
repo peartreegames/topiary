@@ -202,8 +202,10 @@ pub const Compiler = struct {
 
         try self.replaceDiverts();
         // Add one final fin at the end of file to grab the initial jump_request
-        try self.chunk.token_lines.append(self.chunk.token_lines.items[self.chunk.instructions.items.len - 1]);
-        try self.chunk.instructions.append(@intFromEnum(OpCode.fin));
+        if (self.chunk.token_lines.items.len > 0) {
+            try self.chunk.token_lines.append(self.chunk.token_lines.items[self.chunk.instructions.items.len - 1]);
+            try self.chunk.instructions.append(@intFromEnum(OpCode.fin));
+        }
     }
 
     fn enterChunk(self: *Compiler) !void {
