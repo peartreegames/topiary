@@ -293,6 +293,7 @@ pub const Vm = struct {
                 }
             }
         }
+        std.mem.reverse(OpCode.Size(.jump), self.jump_requests.items);
     }
 
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {
