@@ -27,6 +27,7 @@ pub const Type = enum(u8) {
     map_pair,
     visit,
     enum_value,
+    ref,
 };
 
 pub const Iterator = struct {
@@ -53,7 +54,8 @@ pub const Value = union(Type) {
         value: *Value,
     },
     visit: u32,
-    enum_value: Enum.Value,
+    enum_value: Enum.Val,
+    ref: ID,
 
     pub const Obj = struct {
         is_marked: bool = false,
@@ -165,6 +167,7 @@ pub const Value = union(Type) {
             .map_pair => "map_pair",
             .visit => "visit",
             .enum_value => "enum_value",
+            .ref => "reference",
             .obj => |o| switch (o.data) {
                 .string => "string",
                 .list => "list",
@@ -237,13 +240,8 @@ pub const Value = union(Type) {
         switch (self) {
             .bool => |b| try writer.writeByte(if (b) '1' else '0'),
             .number => |n| {
-                var buf: [128]u8 = undefined;
-                var buf_stream = std.io.fixedBufferStream(&buf);
-                try std.fmt.formatFloatDecimal(n, .{
-                    .precision = 5,
-                }, buf_stream.writer());
-                try writer.writeInt(u16, @as(u16, @intCast(buf_stream.pos)), .little);
-                try writer.writeAll(buf[0..buf_stream.pos]);
+                try writer.print("{d:.5}", .{n});
+                try writer.writeByte(0);
             },
             .range => |r| {
                 try writer.writeInt(i32, r.start, .little);
@@ -258,8 +256,12 @@ pub const Value = union(Type) {
             },
             .enum_value => |e| {
                 try writer.writeByte(e.index);
-                try writer.writeByte(@intCast(e.base.name.len));
-                try writer.writeAll(e.base.name);
+                const n = e.base.obj.data.@"enum".name;
+                try writer.writeByte(@intCast(n.len));
+                try writer.writeAll(n);
+            },
+            .ref => |r| {
+                try writer.writeAll(&r);
             },
             .obj => |o| {
                 try writer.writeByte(@intFromEnum(@as(Obj.DataType, o.data)));
@@ -295,8 +297,36 @@ pub const Value = union(Type) {
                         try writer.writeInt(u16, @as(u16, @intCast(f.lines.len)), .little);
                         for (f.lines) |l| try writer.writeInt(u32, l, .little);
                     },
+                    .@"enum" => |e| {
+                        try writer.writeByte(@intCast(e.name.len));
+                        try writer.writeAll(e.name);
+                        try writer.writeByte(@intCast(e.values.len));
+                        for (e.values) |value| {
+                            try writer.writeByte(@intCast(value.len));
+                            try writer.writeAll(value);
+                        }
+                    },
+                    .class => |c| {
+                        try writer.writeByte(@intCast(c.name.len));
+                        try writer.writeAll(c.name);
+                        try writer.writeByte(@intCast(c.defaults.len));
+                        for (c.defaults) |d| {
+                            try writer.writeByte(@intCast(d.name.len));
+                            try writer.writeAll(d.name);
+                            try serialize(d.value, writer);
+                        }
+                    },
                     .instance => |i| {
-                        _ = i;
+                        const d = @fieldParentPtr(Obj.Data, "class", i.class);
+                        const c = @fieldParentPtr(Obj, "data", d);
+                        try writer.writeAll(&c.id);
+                        try writer.writeInt(u8, @intCast(i.fields.count()), .little);
+                        var it = i.fields.iterator();
+                        while (it.next()) |kvp| {
+                            try writer.writeInt(u8, @intCast(kvp.key_ptr.*.len), .little);
+                            try writer.writeAll(kvp.key_ptr.*);
+                            try serialize(kvp.value_ptr.*, writer);
+                        }
                     },
                     else => {},
                 }
@@ -311,11 +341,9 @@ pub const Value = union(Type) {
             .nil => Nil,
             .bool => if (try reader.readByte() == '1') True else False,
             .number => {
-                const length = try reader.readInt(u16, .little);
-                const buf = try allocator.alloc(u8, length);
-                defer allocator.free(buf);
-                try reader.readNoEof(buf);
-                return .{ .number = try std.fmt.parseFloat(f32, buf) };
+                const val = try reader.readUntilDelimiterAlloc(allocator, 0, 128);
+                defer allocator.free(val);
+                return .{ .number = try std.fmt.parseFloat(f32, val) };
             },
             .visit => {
                 return .{ .visit = try reader.readInt(u32, .little) };
@@ -342,13 +370,14 @@ pub const Value = union(Type) {
                         var list = try std.ArrayList(Value).initCapacity(allocator, length);
                         var i: usize = 0;
                         while (i < length) : (i += 1) {
-                            list.items[i] = try Value.deserialize(reader, allocator);
+                            try list.append(try Value.deserialize(reader, allocator));
                         }
                         const obj = try allocator.create(Value.Obj);
                         obj.* = .{ .id = id, .data = .{ .list = list } };
                         return .{ .obj = obj };
                     },
                     .map => {
+                        std.debug.print("\nDESERIALIZE MAP====\n", .{});
                         const length = try reader.readInt(u16, .little);
                         var map = Value.Obj.MapType.initContext(allocator, adapter);
                         var i: usize = 0;
@@ -403,13 +432,45 @@ pub const Value = union(Type) {
                         try reader.readNoEof(name_buf);
                         const values_length = try reader.readByte();
                         const obj = try allocator.create(Value.Obj);
-                        obj.* = .{ .data = .{ .@"enum" = .{ .allocator = allocator, .name = name_buf, .values = try allocator.alloc([]const u8, values_length) } } };
+                        obj.* = .{ .data = .{ .@"enum" = .{ .name = name_buf, .values = try allocator.alloc([]const u8, values_length) } } };
                         for (0..values_length) |i| {
                             const value_name_length = try reader.readByte();
                             const value_name_buf = try allocator.alloc(u8, value_name_length);
                             try reader.readNoEof(value_name_buf);
                             obj.data.@"enum".values[i] = value_name_buf;
                         }
+                        return .{ .obj = obj };
+                    },
+                    .class => {
+                        const name_length = try reader.readByte();
+                        const name_buf = try allocator.alloc(u8, name_length);
+                        try reader.readNoEof(name_buf);
+                        const default_length = try reader.readByte();
+                        const obj = try allocator.create(Value.Obj);
+                        obj.* = .{ .data = .{ .class = .{ .allocator = allocator, .name = name_buf, .defaults = try allocator.alloc(Class.Field, default_length) } } };
+                        for (0..default_length) |i| {
+                            const value_name_length = try reader.readByte();
+                            const value_name_buf = try allocator.alloc(u8, value_name_length);
+                            try reader.readNoEof(value_name_buf);
+                            obj.data.class.defaults[i].name = value_name_buf;
+                            obj.data.class.defaults[i].value = try deserialize(reader, allocator);
+                        }
+                        return .{ .obj = obj };
+                    },
+                    .instance => {
+                        var class_id: ID = undefined;
+                        try reader.readNoEof(class_id[0..]);
+                        const obj = try allocator.create(Value.Obj);
+                        const field_length = try reader.readByte();
+                        var fields = try allocator.alloc(Class.Field, field_length);
+                        for (0..field_length) |i| {
+                            const value_name_length = try reader.readByte();
+                            const value_name_buf = try allocator.alloc(u8, value_name_length);
+                            try reader.readNoEof(value_name_buf);
+                            fields[i].name = value_name_buf;
+                            fields[i].value = try deserialize(reader, allocator);
+                        }
+                        // obj.* = .{ .data = .{ .instance = try class.createInstance(fields) } };
                         return .{ .obj = obj };
                     },
                     else => return error.Unknown,
@@ -425,7 +486,7 @@ pub const Value = union(Type) {
             .bool => |b| writer.print("{}", .{b}),
             .nil => writer.print("nil", .{}),
             .visit => |v| writer.print("{d}", .{v}),
-            .enum_value => |e| writer.print("{s}.{s}", .{ e.base.name, e.base.values[e.index] }),
+            .enum_value => |e| writer.print("{s}.{s}", .{ e.base.obj.data.@"enum".name, e.base.obj.data.@"enum".values[e.index] }),
             .obj => |o| {
                 switch (o.data) {
                     .string => |s| writer.print("{s}", .{s}),
@@ -502,15 +563,6 @@ pub const Value = union(Type) {
                 }
             },
             .range => |r| writer.print("{}..{}", .{ r.start, r.end }),
-            // .@"enum" => |e| {
-            //     writer.print("{", .{});
-            //     for (e, 0..) |item, i| {
-            //         writer.print("{s}", .{item});
-            //         if (i != e.len - 1)
-            //             writer.print(",\n", .{});
-            //     }
-            //     writer.print("}\n", .{});
-            // },
             else => writer.print("{s}", .{@tagName(self)}),
         }
     }
@@ -527,24 +579,7 @@ pub const Value = union(Type) {
                 .obj => |o| {
                     switch (o.data) {
                         .string => |s| hasher.update(s),
-                        .function => |f| {
-                            hashFn(&hasher, f.locals_count);
-                            hashFn(&hasher, f.instructions.len);
-                            hashFn(&hasher, f.instructions.ptr);
-                        },
-                        .list => |l| {
-                            hashFn(&hasher, l.items.len);
-                            hashFn(&hasher, l.items.ptr);
-                        },
-                        .map => |m| {
-                            hashFn(&hasher, m.keys().len);
-                            hashFn(&hasher, m.keys().ptr);
-                        },
-                        .builtin => |b| {
-                            hashFn(&hasher, b.arity);
-                            hashFn(&hasher, b.backing);
-                        },
-                        else => return 0,
+                        else => hashFn(&hasher, o.id),
                     }
                 },
                 .range => |r| {
@@ -576,43 +611,7 @@ pub const Value = union(Type) {
                         return false;
                     return switch (o.data) {
                         .string => |s| std.mem.eql(u8, s, b_data.string),
-                        .list => |l| {
-                            const l_b = b_data.list;
-                            if (l.items.len != l_b.items.len) return false;
-                            for (l.items, 0..) |item, i| {
-                                if (!adapter.eql(item, l_b.items[i], 0)) return false;
-                            }
-                            return true;
-                        },
-                        .map => |m| {
-                            const a_keys = m.keys();
-                            const b_keys = b_data.map.keys();
-                            if (a_keys.len != b_keys.len) return false;
-                            for (a_keys) |a_key| {
-                                if (!b_data.map.contains(a_key)) return false;
-                                const a_value = m.get(a_key);
-                                const b_value = b_data.map.get(a_key);
-                                if (a_value == null and b_value != null) return false;
-                                if (a_value != null and b_value == null) return false;
-                                if (!adapter.eql(a_value.?, b_value.?, 0)) return false;
-                            }
-                            return true;
-                        },
-                        .set => |s| {
-                            const a_keys = s.keys();
-                            const b_keys = b_data.map.keys();
-                            if (a_keys.len != b_keys.len) return false;
-                            for (a_keys) |a_key| {
-                                if (!b_data.map.contains(a_key)) return false;
-                            }
-                            return true;
-                        },
-                        .function => |f| {
-                            const b_f = b_data.function;
-                            const inst = std.mem.eql(u8, f.instructions, b_f.instructions);
-                            return inst and f.locals_count == b_f.locals_count and f.arity == b_f.arity and f.is_method == b_f.is_method;
-                        },
-                        else => return false,
+                        else => std.mem.eql(u8, &o.id, &b.obj.id),
                     };
                 },
                 .range => |r| {
@@ -635,7 +634,7 @@ test "Serialize" {
 
     try std.testing.expectEqualSlices(
         u8,
-        &[_]u8{ 0x03, 0x08, 0x00, 0x31, 0x35, 0x2e, 0x30, 0x30, 0x30, 0x30, 0x30 },
+        &[_]u8{ 0x03, 0x31, 0x35, 0x2e, 0x30, 0x30, 0x30, 0x30, 0x30, 0x00 },
         data.items,
     );
 }

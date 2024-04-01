@@ -325,6 +325,7 @@ pub const Parser = struct {
         self.next();
         var expr = try self.expression(.lowest);
         if (expr.type == .function) {
+            // used for recursive calls
             expr.type.function.name = name;
         }
         return .{

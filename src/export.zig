@@ -546,7 +546,10 @@ test "Create and Destroy Vm" {
 
     const vm_ptr = createVm(buf.ptr, buf.len, @intFromPtr(on_dialogue), @intFromPtr(on_choices));
     const vm: *Vm = @ptrFromInt(vm_ptr);
+
+    defer destroyVm(vm_ptr);
     vm.bytecode.print(std.debug);
+    defer vm.bytecode.free(alloc);
     std.debug.print("\n=====\n", .{});
     const val_name = "value";
     subscribe(
@@ -612,6 +615,4 @@ test "Create and Destroy Vm" {
         }
         destroyValue(&map_value);
     }
-    vm.bytecode.free(alloc);
-    destroyVm(vm_ptr);
 }

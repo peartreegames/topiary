@@ -152,34 +152,23 @@ pub const Vm = struct {
     }
 
     /// Add the current state to a StateMap
-    pub fn saveState(self: *Vm, state: *StateMap) !void {
-        const count: usize = self.bytecode.global_symbols.len;
-        if (count == 0) return;
-
-        for (self.bytecode.global_symbols) |s| {
-            if (s.is_extern or self.globals[s.index] == .void) continue;
-            const value = self.globals[s.index];
-            if (switch (value) {
-                .visit => |v| v == 0,
-                .obj => |o| switch (o.data) {
-                    .@"enum", .class => true,
-                    else => false,
-                },
-                .range, .map_pair => unreachable,
-                else => false,
-            }) continue;
-
-            try state.put(s.name, self.globals[s.index]);
-        }
-    }
+    // pub fn serializeState(self: *Vm) ![]const u8 {
+    //     var map = StateMap.init(self.allocator);
+    //     for (self.bytecode.global_symbols) |s| {
+    //         if (s.is_extern or self.globals[s.index] == .void) continue;
+    //         const value = self.globals[s.index];
+    //         if (value == .visit and value.visit == 0) continue;
+    //         try map.put(s.name, self.globals[s.index]);
+    //     }
+    // }
 
     /// Load the StateMap into the globals list
-    pub fn loadState(self: *Vm, state: *StateMap) !void {
-        for (self.bytecode.global_symbols) |s| {
-            const value = try state.get(s.name);
-            if (value) |v| self.globals[s.index] = v;
-        }
-    }
+    // pub fn loadState(self: *Vm, json_string: []const u8) void {
+    //     for (self.bytecode.global_symbols) |s| {
+    //         const value = state.get(s.name);
+    //         if (value) |v| self.globals[s.index] = v;
+    //     }
+    // }
 
     pub fn roots(self: *Vm) []const []Value {
         return &([_][]Value{ self.globals, self.stack.backing });
@@ -520,7 +509,7 @@ pub const Vm = struct {
                         if (c == '{') {
                             try writer.writeAll(str[s..i]);
                             switch (args.items[a]) {
-                                .number => |n| try std.fmt.formatFloatDecimal(n, std.fmt.FormatOptions{}, list.writer()),
+                                .number => |n| try writer.print("{d:.5}", .{n}),
                                 .bool => |b| try writer.writeAll(if (b) "true" else "false"),
                                 .obj => |o| try writer.writeAll(o.data.string),
                                 .visit => |v| try std.fmt.formatIntValue(v, "", .{}, list.writer()),
@@ -745,10 +734,9 @@ pub const Vm = struct {
                                 if (index.obj.data != .string)
                                     return self.fail("Can only query instance fields by string name, not {s}", .{@tagName(index.obj.data)});
                                 var found = false;
-                                std.debug.print("\n", .{});
                                 for (e.values, 0..) |name, i| {
                                     if (std.mem.eql(u8, name, index.obj.data.string)) {
-                                        try self.push(.{ .enum_value = .{ .index = @intCast(i), .base = &e } });
+                                        try self.push(.{ .enum_value = .{ .index = @intCast(i), .base = &target } });
                                         found = true;
                                     }
                                 }

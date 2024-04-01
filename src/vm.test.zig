@@ -7,7 +7,7 @@ const compiler = @import("compiler.zig");
 const Value = @import("values.zig").Value;
 const Errors = @import("compiler-error.zig").CompilerErrors;
 const compileSource = @import("compiler.test.zig").compileSource;
-const StateMap = @import("state.zig").StateMap;
+const State = @import("state.zig").State;
 const runners = @import("runner.zig");
 const module = @import("module.zig");
 const Runner = runners.Runner;
@@ -1439,6 +1439,12 @@ test "Save and Load State" {
     const test_case =
         \\ var value = 0
         \\ value += 1
+        \\ var list = List{}
+        \\ var outer = List{list}
+        \\ var last = list
+        \\ var str = "value"
+        \\ list.add(value)
+        \\ list[0] = "changed"
     ;
     const alloc = testing.allocator;
 
@@ -1450,13 +1456,15 @@ test "Save and Load State" {
     defer vm.bytecode.free(testing.allocator);
     try vm.interpret();
 
-    var save = StateMap.init(alloc);
-    defer save.deinit();
-    try vm.saveState(&save);
+    var data = std.ArrayList(u8).init(alloc);
+    defer data.deinit();
+    try State.serialize(&vm, data.writer());
+    std.debug.print("\n{s}\n", .{data.items});
 
     const second_case =
         \\ var value = 10
         \\ value += 5
+        \\ var outer = List{}
     ;
 
     var mod2 = Module.create(allocator);
@@ -1465,10 +1473,10 @@ test "Save and Load State" {
     var vm2 = try initTestVm(second_case, &mod2, false);
     defer vm2.deinit();
     defer vm2.bytecode.free(testing.allocator);
-    try vm2.loadState(&save);
+    try State.deserialize(&vm2, data.items);
+    // try vm2.loadState(&save);
     try testing.expectEqual(vm2.globals[0].number, 1);
-
+    try testing.expectEqualSlices(u8, vm2.globals[1].obj.data.list.items[0].obj.data.list.items[0].obj.data.string, "changed");
     try vm2.interpret();
-
     try testing.expectEqual(vm2.globals[0].number, 6);
 }

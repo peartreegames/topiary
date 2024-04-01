@@ -447,7 +447,6 @@ pub const Compiler = struct {
                 obj.* = .{
                     .data = .{
                         .@"enum" = .{
-                            .allocator = self.allocator,
                             .name = try self.allocator.dupe(u8, e.name),
                             .values = try names.toOwnedSlice(),
                         },
@@ -507,11 +506,7 @@ pub const Compiler = struct {
             },
             .choice => |c| {
                 for (c.tags) |tag| {
-                    const obj = try self.allocator.create(Value.Obj);
-                    obj.* = .{ .data = .{ .string = try self.allocator.dupe(u8, tag) } };
-                    const i = try self.addConstant(.{ .obj = obj });
-                    try self.writeOp(.constant, token);
-                    _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                    try self.getOrSetIdentifierConstant(tag, token);
                 }
                 const name = c.name orelse &c.id;
                 try self.visit_tree.list.append(name);
@@ -579,11 +574,7 @@ pub const Compiler = struct {
             },
             .dialogue => |d| {
                 for (d.tags) |tag| {
-                    const obj = try self.allocator.create(Value.Obj);
-                    obj.* = .{ .data = .{ .string = try self.allocator.dupe(u8, tag) } };
-                    const i = try self.addConstant(.{ .obj = obj });
-                    try self.writeOp(.constant, token);
-                    _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                    try self.getOrSetIdentifierConstant(tag, token);
                 }
 
                 try self.compileExpression(d.content);
