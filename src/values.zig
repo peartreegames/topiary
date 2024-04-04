@@ -404,7 +404,7 @@ pub const Value = union(Type) {
                     },
                     .function => {
                         const arity = try reader.readByte();
-                        const is_method = if (try reader.readByte() == 1) true else false;
+                        const is_method = if ((try reader.readByte()) == 1) true else false;
                         const locals_count = try reader.readInt(u16, .little);
                         const instructions_count = try reader.readInt(u16, .little);
                         const buf = try allocator.alloc(u8, instructions_count);

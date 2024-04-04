@@ -511,7 +511,8 @@ pub const Vm = struct {
                             switch (args.items[a]) {
                                 .number => |n| try writer.print("{d:.5}", .{n}),
                                 .bool => |b| try writer.writeAll(if (b) "true" else "false"),
-                                .obj => |o| try writer.writeAll(o.data.string),
+                                // remove final 0
+                                .obj => |o| try writer.writeAll(o.data.string[0..(o.data.string.len - 1)]),
                                 .visit => |v| try std.fmt.formatIntValue(v, "", .{}, list.writer()),
                                 else => return self.fail("Unsupported interpolated type {s} for {s}", .{ args.items[a].typeName(), str }),
                             }

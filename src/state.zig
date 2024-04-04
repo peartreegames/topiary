@@ -21,10 +21,23 @@ pub const State = struct {
         defer stream.deinit();
         try stream.beginObject();
         for (vm.bytecode.global_symbols) |s| {
-            if (s.is_extern or vm.globals[s.index] == .void) continue;
+            if (s.is_extern) continue;
+
             const value = vm.globals[s.index];
-            if (value == .void) continue;
+            if (value == .void or switch (value.obj.data) {
+                // should never be here, but just in case
+                .builtin, .ext_function => true,
+                else => false,
+            }) continue;
+
+            // we don't need to save 'const' values except collections and enums
+            if (!s.is_mutable and (value != .obj or switch (value.obj.data) {
+                .function, .string => true,
+                else => false,
+            })) continue;
+            // or empty visits
             if (value == .visit and value.visit == 0) continue;
+
             try stream.objectField(s.name);
             try serializeValue(value, &stream, &references);
         }

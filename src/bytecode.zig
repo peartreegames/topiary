@@ -18,6 +18,7 @@ pub const Bytecode = struct {
         name: []const u8,
         index: OpCode.Size(.get_global),
         is_extern: bool,
+        is_mutable: bool,
     };
 
     pub fn free(self: *const Bytecode, allocator: std.mem.Allocator) void {
@@ -44,6 +45,7 @@ pub const Bytecode = struct {
             try writer.writeAll(sym.name);
             try writer.writeInt(OpCode.Size(.get_global), @as(OpCode.Size(.get_global), @intCast(sym.index)), .little);
             try writer.writeByte(if (sym.is_extern) 1 else 0);
+            try writer.writeByte(if (sym.is_mutable) 1 else 0);
         }
 
         try writer.writeInt(u64, @as(u64, @intCast(self.boughs.len)), .little);
@@ -73,10 +75,12 @@ pub const Bytecode = struct {
             try reader.readNoEof(buf);
             const index = try reader.readInt(OpCode.Size(.get_global), .little);
             const is_extern = if (try reader.readByte() == 1) true else false;
+            const is_mutable = if (try reader.readByte() == 1) true else false;
             global_symbols[count] = GlobalSymbol{
                 .name = buf,
                 .index = index,
                 .is_extern = is_extern,
+                .is_mutable = is_mutable,
             };
         }
 
