@@ -151,25 +151,6 @@ pub const Vm = struct {
         self.allocator.free(self.globals);
     }
 
-    /// Add the current state to a StateMap
-    // pub fn serializeState(self: *Vm) ![]const u8 {
-    //     var map = StateMap.init(self.allocator);
-    //     for (self.bytecode.global_symbols) |s| {
-    //         if (s.is_extern or self.globals[s.index] == .void) continue;
-    //         const value = self.globals[s.index];
-    //         if (value == .visit and value.visit == 0) continue;
-    //         try map.put(s.name, self.globals[s.index]);
-    //     }
-    // }
-
-    /// Load the StateMap into the globals list
-    // pub fn loadState(self: *Vm, json_string: []const u8) void {
-    //     for (self.bytecode.global_symbols) |s| {
-    //         const value = state.get(s.name);
-    //         if (value) |v| self.globals[s.index] = v;
-    //     }
-    // }
-
     pub fn roots(self: *Vm) []const []Value {
         return &([_][]Value{ self.globals, self.stack.backing });
     }

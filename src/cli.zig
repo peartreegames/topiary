@@ -26,10 +26,9 @@ fn usage(comptime msg: []const u8) !void {
     try out.print("Commands:\n", .{});
     try out.print("        topi run <file> [start_bough] [--verbose]\n", .{});
     try out.print("        topi auto <file> <count> [-verbose]\n", .{});
-    try out.print("        topi compile <file> [output_file] [--verbose] [--dry|-d]\n", .{});
+    try out.print("        topi compile <file> <output_file|--dry|-d> [--verbose]\n", .{});
     try out.print("\n", .{});
     try out.print("Flags:\n", .{});
-    try out.print("\n", .{});
     try out.print("        --version, -v: Output current version\n", .{});
     try out.print("        --verbose: Output debug logs\n", .{});
     try out.print("        --dry, -d: Compile only\n", .{});

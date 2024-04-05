@@ -14,6 +14,7 @@ const File = @import("module.zig").File;
 const Runner = runners.Runner;
 const Dialogue = runners.Dialogue;
 const Choice = runners.Choice;
+const State = @import("./state.zig").State;
 
 // const alloc = std.testing.allocator;
 var alloc = std.heap.page_allocator;
@@ -353,8 +354,8 @@ export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_ptr:
 
     var fbs = std.io.fixedBufferStream(source_ptr[0..source_len]);
     log("Deserializing bytecode", .{}, .info);
-    const bytecode = Bytecode.deserialize(alloc, fbs.reader()) catch {
-        log("Could not deserialize bytecode", .{}, .err);
+    const bytecode = Bytecode.deserialize(alloc, fbs.reader()) catch |err| {
+        log("Could not deserialize bytecode: {s}", .{@errorName(err)}, .err);
         return 0;
     };
 
@@ -386,6 +387,42 @@ export fn destroyVm(vm_ptr: usize) void {
     alloc.destroy(runner);
     vm.deinit();
     alloc.destroy(vm);
+}
+
+export fn saveState(vm_ptr: usize, path_ptr: [*]const u8, path_len: usize) void {
+    const vm: *Vm = @ptrFromInt(vm_ptr);
+    var file = std.fs.createFileAbsolute(path_ptr[0..path_len], .{}) catch |err| {
+        log("Could not open file: {s}", .{@errorName(err)}, .err);
+        return;
+    };
+    defer file.close();
+    const writer = file.writer();
+    State.serialize(vm, writer) catch |err| {
+        log("Could not serialize state: {s}", .{@errorName(err)}, .err);
+        return;
+    };
+}
+
+export fn loadState(vm_ptr: usize, path_ptr: [*]const u8, path_len: usize) void {
+    const vm: *Vm = @ptrFromInt(vm_ptr);
+    const file = std.fs.openFileAbsolute(path_ptr[0..path_len], .{ .mode = .read_only }) catch |err| {
+        log("Could not open file: {s}", .{@errorName(err)}, .err);
+        return;
+    };
+    defer file.close();
+    const stat = file.stat() catch |err| {
+        log("Could not read file stats: {s}", .{@errorName(err)}, .err);
+        return;
+    };
+    const max = stat.size;
+    const content = file.readToEndAlloc(alloc, max + 1) catch |err| {
+        log("Could not read file: {s}", .{@errorName(err)}, .err);
+        return;
+    };
+    defer alloc.free(content);
+    State.deserialize(vm, content) catch |err| {
+        log("Could not deserialize data: {s}", .{@errorName(err)}, .err);
+    };
 }
 
 const ExportRunner = struct {
@@ -526,9 +563,7 @@ test "Create and Destroy Vm" {
     defer debug_severity = .err;
 
     const file = try std.fs.cwd().createFile("tmp.topi", .{ .read = true });
-    defer std.fs.cwd().deleteFile("tmp.topi") catch |err| {
-        std.log.warn("Could not delete file: {}", .{err});
-    };
+    defer std.fs.cwd().deleteFile("tmp.topi") catch {};
     defer file.close();
     try file.writer().writeAll(text);
 
