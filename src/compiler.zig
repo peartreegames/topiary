@@ -1,21 +1,21 @@
 const std = @import("std");
-const ast = @import("./ast.zig");
-const parser = @import("./parser.zig");
-const Token = @import("./token.zig").Token;
-const OpCode = @import("./opcode.zig").OpCode;
-const CompilerErrors = @import("./compiler-error.zig").CompilerErrors;
-const Value = @import("./values.zig").Value;
-const ValueType = @import("./values.zig").Type;
-const String = @import("./values.zig").String;
-const Scope = @import("./scope.zig").Scope;
-const Symbol = @import("./scope.zig").Symbol;
-const builtins = @import("./builtins.zig").builtins;
-const Bytecode = @import("./bytecode.zig").Bytecode;
-const JumpTree = @import("./structures/jump-tree.zig").JumpTree;
-const VisitTree = @import("./structures/visit-tree.zig").VisitTree;
-const Enum = @import("./enum.zig").Enum;
-const Module = @import("./module.zig").Module;
-const UUID = @import("./utils/uuid.zig").UUID;
+const ast = @import("ast.zig");
+const parser = @import("parser.zig");
+const Token = @import("token.zig").Token;
+const OpCode = @import("opcode.zig").OpCode;
+const CompilerErrors = @import("compiler-error.zig").CompilerErrors;
+const Value = @import("values.zig").Value;
+const ValueType = @import("values.zig").Type;
+const String = @import("values.zig").String;
+const Scope = @import("scope.zig").Scope;
+const Symbol = @import("scope.zig").Symbol;
+const builtins = @import("builtins.zig").builtins;
+const Bytecode = @import("bytecode.zig").Bytecode;
+const JumpTree = @import("structures/jump-tree.zig").JumpTree;
+const VisitTree = @import("structures/visit-tree.zig").VisitTree;
+const Enum = @import("enum.zig").Enum;
+const Module = @import("module.zig").Module;
+const UUID = @import("utils/uuid.zig").UUID;
 
 const testing = std.testing;
 const BREAK_HOLDER = 9000;
@@ -137,6 +137,7 @@ pub const Compiler = struct {
                 .name = try self.allocator.dupe(u8, s.name),
                 .index = s.index,
                 .is_extern = s.is_extern,
+                .is_mutable = s.is_mutable,
             };
         }
         var boughs = std.ArrayList(Bytecode.BoughJump).init(self.allocator);
@@ -888,6 +889,7 @@ pub const Compiler = struct {
                 const obj = try self.allocator.create(Value.Obj);
 
                 obj.* = .{
+                    .id = UUID.new(),
                     .data = .{
                         .function = .{
                             .is_method = f.is_method,

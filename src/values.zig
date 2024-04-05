@@ -1,13 +1,13 @@
 const std = @import("std");
-const ast = @import("./ast.zig");
-const Gc = @import("./gc.zig").Gc;
-const UUID = @import("./utils/uuid.zig").UUID;
-const Bytecode = @import("./bytecode.zig").Bytecode;
-const Builtin = @import("./builtins.zig").Builtin;
-const OpCode = @import("./opcode.zig").OpCode;
-const Enum = @import("./enum.zig").Enum;
-const Class = @import("./class.zig").Class;
-const ExportFunction = @import("./export.zig").ExportFunction;
+const ast = @import("ast.zig");
+const Gc = @import("gc.zig").Gc;
+const UUID = @import("utils/uuid.zig").UUID;
+const Bytecode = @import("bytecode.zig").Bytecode;
+const Builtin = @import("builtins.zig").Builtin;
+const OpCode = @import("opcode.zig").OpCode;
+const Enum = @import("enum.zig").Enum;
+const Class = @import("class.zig").Class;
+const ExportFunction = @import("export.zig").ExportFunction;
 
 const ID = UUID.ID;
 const Allocator = std.mem.Allocator;
@@ -113,10 +113,6 @@ pub const Value = union(Type) {
         pub const MapType = std.ArrayHashMap(Value, Value, Adapter, true);
         pub const SetType = std.ArrayHashMap(Value, void, Adapter, true);
 
-        pub fn toValue(self: *Obj) *Value {
-            return @fieldParentPtr(Value, "obj", self);
-        }
-
         pub fn destroy(allocator: std.mem.Allocator, obj: *Obj) void {
             switch (obj.data) {
                 .string => |s| allocator.free(s),
@@ -139,7 +135,9 @@ pub const Value = union(Type) {
                 .builtin => {},
                 .closure => |c| allocator.free(c.free_values),
                 .class => |c| c.deinit(),
-                .instance => obj.data.instance.fields.deinit(),
+                .instance => {
+                    allocator.free(obj.data.instance.fields);
+                },
             }
             allocator.destroy(obj);
         }
@@ -256,7 +254,7 @@ pub const Value = union(Type) {
             },
             .enum_value => |e| {
                 try writer.writeByte(e.index);
-                const n = e.base.obj.data.@"enum".name;
+                const n = e.base.data.@"enum".name;
                 try writer.writeByte(@intCast(n.len));
                 try writer.writeAll(n);
             },
@@ -309,23 +307,18 @@ pub const Value = union(Type) {
                     .class => |c| {
                         try writer.writeByte(@intCast(c.name.len));
                         try writer.writeAll(c.name);
-                        try writer.writeByte(@intCast(c.defaults.len));
-                        for (c.defaults) |d| {
+                        try writer.writeByte(@intCast(c.fields.len));
+                        for (c.fields) |d| {
                             try writer.writeByte(@intCast(d.name.len));
                             try writer.writeAll(d.name);
                             try serialize(d.value, writer);
                         }
                     },
                     .instance => |i| {
-                        const d = @fieldParentPtr(Obj.Data, "class", i.class);
-                        const c = @fieldParentPtr(Obj, "data", d);
-                        try writer.writeAll(&c.id);
-                        try writer.writeInt(u8, @intCast(i.fields.count()), .little);
-                        var it = i.fields.iterator();
-                        while (it.next()) |kvp| {
-                            try writer.writeInt(u8, @intCast(kvp.key_ptr.*.len), .little);
-                            try writer.writeAll(kvp.key_ptr.*);
-                            try serialize(kvp.value_ptr.*, writer);
+                        try writer.writeAll(&i.base.id);
+                        try writer.writeByte(@intCast(i.fields.len));
+                        for (i.fields) |v| {
+                            try serialize(v, writer);
                         }
                     },
                     else => {},
@@ -377,7 +370,6 @@ pub const Value = union(Type) {
                         return .{ .obj = obj };
                     },
                     .map => {
-                        std.debug.print("\nDESERIALIZE MAP====\n", .{});
                         const length = try reader.readInt(u16, .little);
                         var map = Value.Obj.MapType.initContext(allocator, adapter);
                         var i: usize = 0;
@@ -447,13 +439,13 @@ pub const Value = union(Type) {
                         try reader.readNoEof(name_buf);
                         const default_length = try reader.readByte();
                         const obj = try allocator.create(Value.Obj);
-                        obj.* = .{ .data = .{ .class = .{ .allocator = allocator, .name = name_buf, .defaults = try allocator.alloc(Class.Field, default_length) } } };
+                        obj.* = .{ .data = .{ .class = .{ .allocator = allocator, .name = name_buf, .fields = try allocator.alloc(Class.Field, default_length) } } };
                         for (0..default_length) |i| {
                             const value_name_length = try reader.readByte();
                             const value_name_buf = try allocator.alloc(u8, value_name_length);
                             try reader.readNoEof(value_name_buf);
-                            obj.data.class.defaults[i].name = value_name_buf;
-                            obj.data.class.defaults[i].value = try deserialize(reader, allocator);
+                            obj.data.class.fields[i].name = value_name_buf;
+                            obj.data.class.fields[i].value = try deserialize(reader, allocator);
                         }
                         return .{ .obj = obj };
                     },
@@ -486,7 +478,7 @@ pub const Value = union(Type) {
             .bool => |b| writer.print("{}", .{b}),
             .nil => writer.print("nil", .{}),
             .visit => |v| writer.print("{d}", .{v}),
-            .enum_value => |e| writer.print("{s}.{s}", .{ e.base.obj.data.@"enum".name, e.base.obj.data.@"enum".values[e.index] }),
+            .enum_value => |e| writer.print("{s}.{s}", .{ e.base.data.@"enum".name, e.base.data.@"enum".values[e.index] }),
             .obj => |o| {
                 switch (o.data) {
                     .string => |s| writer.print("{s}", .{s}),
@@ -535,12 +527,11 @@ pub const Value = union(Type) {
                         writer.print("{s}", .{c.name});
                     },
                     .instance => |i| {
-                        writer.print("{s}.instance", .{i.class.name});
+                        writer.print("{s}.instance", .{i.base.data.class.name});
                         writer.print(" {{\n", .{});
-                        var it = i.fields.keyIterator();
-                        while (it.next()) |key| {
-                            writer.print("    {s}: ", .{key.*});
-                            i.fields.get(key.*).?.print(writer, constants);
+                        for (i.fields, 0..) |v, idx| {
+                            writer.print("    {s}: ", .{i.base.data.class.fields[idx].name});
+                            v.print(writer, constants);
                             writer.print("\n", .{});
                         }
                         writer.print("}}", .{});

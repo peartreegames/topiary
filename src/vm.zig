@@ -1,25 +1,25 @@
 const std = @import("std");
-const Compiler = @import("./compiler.zig").Compiler;
-const Bytecode = @import("./bytecode.zig").Bytecode;
-const parser = @import("./parser.zig");
-const OpCode = @import("./opcode.zig").OpCode;
-const values = @import("./values.zig");
-const Stack = @import("./structures/stack.zig").Stack;
-const Gc = @import("./gc.zig").Gc;
-const Token = @import("./token.zig").Token;
-const Frame = @import("./frame.zig").Frame;
-const Class = @import("./class.zig").Class;
-const builtins = @import("./builtins.zig");
-const Rnd = @import("./builtins.zig").Rnd;
-const Subscriber = @import("./subscriber.zig").Subscriber;
-const StateMap = @import("./state.zig").StateMap;
-const runners = @import("./runner.zig");
+const Compiler = @import("compiler.zig").Compiler;
+const Bytecode = @import("bytecode.zig").Bytecode;
+const parser = @import("parser.zig");
+const OpCode = @import("opcode.zig").OpCode;
+const values = @import("values.zig");
+const Stack = @import("structures/stack.zig").Stack;
+const Gc = @import("gc.zig").Gc;
+const Token = @import("token.zig").Token;
+const Frame = @import("frame.zig").Frame;
+const Class = @import("class.zig").Class;
+const builtins = @import("builtins.zig");
+const Rnd = @import("builtins.zig").Rnd;
+const Subscriber = @import("subscriber.zig").Subscriber;
+const StateMap = @import("state.zig").StateMap;
+const runners = @import("runner.zig");
 const Runner = runners.Runner;
 const Dialogue = runners.Dialogue;
 const Choice = runners.Choice;
 
 test {
-    _ = @import("./vm.test.zig");
+    _ = @import("vm.test.zig");
     std.testing.refAllDeclsRecursive(@This());
 }
 
@@ -245,11 +245,6 @@ pub const Vm = struct {
         while (self.can_continue) {
             try self.run();
         }
-        // if (self.stack.count > self.bytecode.locals_count) {
-        //     var count = self.stack.count - self.bytecode.locals_count;
-        //     std.log.warn("Completed run but still had {} items on stack.", .{count});
-        //     self.stack.print(std.debug, count);
-        // }
     }
 
     pub fn start(self: *Vm, bough_path: ?[]const u8) !void {
@@ -460,11 +455,11 @@ pub const Vm = struct {
                             try m.put(field_value, new_value);
                         },
                         .instance => {
-                            var i = instance_value.obj.data.instance;
+                            var inst = instance_value.obj.data.instance;
                             const field_name = field_value.obj.data.string;
-                            if (!i.fields.contains(field_name))
-                                return self.fail("Instance of {s} does not contain {s}", .{ i.class.name, field_name });
-                            try i.fields.put(field_name, new_value);
+                            if (inst.base.data.class.getIndex(field_name)) |idx| {
+                                inst.fields[idx] = new_value;
+                            } else return self.fail("Instance of {s} does not contain {s}", .{ inst.base.data.class.name, field_name });
                         },
                         // todo add string indexing
                         else => return self.fail("Cannot index {s} into type {s}", .{ @tagName(field_value), @tagName(instance_value.obj.data) }),
@@ -613,7 +608,7 @@ pub const Vm = struct {
                         });
                     }
                     std.mem.reverse(Class.Field, fields.items);
-                    const instance = try class.createInstance(try fields.toOwnedSlice());
+                    const instance = try class.createInstance(value.obj, try fields.toOwnedSlice());
                     try self.pushAlloc(.{ .instance = instance });
                 },
                 .range => {
@@ -722,12 +717,13 @@ pub const Vm = struct {
                                     return self.fail("Can only query instance fields by string name, not {s}", .{@tagName(index)});
                                 if (index.obj.data != .string)
                                     return self.fail("Can only query instance fields by string name, not {s}", .{@tagName(index.obj.data)});
-                                if (i.fields.get(index.obj.data.string)) |field| {
+                                if (i.base.data.class.getIndex(index.obj.data.string)) |idx| {
+                                    const field = i.fields[idx];
                                     try self.push(field);
                                     if (field == .obj and field.obj.data == .closure) {
                                         try self.push(target);
                                     }
-                                } else return self.fail("Unknown field \"{s}\" on instance of {s}.", .{ index.obj.data.string, i.class.name });
+                                } else return self.fail("Unknown field \"{s}\" on instance of {s}.", .{ index.obj.data.string, i.base.data.class.name });
                             },
                             .@"enum" => |e| {
                                 if (index != .obj)
@@ -737,7 +733,7 @@ pub const Vm = struct {
                                 var found = false;
                                 for (e.values, 0..) |name, i| {
                                     if (std.mem.eql(u8, name, index.obj.data.string)) {
-                                        try self.push(.{ .enum_value = .{ .index = @intCast(i), .base = &target } });
+                                        try self.push(.{ .enum_value = .{ .index = @intCast(i), .base = target.obj } });
                                         found = true;
                                     }
                                 }

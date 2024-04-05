@@ -3,10 +3,10 @@ const std = @import("std");
 var rnd: ?std.rand.DefaultPrng = null;
 pub const UUID = struct {
     pub const ID = [Size]u8;
-    pub const Empty: ID = [_]u8{ '0', '0', '0', '0', '0', '0', '-', '0', '0', '0', '0', '0', '0' };
+    pub const Empty: ID = [_]u8{ '0', '0', '0', '0', '0', '0', '0', '0', '-', '0', '0', '0', '0', '0', '0', '0', '0' };
 
     const Self = @This();
-    const Size: usize = 13;
+    const Size: usize = 17;
     const chars: []const u8 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
     pub fn new() ID {
@@ -24,7 +24,7 @@ pub const UUID = struct {
             id[i] = chars[res];
         }
 
-        id[6] = '-';
+        id[8] = '-';
         return id;
     }
 

@@ -4,7 +4,7 @@ const Value = @import("./values.zig").Value;
 pub const Class = struct {
     allocator: std.mem.Allocator,
     name: []const u8,
-    defaults: []Field,
+    fields: []Field,
 
     pub const Field = struct {
         name: []const u8,
@@ -15,31 +15,37 @@ pub const Class = struct {
         return .{
             .allocator = allocator,
             .name = name,
-            .defaults = fields,
+            .fields = fields,
         };
     }
 
     pub fn deinit(self: *const Class) void {
-        self.allocator.free(self.defaults);
+        self.allocator.free(self.fields);
     }
 
-    pub fn createInstance(self: *Class, fields: []Field) !Instance {
-        var values = std.StringHashMap(Value).init(self.allocator);
-        for (self.defaults) |field| {
-            try values.put(field.name, field.value);
+    pub fn getIndex(self: *const Class, field_name: []const u8) ?usize {
+        var i: usize = 0;
+        while (i < self.fields.len) : (i += 1) {
+            if (!std.mem.eql(u8, self.fields[i].name, field_name)) continue;
+            return i;
         }
-        for (fields) |field| {
-            try values.put(field.name, field.value);
-        }
+        return null;
+    }
 
+    pub fn createInstance(self: *Class, base: *Value.Obj, inst_fields: []Field) !Instance {
+        var values = try self.allocator.alloc(Value, self.fields.len);
+        for (self.fields, 0..) |f, i| values[i] = f.value;
+        for (inst_fields) |inst_field| {
+            if (self.getIndex(inst_field.name)) |i| values[i] = inst_field.value;
+        }
         return .{
-            .class = self,
+            .base = base,
             .fields = values,
         };
     }
 
     pub const Instance = struct {
-        class: *Class,
-        fields: std.StringHashMap(Value),
+        base: *Value.Obj,
+        fields: []Value,
     };
 };

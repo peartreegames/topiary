@@ -796,7 +796,10 @@ test "Instance" {
     var vm = try initTestVm(input, &mod, false);
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
-    try vm.interpret();
+    vm.interpret() catch |err| {
+        vm.err.print(std.io.getStdErr().writer());
+        return err;
+    };
 }
 
 test "Enums" {
@@ -1445,6 +1448,12 @@ test "Save and Load State" {
         \\ var str = "value"
         \\ list.add(value)
         \\ list[0] = "changed"
+        \\ class Test = {
+        \\    field1 = "one",
+        \\    field2 = 2,
+        \\ }
+        \\ var test = new Test{}
+        \\ var func = || return "func"
     ;
     const alloc = testing.allocator;
 
@@ -1465,6 +1474,7 @@ test "Save and Load State" {
         \\ var value = 10
         \\ value += 5
         \\ var outer = List{}
+        \\ var test = "t"
     ;
 
     var mod2 = Module.create(allocator);
@@ -1477,6 +1487,7 @@ test "Save and Load State" {
     // try vm2.loadState(&save);
     try testing.expectEqual(vm2.globals[0].number, 1);
     try testing.expectEqualSlices(u8, vm2.globals[1].obj.data.list.items[0].obj.data.list.items[0].obj.data.string, "changed");
+    try testing.expectEqual(vm2.globals[2].obj.data.instance.fields[1].number, 2);
     try vm2.interpret();
     try testing.expectEqual(vm2.globals[0].number, 6);
 }

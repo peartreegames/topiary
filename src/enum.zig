@@ -13,7 +13,7 @@ pub const Enum = struct {
     }
 
     pub const Val = struct {
+        base: *Value.Obj,
         index: u8,
-        base: *const Value,
     };
 };

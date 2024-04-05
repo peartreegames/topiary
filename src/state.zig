@@ -1,10 +1,11 @@
 const std = @import("std");
-const values = @import("./values.zig");
-const adapter = @import("./values.zig").adapter;
-const Bytecode = @import("./bytecode.zig").Bytecode;
-const Vm = @import("./vm.zig").Vm;
-const Enum = @import("./enum.zig").Enum;
-const UUID = @import("./utils/uuid.zig").UUID;
+const values = @import("values.zig");
+const adapter = @import("values.zig").adapter;
+const Bytecode = @import("bytecode.zig").Bytecode;
+const Vm = @import("vm.zig").Vm;
+const Enum = @import("enum.zig").Enum;
+const Class = @import("class.zig").Class;
+const UUID = @import("utils/uuid.zig").UUID;
 
 const testing = std.testing;
 const Nil = values.Nil;
@@ -24,15 +25,15 @@ pub const State = struct {
             if (s.is_extern) continue;
 
             const value = vm.globals[s.index];
-            if (value == .void or switch (value.obj.data) {
+            if (value == .void or (value == .obj and switch (value.obj.data) {
                 // should never be here, but just in case
                 .builtin, .ext_function => true,
                 else => false,
-            }) continue;
+            })) continue;
 
-            // we don't need to save 'const' values except collections and enums
+            // we don't need to save 'const' strings or functions
             if (!s.is_mutable and (value != .obj or switch (value.obj.data) {
-                .function, .string => true,
+                .closure, .function, .string => true,
                 else => false,
             })) continue;
             // or empty visits
@@ -101,6 +102,47 @@ pub const State = struct {
                 try stream.write(f.is_method);
                 try stream.endObject();
             },
+            .closure => |c| {
+                try stream.beginObject();
+                try stream.objectField("function");
+
+                const obj = @fieldParentPtr(Value.Obj, "data", c.data);
+                try serializeValue(.{ .obj = obj }, stream, references);
+
+                try stream.objectField("free_values");
+                try stream.beginArray();
+                for (c.free_values) |v| try serializeValue(v, stream, references);
+                try stream.endArray();
+
+                try stream.endObject();
+            },
+            .class => |c| {
+                try stream.beginObject();
+                try stream.objectField("name");
+                try stream.write(c.name);
+                try stream.objectField("fields");
+                try stream.beginArray();
+                for (c.fields) |f| {
+                    try stream.beginObject();
+                    try stream.objectField("name");
+                    try stream.write(f.name);
+                    try stream.objectField("value");
+                    try serializeValue(f.value, stream, references);
+                    try stream.endObject();
+                }
+                try stream.endArray();
+                try stream.endObject();
+            },
+            .instance => |i| {
+                try stream.beginObject();
+                try stream.objectField("base");
+                try serializeValue(.{ .obj = i.base }, stream, references);
+                try stream.objectField("fields");
+                try stream.beginArray();
+                for (i.fields) |f| try serializeValue(f, stream, references);
+                try stream.endArray();
+                try stream.endObject();
+            },
             else => try stream.write("NOT IMPL"),
         }
         try stream.endObject();
@@ -123,9 +165,8 @@ pub const State = struct {
             .visit => |v| try stream.write(v),
             .enum_value => |e| {
                 try stream.beginObject();
-                try references.append(e.base.*);
                 try stream.objectField("base");
-                try stream.write(e.base.obj.id);
+                try serializeValue(.{ .obj = e.base }, stream, references);
                 try stream.objectField("index");
                 try stream.write(e.index);
                 try stream.endObject();
@@ -173,7 +214,8 @@ pub const State = struct {
             return Void;
         }
         if (entry.object.get("enum_value")) |v| {
-            const base_id = UUID.fromString(v.object.get("base").?.string);
+            const base_ref = v.object.get("base").?.object.get("ref").?;
+            const base_id = UUID.fromString(base_ref.string);
             const base = if (refs.get(base_id)) |b| b else blk: {
                 const value = try deserializeEntry(vm, root, v.object.get("base").?, refs, base_id);
                 try refs.put(base_id, value);
@@ -181,7 +223,7 @@ pub const State = struct {
             };
             return .{
                 .enum_value = .{
-                    .base = &base,
+                    .base = base.obj,
                     .index = @intCast(v.object.get("index").?.integer),
                 },
             };
@@ -249,6 +291,46 @@ pub const State = struct {
             try refs.put(id.?, result);
             return result;
         }
+        if (entry.object.get("class")) |v| {
+            const name = v.object.get("name").?.string;
+            const ser_fields = v.object.get("fields").?.array.items;
+            var fields = try vm.allocator.alloc(Class.Field, ser_fields.len);
+            for (ser_fields, 0..) |f, i| {
+                fields[i].name = f.object.get("name").?.string;
+                fields[i].value = try deserializeEntry(vm, root, f.object.get("value").?, refs, null);
+            }
+            var result = try vm.gc.create(vm, .{ .class = .{
+                .allocator = vm.allocator,
+                .name = name,
+                .fields = fields,
+            } });
+            result.obj.id = id.?;
+            try refs.put(id.?, result);
+            return result;
+        }
+        if (entry.object.get("instance")) |v| {
+            const base_ref = v.object.get("base").?.object.get("ref").?;
+            const base_id = UUID.fromString(base_ref.string);
+            const base = if (refs.get(base_id)) |b| b else blk: {
+                const value = try deserializeEntry(vm, root, v.object.get("base").?, refs, base_id);
+                try refs.put(base_id, value);
+                break :blk value;
+            };
+            const ser_fields = v.object.get("fields").?.array.items;
+            var fields = try vm.allocator.alloc(Value, ser_fields.len);
+            for (ser_fields, 0..) |f, i| {
+                fields[i] = try deserializeEntry(vm, root, f, refs, null);
+            }
+
+            var result = try vm.gc.create(vm, .{ .instance = .{
+                .base = base.obj,
+                .fields = fields,
+            } });
+            result.obj.id = id.?;
+            try refs.put(id.?, result);
+            return result;
+        }
+
         return Void;
     }
 };
