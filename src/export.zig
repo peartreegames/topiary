@@ -389,38 +389,19 @@ export fn destroyVm(vm_ptr: usize) void {
     alloc.destroy(vm);
 }
 
-export fn saveState(vm_ptr: usize, path_ptr: [*]const u8, path_len: usize) void {
+export fn saveState(vm_ptr: usize, out_ptr: [*c]u8, max: usize) usize {
     const vm: *Vm = @ptrFromInt(vm_ptr);
-    var file = std.fs.createFileAbsolute(path_ptr[0..path_len], .{}) catch |err| {
-        log("Could not open file: {s}", .{@errorName(err)}, .err);
-        return;
-    };
-    defer file.close();
-    const writer = file.writer();
-    State.serialize(vm, writer) catch |err| {
+    var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
+    State.serialize(vm, fbs.writer()) catch |err| {
         log("Could not serialize state: {s}", .{@errorName(err)}, .err);
-        return;
+        return 0;
     };
+    return fbs.pos;
 }
 
-export fn loadState(vm_ptr: usize, path_ptr: [*]const u8, path_len: usize) void {
+export fn loadState(vm_ptr: usize, json_str: [*]const u8, json_len: usize) void {
     const vm: *Vm = @ptrFromInt(vm_ptr);
-    const file = std.fs.openFileAbsolute(path_ptr[0..path_len], .{ .mode = .read_only }) catch |err| {
-        log("Could not open file: {s}", .{@errorName(err)}, .err);
-        return;
-    };
-    defer file.close();
-    const stat = file.stat() catch |err| {
-        log("Could not read file stats: {s}", .{@errorName(err)}, .err);
-        return;
-    };
-    const max = stat.size;
-    const content = file.readToEndAlloc(alloc, max + 1) catch |err| {
-        log("Could not read file: {s}", .{@errorName(err)}, .err);
-        return;
-    };
-    defer alloc.free(content);
-    State.deserialize(vm, content) catch |err| {
+    State.deserialize(vm, json_str[0..json_len]) catch |err| {
         log("Could not deserialize data: {s}", .{@errorName(err)}, .err);
     };
 }
