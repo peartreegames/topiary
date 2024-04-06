@@ -1,6 +1,6 @@
 # Syntax
 
-## Dialogue
+## Dialogue 
 
 ### Boughs
 
@@ -9,7 +9,7 @@ So `=== START {}` is a bough called `START` with an empty "body".
 
 ### Lines
 
-Dialogue lines have three sections. `:[Speaker]: "[Content]" #[Tag]`
+Lines have three sections. `:[Speaker]: "[Content]" #[Tag]`
 
 Speakers are optional and can be empty with `::`. ex: `:: "A godlike voice echoes from the heavens."`
 

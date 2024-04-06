@@ -7,7 +7,7 @@ const module = @import("module.zig");
 const runners = @import("runner.zig");
 
 const Runner = runners.Runner;
-const Dialogue = runners.Dialogue;
+const Line = runners.Line;
 const Choice = runners.Choice;
 
 const File = module.File;
@@ -186,7 +186,7 @@ const CliRunner = struct {
     pub fn init() CliRunner {
         return .{
             .runner = .{
-                .onDialogueFn = onDialogue,
+                .onLineFn = onLine,
                 .onChoicesFn = onChoices,
             },
         };
@@ -199,9 +199,9 @@ const CliRunner = struct {
         };
     }
 
-    pub fn onDialogue(runner: *Runner, vm: *Vm, dialogue: Dialogue) void {
+    pub fn onLine(runner: *Runner, vm: *Vm, dialogue: Line) void {
         const stdin = std.io.getStdIn().reader();
-        const self = @fieldParentPtr(CliRunner, "runner", runner);
+        const self: *CliRunner = @fieldParentPtr("runner", runner);
         self.print(":", .{});
         if (dialogue.speaker) |speaker| {
             self.print("{s}", .{speaker});
@@ -217,7 +217,7 @@ const CliRunner = struct {
     pub fn onChoices(runner: *Runner, vm: *Vm, choices: []Choice) void {
         const stdin = std.io.getStdIn().reader();
         const stderr = std.io.getStdErr().writer();
-        const self = @fieldParentPtr(CliRunner, "runner", runner);
+        const self: *CliRunner = @fieldParentPtr("runner", runner);
         var index: ?usize = null;
         while (index == null) {
             for (choices, 0..) |choice, i| {
@@ -248,18 +248,18 @@ const AutoTestRunner = struct {
         return .{
             .rnd = std.rand.DefaultPrng.init(std.crypto.random.int(u64)),
             .runner = .{
-                .onDialogueFn = AutoTestRunner.onDialogue,
+                .onLineFn = AutoTestRunner.onLine,
                 .onChoicesFn = AutoTestRunner.onChoices,
             },
         };
     }
 
-    pub fn onDialogue(_: *Runner, vm: *Vm, _: Dialogue) void {
+    pub fn onLine(_: *Runner, vm: *Vm, _: Line) void {
         vm.selectContinue();
     }
 
     pub fn onChoices(runner: *Runner, vm: *Vm, choices: []Choice) void {
-        var auto = @fieldParentPtr(AutoTestRunner, "runner", runner);
+        var auto: *AutoTestRunner = @fieldParentPtr("runner", runner);
         const index = auto.rnd.random().intRangeAtMost(usize, 0, choices.len - 1);
         vm.selectChoice(index) catch |err| {
             std.debug.print("Error: {}", .{err});

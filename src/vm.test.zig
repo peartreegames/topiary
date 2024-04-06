@@ -11,7 +11,7 @@ const State = @import("state.zig").State;
 const runners = @import("runner.zig");
 const module = @import("module.zig");
 const Runner = runners.Runner;
-const Dialogue = runners.Dialogue;
+const Line = runners.Line;
 const Choice = runners.Choice;
 
 const Compiler = compiler.Compiler;
@@ -24,13 +24,13 @@ pub const TestRunner = struct {
     pub fn init() TestRunner {
         return .{
             .runner = .{
-                .onDialogueFn = TestRunner.onDialogue,
+                .onLineFn = TestRunner.onLine,
                 .onChoicesFn = TestRunner.onChoices,
             },
         };
     }
 
-    pub fn onDialogue(_: *Runner, vm: *Vm, dialogue: Dialogue) void {
+    pub fn onLine(_: *Runner, vm: *Vm, dialogue: Line) void {
         if (dialogue.speaker) |speaker| {
             std.debug.print("{s}: ", .{speaker});
         }
@@ -1490,4 +1490,6 @@ test "Save and Load State" {
     try testing.expectEqual(vm2.globals[2].obj.data.instance.fields[1].number, 2);
     try vm2.interpret();
     try testing.expectEqual(vm2.globals[0].number, 6);
+
+    std.log.warn("CALC SIZE: {}, ACTUAL SIZE: {}", .{ try State.calculateSize(&vm), data.items.len });
 }

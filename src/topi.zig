@@ -26,8 +26,8 @@ pub const StateMap = @import("state.zig").StateMap;
 
 /// Runner interface to hook into the Vm
 pub const Runner = runner.Runner;
-/// Dialogue struct
-pub const Dialogue = runner.Dialogue;
+/// Line struct
+pub const Line = runner.Line;
 /// Choice struct
 pub const Choice = runner.Choice;
 /// Topi Value

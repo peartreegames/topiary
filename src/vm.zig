@@ -15,7 +15,7 @@ const Subscriber = @import("subscriber.zig").Subscriber;
 const StateMap = @import("state.zig").StateMap;
 const runners = @import("runner.zig");
 const Runner = runners.Runner;
-const Dialogue = runners.Dialogue;
+const Line = runners.Line;
 const Choice = runners.Choice;
 
 test {
@@ -485,7 +485,11 @@ pub const Vm = struct {
                         if (c == '{') {
                             try writer.writeAll(str[s..i]);
                             switch (args.items[a]) {
-                                .number => |n| try writer.print("{d:.5}", .{n}),
+                                .number => |n| {
+                                    var buf: [128]u8 = undefined;
+                                    const num = try std.fmt.formatFloat(&buf, n, .{ .precision = 5 });
+                                    try writer.writeAll(num);
+                                },
                                 .bool => |b| try writer.writeAll(if (b) "true" else "false"),
                                 // remove final 0
                                 .obj => |o| try writer.writeAll(o.data.string[0..(o.data.string.len - 1)]),
@@ -760,7 +764,7 @@ pub const Vm = struct {
                     const id_index = self.readInt(OpCode.Size(.constant));
                     if (is_in_jump) continue;
                     self.is_waiting = true;
-                    self.runner.onDialogue(self, .{
+                    self.runner.onLine(self, .{
                         .content = dialogue_value.obj.data.string,
                         .speaker = speaker,
                         .tags = tags,

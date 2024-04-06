@@ -12,7 +12,7 @@ const Subscriber = @import("subscriber.zig").Subscriber;
 const Module = @import("module.zig").Module;
 const File = @import("module.zig").File;
 const Runner = runners.Runner;
-const Dialogue = runners.Dialogue;
+const Line = runners.Line;
 const Choice = runners.Choice;
 const State = @import("./state.zig").State;
 
@@ -21,7 +21,7 @@ var alloc = std.heap.page_allocator;
 var debug_log: ?OnExportDebugLog = null;
 var debug_severity: Severity = .err;
 
-const ExportDialogue = extern struct {
+const ExportLine = extern struct {
     content: [*c]const u8,
     content_length: usize,
     speaker: [*c]const u8,
@@ -40,7 +40,7 @@ const ExportChoice = extern struct {
 };
 
 const OnExportValueChanged = *const fn (value: ExportValue) void;
-const OnExportDialogue = *const fn (vm_ptr: usize, dialogue: *ExportDialogue) void;
+const OnExportLine = *const fn (vm_ptr: usize, dialogue: *ExportLine) void;
 const OnExportChoices = *const fn (vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) void;
 
 const OnExportDebugLog = *const fn (msg: [*c]const u8, severity: Severity) void;
@@ -71,12 +71,30 @@ export fn setDebugSeverity(severity: u8) void {
     debug_severity = @enumFromInt(severity);
 }
 
+export fn calculateCompileSize(path_ptr: [*c]const u8, path_length: usize) usize {
+    log("Calculating Compile size", .{}, .debug);
+    var counter = std.io.countingWriter(std.io.null_writer);
+    writeBytecode(path_ptr, path_length, counter.writer());
+    return counter.bytes_written;
+}
+
 export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, max: usize) usize {
+    var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
+    const writer = fbs.writer();
+    writeBytecode(path_ptr, path_length, writer);
+    return fbs.pos;
+}
+
+fn writeBytecode(path_ptr: [*]const u8, path_length: usize, writer: anytype) void {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     var comp_alloc = arena.allocator();
 
-    const full_path = path_ptr[0..path_length];
+    const full_path = alloc.dupe(u8, path_ptr[0..path_length]) catch |err| {
+        log("Could not allocate file full_path: {s}", .{@errorName(err)}, .err);
+        return;
+    };
+    defer alloc.free(full_path);
     var mod = Module{
         .allocator = comp_alloc,
         .entry = undefined,
@@ -84,18 +102,18 @@ export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, m
     };
     const file = comp_alloc.create(File) catch |err| {
         log("Could not allocate Module File: {s}", .{@errorName(err)}, .err);
-        return 0;
+        return;
     };
     file.* = File.create(full_path, &mod) catch |err| {
         log("Could not create Module File: {s}", .{@errorName(err)}, .err);
-        return 0;
+        return;
     };
     mod.entry = file;
     mod.includes.putNoClobber(file.path, file) catch unreachable;
     defer mod.deinit();
     file.loadSource(comp_alloc) catch |err| {
         log("Could not load file source: {s}", .{@errorName(err)}, .err);
-        return 0;
+        return;
     };
 
     var output_log = std.ArrayList(u8).init(alloc);
@@ -105,38 +123,35 @@ export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, m
     file.buildTree(comp_alloc) catch |err| {
         mod.writeErrors(output_writer) catch |e| {
             log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
-            return 0;
+            return;
         };
         log("Could not parse file '{s}': {s}\n{s}", .{ full_path, @errorName(err), output_log.items }, .err);
-        return 0;
+        return;
     };
 
     var compiler = Compiler.init(comp_alloc) catch |err| {
         log("Could not create compiler: {s}", .{@errorName(err)}, .err);
-        return 0;
+        return;
     };
     defer compiler.deinit();
 
     compiler.compile(&mod) catch |err| {
         mod.writeErrors(output_writer) catch |e| {
             log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
-            return 0;
+            return;
         };
         log("Could not compile file '{s}': {s}\n{s}", .{ full_path, @errorName(err), output_log.items }, .err);
-        return 0;
+        return;
     };
     var bytecode = compiler.bytecode() catch |err| {
         log("Could not create bytecode: {s}", .{@errorName(err)}, .err);
-        return 0;
+        return;
     };
 
-    var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
-    const writer = fbs.writer();
     bytecode.serialize(writer) catch |err| {
         log("Could not serialize bytecode: {s}", .{@errorName(err)}, .err);
-        return 0;
+        return;
     };
-    return fbs.pos;
 }
 
 export fn start(vm_ptr: usize, path_ptr: [*]const u8, path_len: usize) void {
@@ -337,7 +352,7 @@ export fn unsubscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize,
 
     const name = name_ptr[0..name_length];
     var callback: OnExportValueChanged = @ptrFromInt(callback_ptr);
-    const extern_callback = @fieldParentPtr(ExportCallback, "callback", &callback);
+    const extern_callback: *ExportCallback = @fieldParentPtr("callback", &callback);
 
     vm.unsubscribeDelegate(name, .{
         .context_ptr = @intFromPtr(extern_callback),
@@ -349,7 +364,7 @@ export fn unsubscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize,
 }
 
 export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_ptr: usize, on_choice_ptr: usize) usize {
-    const on_dialogue: OnExportDialogue = @ptrFromInt(on_dialogue_ptr);
+    const on_dialogue: OnExportLine = @ptrFromInt(on_dialogue_ptr);
     const on_choices: OnExportChoices = @ptrFromInt(on_choice_ptr);
 
     var fbs = std.io.fixedBufferStream(source_ptr[0..source_len]);
@@ -383,10 +398,16 @@ export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_ptr:
 export fn destroyVm(vm_ptr: usize) void {
     log("Destroying VM", .{}, .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);
-    const runner = @fieldParentPtr(ExportRunner, "runner", vm.runner);
+    const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
     alloc.destroy(runner);
     vm.deinit();
     alloc.destroy(vm);
+}
+
+export fn calculateStateSize(vm_ptr: usize) usize {
+    const vm: *Vm = @ptrFromInt(vm_ptr);
+    log("Calculating State size", .{}, .debug);
+    return State.calculateSize(vm) catch 0;
 }
 
 export fn saveState(vm_ptr: usize, out_ptr: [*c]u8, max: usize) usize {
@@ -407,29 +428,29 @@ export fn loadState(vm_ptr: usize, json_str: [*]const u8, json_len: usize) void 
 }
 
 const ExportRunner = struct {
-    onExportDialogue: OnExportDialogue,
+    onExportLine: OnExportLine,
     onExportChoices: OnExportChoices,
     allocator: std.mem.Allocator,
 
     runner: Runner,
     tags: [512][*c]const u8,
-    dialogue: ExportDialogue = undefined,
+    dialogue: ExportLine = undefined,
 
-    pub fn init(allocator: std.mem.Allocator, on_dialogue: OnExportDialogue, on_choices: OnExportChoices) ExportRunner {
+    pub fn init(allocator: std.mem.Allocator, on_dialogue: OnExportLine, on_choices: OnExportChoices) ExportRunner {
         return .{
             .allocator = allocator,
-            .onExportDialogue = on_dialogue,
+            .onExportLine = on_dialogue,
             .onExportChoices = on_choices,
             .tags = [_][*c]const u8{0} ** 512,
             .runner = .{
-                .onDialogueFn = onDialogue,
+                .onLineFn = onLine,
                 .onChoicesFn = onChoices,
             },
         };
     }
 
-    pub fn onDialogue(runner: *Runner, vm: *Vm, dialogue: Dialogue) void {
-        var self = @fieldParentPtr(ExportRunner, "runner", runner);
+    pub fn onLine(runner: *Runner, vm: *Vm, dialogue: Line) void {
+        var self: *ExportRunner = @fieldParentPtr("runner", runner);
 
         var i: usize = 0;
         while (i < dialogue.tags.len) : (i += 1) {
@@ -444,12 +465,12 @@ const ExportRunner = struct {
             .tags = &self.tags,
             .tags_length = @intCast(dialogue.tags.len),
         };
-        log("OnDialoguePtr: {d}", .{@intFromPtr(self.onExportDialogue)}, .debug);
-        self.onExportDialogue(@intFromPtr(vm), &self.dialogue);
+        log("OnLinePtr: {d}", .{@intFromPtr(self.onExportLine)}, .debug);
+        self.onExportLine(@intFromPtr(vm), &self.dialogue);
     }
 
     pub fn onChoices(runner: *Runner, vm: *Vm, choices: []Choice) void {
-        var self = @fieldParentPtr(ExportRunner, "runner", runner);
+        var self: *ExportRunner = @fieldParentPtr("runner", runner);
         var i: usize = 0;
         var result = self.allocator.alloc(ExportChoice, choices.len) catch {
             log("Could not allocate choices", .{}, .err);
@@ -481,7 +502,7 @@ const ExportRunner = struct {
 };
 
 const TestRunner = struct {
-    pub fn onDialogue(vm_ptr: usize, dialogue: *ExportDialogue) void {
+    pub fn onLine(vm_ptr: usize, dialogue: *ExportLine) void {
         std.debug.print("{s}: {s} ", .{
             dialogue.speaker[0..dialogue.speaker_length],
             dialogue.content[0..dialogue.content_length],
@@ -555,9 +576,11 @@ test "Create and Destroy Vm" {
     defer std.testing.allocator.free(dir_path);
     const path = try std.fs.path.resolve(std.testing.allocator, &.{ dir_path, "tmp.topi" });
     defer std.testing.allocator.free(path);
-    try std.testing.expect(compile(path.ptr, path.len, buf.ptr, buf.len) > 0);
 
-    const on_dialogue: OnExportDialogue = TestRunner.onDialogue;
+    const compile_size = calculateCompileSize(path.ptr, path.len);
+    try std.testing.expectEqual(compile(path.ptr, path.len, buf.ptr, buf.len), compile_size);
+
+    const on_dialogue: OnExportLine = TestRunner.onLine;
     const on_choices: OnExportChoices = TestRunner.onChoices;
 
     const vm_ptr = createVm(buf.ptr, buf.len, @intFromPtr(on_dialogue), @intFromPtr(on_choices));

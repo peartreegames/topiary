@@ -2,7 +2,7 @@ const Vm = @import("./vm.zig").Vm;
 const UUID = @import("./utils/uuid.zig").UUID;
 const ID = UUID.ID;
 
-pub const Dialogue = struct {
+pub const Line = struct {
     speaker: ?[]const u8,
     content: []const u8,
     tags: [][]const u8,
@@ -18,14 +18,14 @@ pub const Choice = struct {
 };
 
 pub const Runner = struct {
-    onDialogueFn: OnDialogue,
+    onLineFn: OnLine,
     onChoicesFn: OnChoices,
 
-    pub const OnDialogue = *const fn (runner: *Runner, vm: *Vm, dialogue: Dialogue) void;
+    pub const OnLine = *const fn (runner: *Runner, vm: *Vm, dialogue: Line) void;
     pub const OnChoices = *const fn (runner: *Runner, vm: *Vm, choices: []Choice) void;
 
-    pub fn onDialogue(runner: *Runner, vm: *Vm, dialogue: Dialogue) void {
-        runner.onDialogueFn(runner, vm, dialogue);
+    pub fn onLine(runner: *Runner, vm: *Vm, dialogue: Line) void {
+        runner.onLineFn(runner, vm, dialogue);
     }
 
     pub fn onChoices(runner: *Runner, vm: *Vm, choices: []Choice) void {

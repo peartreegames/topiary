@@ -44,7 +44,7 @@ Here you can see what writing in topi looks like
         }
         ~ "What does the virtual machine do?" {
             :Author: "The virtual machine will take the bytecode and a runner and process each line of code, dialogue, and choices."
-            :Author: "The runner has two functions, onDialogue, and onChoice. Which will be called and used to call your game code."
+            :Author: "The runner has two functions, onLine, and onChoice. Which will be called and used to call your game code."
             => TOPIC
         }
         ~ "Okay, thanks." :Author: "Let me know in the issues if you have any questions!"

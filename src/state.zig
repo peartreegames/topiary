@@ -13,26 +13,33 @@ const Void = values.Void;
 const Value = values.Value;
 
 pub const State = struct {
+    pub fn calculateSize(vm: *Vm) !usize {
+        var counter = std.io.countingWriter(std.io.null_writer);
+        try serialize(vm, counter.writer());
+        return counter.bytes_written;
+    }
+
     pub fn serialize(vm: *Vm, writer: anytype) !void {
         var references = std.ArrayList(Value).init(vm.allocator);
         defer references.deinit();
         var seen = std.AutoHashMap(UUID.ID, void).init(vm.allocator);
         defer seen.deinit();
-        var stream = std.json.writeStream(writer, .{ .whitespace = .indent_2 });
+        var stream = std.json.writeStream(writer, .{ .whitespace = .minified });
         defer stream.deinit();
         try stream.beginObject();
         for (vm.bytecode.global_symbols) |s| {
             if (s.is_extern) continue;
 
             const value = vm.globals[s.index];
-            if (value == .void or (value == .obj and switch (value.obj.data) {
+            if (value == .void) continue;
+            if ((value == .obj and switch (value.obj.data) {
                 // should never be here, but just in case
                 .builtin, .ext_function => true,
                 else => false,
             })) continue;
 
-            // we don't need to save 'const' strings or functions
-            if (!s.is_mutable and (value != .obj or switch (value.obj.data) {
+            // we don't need to save 'const' values, strings or functions
+            if (!s.is_mutable and value != .visit and (value != .obj or switch (value.obj.data) {
                 .closure, .function, .string => true,
                 else => false,
             })) continue;
@@ -81,6 +88,7 @@ pub const State = struct {
                 try stream.beginObject();
                 try stream.objectField("name");
                 try stream.write(e.name);
+                try stream.objectField("values");
                 try stream.beginArray();
                 for (e.values) |v| try stream.write(v);
                 try stream.endArray();
@@ -106,7 +114,7 @@ pub const State = struct {
                 try stream.beginObject();
                 try stream.objectField("function");
 
-                const obj = @fieldParentPtr(Value.Obj, "data", c.data);
+                const obj: *Value.Obj = @fieldParentPtr("data", c.data);
                 try serializeValue(.{ .obj = obj }, stream, references);
 
                 try stream.objectField("free_values");
@@ -158,7 +166,7 @@ pub const State = struct {
             else => try stream.objectField(@tagName(value)),
         }
         switch (value) {
-            .void => unreachable,
+            .void => try stream.write(null),
             .nil => try stream.write(null),
             .bool => |b| try stream.write(b),
             .number => |n| try stream.print("{d:.5}", .{n}),
@@ -199,6 +207,7 @@ pub const State = struct {
     }
 
     fn deserializeEntry(vm: *Vm, root: *const std.json.ObjectMap, entry: std.json.Value, refs: *std.AutoHashMap(UUID.ID, Value), id: ?UUID.ID) !Value {
+        if (entry.object.get("void") != null) return Void;
         if (entry.object.get("number")) |v| return .{ .number = @floatCast(v.float) };
         if (entry.object.get("string")) |v| return try vm.gc.create(vm, .{ .string = try vm.allocator.dupe(u8, v.string) });
         if (entry.object.get("nil") != null) return Nil;
