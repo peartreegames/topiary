@@ -10,10 +10,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Repository Dispatch
-        uses: peter-evans/repository-dispatch@v1
+      - name: Trigger Docs
+      - uses: actions/github-script@v6
         with:
-          token: ${{ secrets.PAT }}
-          repository: peartreegames/website
-          event-type: doc-update
-          client-payload: '{"ref": "${{ github.ref }}"}'
+          github-token: ${{ secrets.PAT }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: 'peartreegames',
+              repo: 'webite',
+              workflow_id: 'main.yml',
+              ref: 'main'
+            })
