@@ -6,7 +6,7 @@ pub const UUID = struct {
     pub const Empty: ID = [_]u8{ '0', '0', '0', '0', '0', '0', '0', '0', '-', '0', '0', '0', '0', '0', '0', '0', '0' };
 
     const Self = @This();
-    const Size: usize = 17;
+    pub const Size: usize = 17;
     const chars: []const u8 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
     pub fn new() ID {
@@ -28,7 +28,22 @@ pub const UUID = struct {
         return id;
     }
 
+    pub fn isEmpty(id: ID) bool {
+        return std.mem.eql(u8, &id, &UUID.Empty);
+    }
+
+    pub fn isAuto(id: ID) bool {
+        var zero_arr: [UUID.Size - 9]u8 = undefined;
+        @memset(zero_arr[0..], '0');
+        return std.mem.eql(u8, id[9..], &zero_arr);
+    }
+
+    pub fn setAuto(id: *ID) void {
+        @memset(id[9..], '0');
+    }
+
     pub fn fromString(str: []const u8) ID {
+        if (str.len != Size) return Empty;
         var id: ID = undefined;
         var i: usize = 0;
         while (i < Size) : (i += 1) {

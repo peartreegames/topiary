@@ -12,6 +12,7 @@ const fs = std.fs;
 pub const Module = struct {
     allocator: std.mem.Allocator,
     entry: *File,
+    use_loc: bool = false,
     includes: std.StringArrayHashMap(*File),
 
     pub fn init(allocator: std.mem.Allocator, entry_path: []const u8) !*Module {
@@ -21,8 +22,7 @@ pub const Module = struct {
             .entry = undefined,
             .includes = std.StringArrayHashMap(*File).init(allocator),
         };
-        const file = try allocator.create(File);
-        file.* = try File.create(entry_path, mod);
+        const file = try File.create(allocator, entry_path, mod);
         mod.entry = file;
         try mod.includes.putNoClobber(file.path, file);
         return mod;
@@ -38,13 +38,14 @@ pub const Module = struct {
     }
 
     pub fn generateBytecode(self: *Module) !Bytecode {
-        try self.entry.loadSource(self.allocator);
-        self.entry.buildTree(self.allocator) catch |err| {
+        try self.entry.loadSource();
+        self.entry.buildTree() catch |err| {
             try self.writeErrors(std.io.getStdErr().writer());
             return err;
         };
 
         var compiler = try Compiler.init(self.allocator);
+        compiler.use_loc = self.use_loc;
         defer compiler.deinit();
 
         compiler.compile(self) catch |e| {
@@ -69,18 +70,14 @@ pub const Module = struct {
         // The file.tree arean allocator deinits all other trees
         // that have been included, so we only deinit the first tree
         if (maybe_first) |first| {
-            first.value_ptr.*.deinit(self.allocator);
-            first.value_ptr.*.unloadSource(self.allocator);
+            first.value_ptr.*.destroy();
             self.allocator.free(first.key_ptr.*);
-            self.allocator.destroy(first.value_ptr.*);
         }
 
         while (it.next()) |kvp| {
             kvp.value_ptr.*.tree_loaded = false;
-            kvp.value_ptr.*.deinit(self.allocator);
-            kvp.value_ptr.*.unloadSource(self.allocator);
+            kvp.value_ptr.*.destroy();
             self.allocator.free(kvp.key_ptr.*);
-            self.allocator.destroy(kvp.value_ptr.*);
         }
         self.includes.deinit();
     }
@@ -91,55 +88,89 @@ pub const File = struct {
     name: []const u8,
     dir_name: []const u8,
     dir: fs.Dir,
-    module: *Module,
+    module: ?*Module = null,
     errors: CompilerErrors,
 
     source: []const u8 = undefined,
     source_loaded: bool = false,
     tree: Tree = undefined,
     tree_loaded: bool = false,
+    loc: []const u8 = undefined,
+    loc_loaded: bool = false,
 
-    pub fn create(path: []const u8, module: *Module) !File {
-        return .{
+    allocator: std.mem.Allocator,
+
+    pub fn create(allocator: std.mem.Allocator, path: []const u8, module: ?*Module) !*File {
+        const file = try allocator.create(File);
+        file.* = .{
+            .allocator = allocator,
             .path = path,
             .name = fs.path.basename(path),
             .dir_name = fs.path.dirname(path) orelse "",
             .dir = try fs.openDirAbsolute(fs.path.dirname(path) orelse path, .{}),
             .module = module,
-            .errors = CompilerErrors.init(module.allocator),
+            .errors = CompilerErrors.init(allocator),
         };
+        return file;
     }
 
-    pub fn deinit(self: *File, allocator: std.mem.Allocator) void {
-        _ = allocator;
+    pub fn destroy(self: *File) void {
+        if (self.source_loaded) self.allocator.free(self.source);
         if (self.tree_loaded) self.tree.deinit();
+        if (self.loc_loaded) self.allocator.free(self.loc);
         self.errors.deinit();
+        self.allocator.destroy(self);
     }
 
-    pub fn loadSource(self: *File, allocator: std.mem.Allocator) !void {
+    pub fn loadSource(self: *File) !void {
         if (self.source_loaded) return;
         const file = try fs.openFileAbsolute(self.path, .{});
         defer file.close();
 
         const stat = try file.stat();
         const file_size = stat.size;
-        const source = try allocator.alloc(u8, file_size);
+        const source = try self.allocator.alloc(u8, file_size);
         try file.reader().readNoEof(source);
         self.source = source;
         self.source_loaded = true;
     }
 
-    pub fn unloadSource(self: *File, allocator: std.mem.Allocator) void {
+    pub fn unloadSource(self: *File) void {
         if (!self.source_loaded) return;
-        allocator.free(self.source);
+        self.allocator.free(self.source);
         self.source_loaded = false;
     }
 
-    pub fn buildTree(self: *File, allocator: std.mem.Allocator) !void {
+    pub fn loadLoc(self: *File) !void {
+        if (self.loc_loaded) return;
+        var csv_path = try self.allocator.alloc(u8, self.path.len + 4);
+        defer self.allocator.free(csv_path);
+        @memcpy(csv_path[0..self.path.len], self.path);
+        @memcpy(csv_path[self.path.len..], ".csv");
+        defer self.allocator.free(csv_path);
+        const file = fs.openFileAbsolute(csv_path, .{}) catch return error.FileNotFound;
+        defer file.close();
+
+        const stat = try file.stat();
+        const file_size = stat.size;
+        const source = try self.allocator.alloc(u8, file_size);
+        try file.reader().readNoEof(source);
+        self.loc = source;
+        self.loc_loaded = true;
+    }
+
+    pub fn unloadLoc(self: *File) void {
+        if (!self.loc_loaded) return;
+        self.allocator.free(self.loc);
+        self.loc_loaded = false;
+        self.loc = undefined;
+    }
+
+    pub fn buildTree(self: *File) !void {
         if (self.tree_loaded) return;
         if (!self.source_loaded) return error.ParserError;
-        var lexer = Lexer.init(self.source);
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        var lexer = Lexer.init(self.source, 0);
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
         errdefer arena.deinit();
 
         var parser = Parser{
@@ -161,7 +192,7 @@ pub const File = struct {
         self.tree = Tree{
             .root = try nodes.toOwnedSlice(),
             .arena = arena.state,
-            .allocator = allocator,
+            .allocator = self.allocator,
             .source = self.source,
         };
         self.tree_loaded = true;
