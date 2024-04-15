@@ -88,7 +88,7 @@ export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, m
 fn writeBytecode(path_ptr: [*]const u8, path_length: usize, writer: anytype) void {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
-    var comp_alloc = arena.allocator();
+    const comp_alloc = arena.allocator();
 
     const full_path = alloc.dupe(u8, path_ptr[0..path_length]) catch |err| {
         log("Could not allocate file full_path: {s}", .{@errorName(err)}, .err);
@@ -100,18 +100,14 @@ fn writeBytecode(path_ptr: [*]const u8, path_length: usize, writer: anytype) voi
         .entry = undefined,
         .includes = std.StringArrayHashMap(*File).init(comp_alloc),
     };
-    const file = comp_alloc.create(File) catch |err| {
-        log("Could not allocate Module File: {s}", .{@errorName(err)}, .err);
-        return;
-    };
-    file.* = File.create(full_path, &mod) catch |err| {
+    const file = File.create(comp_alloc, full_path, &mod) catch |err| {
         log("Could not create Module File: {s}", .{@errorName(err)}, .err);
         return;
     };
     mod.entry = file;
     mod.includes.putNoClobber(file.path, file) catch unreachable;
     defer mod.deinit();
-    file.loadSource(comp_alloc) catch |err| {
+    file.loadSource() catch |err| {
         log("Could not load file source: {s}", .{@errorName(err)}, .err);
         return;
     };
@@ -120,7 +116,7 @@ fn writeBytecode(path_ptr: [*]const u8, path_length: usize, writer: anytype) voi
     defer output_log.deinit();
     const output_writer = output_log.writer();
 
-    file.buildTree(comp_alloc) catch |err| {
+    file.buildTree() catch |err| {
         mod.writeErrors(output_writer) catch |e| {
             log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
             return;

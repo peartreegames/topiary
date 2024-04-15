@@ -17,6 +17,7 @@ const runners = @import("runner.zig");
 const Runner = runners.Runner;
 const Line = runners.Line;
 const Choice = runners.Choice;
+const UUID = @import("utils/uuid.zig").UUID;
 
 test {
     _ = @import("vm.test.zig");
@@ -77,6 +78,14 @@ pub const Vm = struct {
     /// hopefully will remove with async?
     is_waiting: bool = false,
     can_continue: bool = false,
+
+    /// The localization language key
+    /// eg. en-US, zh-CN, de, etc
+    loc_key: ?[]const u8 = null,
+
+    /// The currently loaded localization map
+    loc_map: std.AutoHashMap(UUID.ID, []const u8),
+
     runner: *Runner,
 
     pub const Error = error{
@@ -129,11 +138,52 @@ pub const Vm = struct {
             .jump_backups = std.ArrayList(OpCode.Size(.jump)).init(allocator),
             .jump_requests = std.ArrayList(OpCode.Size(.jump)).init(allocator),
             .choices_list = std.ArrayList(Choice).init(allocator),
+            .loc_map = std.AutoHashMap(UUID.ID, []const u8).init(allocator),
         };
 
         vm.stack.resize(bytecode.locals_count);
         vm.frames.push(try Frame.create(root_closure, 0, 0));
         return vm;
+    }
+
+    pub fn setLocale(self: *Vm, key: ?[]const u8) !void {
+        self.loc_key = key;
+        self.loc_map.clearRetainingCapacity();
+        if (key == null) return;
+        var fbs = std.io.fixedBufferStream(self.bytecode.loc);
+        var reader = fbs.reader();
+        var line = std.ArrayList(u8).init(self.allocator);
+        defer line.deinit();
+        const writer = line.writer();
+        try reader.streamUntilDelimiter(writer, '\n', null);
+        var headers = std.mem.split(u8, line.items, ",");
+        var index: usize = 0;
+        while (headers.next()) |header| : (index += 1) {
+            if (std.mem.eql(u8, key.?, std.mem.trim(u8, header, "\""))) break;
+        }
+        line.clearRetainingCapacity();
+        while (true) {
+            defer line.clearRetainingCapacity();
+            reader.streamUntilDelimiter(writer, '\n', null) catch break;
+            var i: usize = 0;
+            var c_start: usize = 0;
+            var count: usize = 0;
+            var in_value = false;
+            const id: UUID.ID = UUID.fromString(line.items[1..(UUID.Size + 1)]);
+            // Since lines can include ',' and '""' we'll parse out the cells manually
+            while (i < line.items.len) : (i += 1) {
+                const c = line.items[i];
+                const is_end = i == line.items.len - 1;
+                if (!is_end) {
+                    if (c == '"' and line.items[i + 1] != '"') in_value = !in_value;
+                    if (in_value) continue;
+                    if (c == ',') count += 1;
+                    if (count == index) c_start = i + 2;
+                    if (count <= index) continue;
+                }
+                try self.loc_map.put(id, try self.allocator.dupe(u8, line.items[c_start..i]));
+            }
+        }
     }
 
     pub fn deinit(self: *Vm) void {
@@ -461,9 +511,9 @@ pub const Vm = struct {
                     var obj = self.currentFrame().cl;
                     obj.data.closure.free_values[index] = self.pop();
                 },
-                .string => {
+                .string, .loc => {
                     const index = self.readInt(OpCode.Size(.constant));
-                    const value = self.bytecode.constants[index];
+                    const str = if (op == .string) self.bytecode.constants[index].obj.*.data.string else self.loc_map.get(self.bytecode.uuids[index]) orelse return self.fail("Could not find localization id {s}", .{self.bytecode.uuids[index]});
                     var count = self.readInt(u8);
                     var args = try std.ArrayList(Value).initCapacity(self.allocator, count);
                     defer args.deinit();
@@ -479,7 +529,6 @@ pub const Vm = struct {
                     var a: usize = 0;
                     // start
                     var s: usize = 0;
-                    const str = value.obj.*.data.string;
                     while (i < str.len) : (i += 1) {
                         const c = str[i];
                         if (c == '{') {

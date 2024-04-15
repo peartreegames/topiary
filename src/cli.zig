@@ -5,6 +5,7 @@ const Compiler = @import("compiler.zig").Compiler;
 const Errors = @import("compiler-error.zig").CompilerErrors;
 const module = @import("module.zig");
 const runners = @import("runner.zig");
+const Locale = @import("locale.zig").Locale;
 
 const Runner = runners.Runner;
 const Line = runners.Line;
@@ -21,17 +22,37 @@ fn usage(comptime msg: []const u8) !void {
     }
     try out.print("topi - command line topiary processor\n", .{});
     try out.print("Usage:\n", .{});
-    try out.print("        topi [-v | --version] [-h | --help] <command> <file> [flags]\n", .{});
+    try out.print("        topi <command> <file> [flags]\n", .{});
     try out.print("\n", .{});
     try out.print("Commands:\n", .{});
-    try out.print("        topi run <file> [start_bough] [--verbose]\n", .{});
-    try out.print("        topi auto <file> <count> [-verbose]\n", .{});
-    try out.print("        topi compile <file> <output_file|--dry|-d> [--verbose]\n", .{});
+    try out.print("        topi version\n", .{});
+    try out.print("        topi run <file> [start_bough] [--loc language_key] [--verbose]\n", .{});
+    try out.print("        topi auto <file> <count> [--verbose]\n", .{});
+    try out.print("        topi compile <file> <output_file|--dry|-d> [--loc | --verbose]\n", .{});
+    try out.print("        topi loc validate <file> [--verbose]\n", .{});
+    try out.print("        topi loc export <file> <output_file|--dry|-d> [--verbose]\n", .{});
     try out.print("\n", .{});
     try out.print("Flags:\n", .{});
-    try out.print("        --version, -v: Output current version\n", .{});
     try out.print("        --verbose: Output debug logs\n", .{});
-    try out.print("        --dry, -d: Compile only\n", .{});
+    try out.print("        --dry, -d: Dry-run only\n", .{});
+}
+
+fn checkVerbose(err: anytype) !void {
+    var args = try std.process.argsWithAllocator(std.heap.page_allocator);
+    defer args.deinit();
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--verbose")) return err;
+    }
+    return;
+}
+
+fn checkFlag(flag: []const u8) !bool {
+    var args = try std.process.argsWithAllocator(std.heap.page_allocator);
+    defer args.deinit();
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, flag)) return true;
+    }
+    return false;
 }
 
 pub fn main() !void {
@@ -44,93 +65,141 @@ pub fn main() !void {
     if (maybe_cmd == null) return usage("");
     const cmd = maybe_cmd.?;
 
-    const is_version = std.mem.eql(u8, cmd, "-v") or std.mem.eql(u8, cmd, "--version");
-    if (is_version) return usage("");
-    const is_help = std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "--help");
-    if (is_help) return usage("");
+    const is_version = std.mem.eql(u8, cmd, "version");
+    if (is_version) {
+        try std.io.getStdErr().writeAll("v0.12.0");
+        return;
+    }
 
     const is_run = std.mem.eql(u8, cmd, "run");
     const is_auto = std.mem.eql(u8, cmd, "auto");
     const is_compile = std.mem.eql(u8, cmd, "compile");
-    if (!is_run and !is_auto and !is_compile) return usage("Unknown command");
+    const is_loc = std.mem.eql(u8, cmd, "loc");
+    if (!is_run and !is_auto and !is_compile and !is_loc) return usage("Unknown command");
+
+    var bough_path: ?[]const u8 = null;
+    var out_path: ?[]const u8 = null;
+    var loc_key: ?[]const u8 = null;
+    var is_dry = false;
+    var is_export = false;
+    var is_validate = false;
+
+    if (is_loc) {
+        const maybe_sub = args.next();
+        if (maybe_sub) |sub| {
+            is_export = std.mem.eql(u8, sub, "export");
+            is_validate = std.mem.eql(u8, sub, "validate");
+        }
+        if (!is_export and !is_validate) return usage("loc requires one of 'validate' or 'export' command");
+    }
 
     const maybe_file_path = args.next();
+    if (maybe_file_path == null) return usage("File path missing");
     if (maybe_file_path == null) {
-        return usage("No file argument provided.\n");
+        return usage("No file argument provided.");
     }
     const file_path = maybe_file_path.?;
 
-    var out_path: ?[]const u8 = null;
-    var bough_path: ?[]const u8 = null;
-    var auto_count: usize = 0;
-    var is_dry = false;
-    var is_verbose = false;
+    if (is_compile or is_loc) {
+        const maybe_arg = args.next();
+        if (maybe_arg == null) return usage("out_path or --dry required");
+        if (std.mem.eql(u8, maybe_arg.?, "--dry") or std.mem.eql(u8, maybe_arg.?, "-d")) {
+            is_dry = true;
+        } else out_path = maybe_arg;
+    }
 
     if (is_run) {
-        bough_path = args.next();
-        if (bough_path) |b| {
-            if (std.mem.eql(u8, b, "--verbose")) {
-                bough_path = null;
-                is_verbose = true;
+        while (args.next()) |arg| {
+            if (std.mem.eql(u8, arg, "--verbose")) continue;
+            if (std.mem.eql(u8, arg, "--loc")) {
+                loc_key = args.next();
+                continue;
             }
-        }
-    }
-    if (is_compile) {
-        out_path = args.next();
-        if (out_path == null) return usage("Compile requires an output path or --dry flag.");
-        is_dry = std.mem.eql(u8, out_path.?, "--dry") or std.mem.eql(u8, out_path.?, "-d");
-    }
-
-    if (is_auto) {
-        const maybe_count = args.next();
-        if (maybe_count == null) return usage("Auto requires a play count.\n");
-        auto_count = std.fmt.parseInt(u64, maybe_count.?, 10) catch {
-            return usage("Invalid auto count specified");
-        };
-    }
-    const flag = args.next();
-    if (flag) |f| {
-        if (std.mem.eql(u8, f, "--verbose")) {
-            is_verbose = true;
+            bough_path = arg;
         }
     }
 
+    var auto_count: usize = 0;
     const allocator = arena.allocator();
     const full_path = std.fs.cwd().realpathAlloc(allocator, file_path) catch |err| {
         try std.io.getStdErr().writer().print("Could not find file at {s}", .{file_path});
-        if (is_verbose) return err;
-        return;
+        return checkVerbose(err);
     };
+
     var mod = Module.init(allocator, full_path) catch |err| {
-        if (is_verbose) return err;
-        return;
+        return checkVerbose(err);
     };
-    var bytecode = mod.generateBytecode() catch |err| {
-        if (is_verbose) return err;
+    mod.use_loc = try checkFlag("--loc");
+
+    if (is_loc) {
+        if (is_validate) {
+            const validated = Locale.validateFileAtPath(full_path, allocator) catch |err| {
+                return checkVerbose(err);
+            };
+            defer allocator.free(validated);
+            if (is_dry) {
+                try std.io.getStdOut().writeAll(validated);
+                return;
+            } else {
+                const new_file = try std.fs.createFileAbsolute(full_path, .{});
+                defer new_file.close();
+                try new_file.writeAll(validated);
+                return;
+            }
+        }
+        if (is_export) {
+            if (is_dry) {
+                Locale.exportFileAtPath(full_path, std.io.getStdOut().writer(), allocator) catch |err| {
+                    return checkVerbose(err);
+                };
+            } else {
+                const dir = std.fs.cwd();
+                if (std.fs.path.dirname(out_path.?)) |dir_name| {
+                    try dir.makePath(dir_name);
+                }
+                const file = try dir.createFile(out_path.?, .{});
+                defer file.close();
+                Locale.exportFileAtPath(full_path, file.writer(), allocator) catch |err| {
+                    return checkVerbose(err);
+                };
+            }
+        }
         return;
+    }
+
+    var bytecode = mod.generateBytecode() catch |err| {
+        return checkVerbose(err);
     };
     defer bytecode.free(allocator);
     mod.deinit();
 
-    if (is_dry) {
-        var out = std.io.getStdOut().writer();
-        try out.writeAll("Success");
-        return;
-    }
-
     if (is_compile) {
-        const file = try std.fs.cwd().createFile(out_path.?, .{});
+        if (is_dry) {
+            var out = std.io.getStdOut().writer();
+            try out.writeAll("Success");
+            return;
+        }
+        const dir = std.fs.cwd();
+        if (std.fs.path.dirname(out_path.?)) |dir_name| {
+            try dir.makePath(dir_name);
+        }
+        const file = try dir.createFile(out_path.?, .{});
         defer file.close();
         const writer = file.writer();
         bytecode.serialize(writer) catch |err| {
-            if (is_verbose) return err;
-            return;
+            return checkVerbose(err);
         };
         return;
     }
 
     const vm_alloc = arena.allocator();
     if (is_auto) {
+        const maybe_count = args.next();
+        if (maybe_count == null) return usage("Auto requires a play count.");
+        auto_count = std.fmt.parseInt(u64, maybe_count.?, 10) catch {
+            return usage("Invalid auto count specified");
+        };
+
         var i: usize = 0;
         var visit_counts = std.StringArrayHashMap(u64).init(vm_alloc);
         defer visit_counts.deinit();
@@ -158,19 +227,22 @@ pub fn main() !void {
         return;
     }
 
-    var cli_runner = CliRunner.init();
-    var vm = Vm.init(vm_alloc, bytecode, &cli_runner.runner) catch |err| {
-        try std.io.getStdErr().writeAll("Could not initialize Vm");
-        if (is_verbose) return err;
-        return;
-    };
-
-    try vm.start(bough_path orelse vm.bytecode.boughs[0].name);
-    while (vm.can_continue) {
-        vm.run() catch {
-            vm.err.print(std.io.getStdErr().writer());
-            break;
+    if (is_run) {
+        var cli_runner = CliRunner.init();
+        var vm = Vm.init(vm_alloc, bytecode, &cli_runner.runner) catch |err| {
+            try std.io.getStdErr().writeAll("Could not initialize Vm");
+            return checkVerbose(err);
         };
+        vm.loc_key = loc_key;
+
+        try vm.start(bough_path orelse vm.bytecode.boughs[0].name);
+        try vm.setLocale(loc_key);
+        while (vm.can_continue) {
+            vm.run() catch {
+                vm.err.print(std.io.getStdErr().writer());
+                break;
+            };
+        }
     }
 }
 

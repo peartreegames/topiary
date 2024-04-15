@@ -11,6 +11,7 @@ pub const Bytecode = struct {
     locals_count: usize,
     token_lines: []u32,
     boughs: []BoughJump,
+    loc: []const u8,
 
     pub const BoughJump = struct { name: []const u8, ip: OpCode.Size(.jump) };
 
@@ -35,6 +36,7 @@ pub const Bytecode = struct {
         allocator.free(self.global_symbols);
         for (self.boughs) |b| allocator.free(b.name);
         allocator.free(self.boughs);
+        allocator.free(self.loc);
     }
 
     pub fn serialize(self: *Bytecode, writer: anytype) !void {
@@ -63,6 +65,8 @@ pub const Bytecode = struct {
         for (self.constants) |constant| try constant.serialize(writer);
         try writer.writeInt(u64, @as(u64, @intCast(self.uuids.len)), .little);
         for (self.uuids) |uuid| try writer.writeAll(&uuid);
+        try writer.writeInt(u128, @as(u128, @intCast(self.loc.len)), .little);
+        try writer.writeAll(self.loc);
     }
 
     pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !Bytecode {
@@ -117,6 +121,9 @@ pub const Bytecode = struct {
             try reader.readNoEof(&uuids[count]);
         }
 
+        const loc_len = try reader.readInt(u128, .little);
+        const loc = try allocator.alloc(u8, @intCast(loc_len));
+        try reader.readNoEof(loc);
         return .{
             .instructions = instructions,
             .token_lines = token_lines,
@@ -125,6 +132,7 @@ pub const Bytecode = struct {
             .global_symbols = global_symbols,
             .uuids = uuids,
             .locals_count = 0,
+            .loc = loc,
         };
     }
 

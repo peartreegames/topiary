@@ -21,6 +21,7 @@ pub const TokenType = enum {
     left_bracket,
     right_bracket,
 
+    at,
     caret,
     colon,
     comma,
@@ -127,6 +128,7 @@ pub fn toString(token_type: TokenType) []const u8 {
         .left_bracket => "[",
         .right_bracket => "]",
 
+        .at => "@",
         .caret => "^",
         .colon => ":",
         .comma => ",",
