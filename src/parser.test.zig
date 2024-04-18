@@ -438,5 +438,5 @@ test "Parse Inline Code" {
     const dialogue = tree.root[0].type.bough.body[0].type.dialogue;
     const string = dialogue.content.type.string;
     try testing.expectEqualStrings("sayHello", string.expressions[0].type.call.target.type.identifier);
-    try testing.expectEqualStrings("{}, how are you?", string.value);
+    try testing.expectEqualStrings("{0}, how are you?", string.value);
 }
