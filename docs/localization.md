@@ -47,3 +47,45 @@ When running topiary pass in the `--loc language-key` flag
 
 eg `topi run ./examples/locale/locale.topi --loc fr`
 
+
+## Tips
+
+When writing with localization in mind you have to remember that
+languages don't work the same. Before going further if you're
+new to localization (as I still am), I recommend reading this fantastic article by 
+[multilingual.com](https://multilingual.com/articles/improving-translation-of-variables-in-interactive-games/).
+
+Instead of encoding language pieces into string variables, Topiary opts for the
+simplest most direct way, it doesn't localize strings, only dialogue Lines and Choices.
+Full lines need to be rewritten instead of interpolating strings within strings.
+
+```topi
+// Instead of this
+=== START {
+    :Speaker: "I have {gold} coin{if gold == 1 "" else "s"}"@12345678-ABCEDEFGH
+}
+
+// You'll need to do this
+=== START {
+  if gold == 1 {
+    :Speaker: "I have {gold} coin"@12345678-ABCEDEFGH
+  } else {
+    :Speaker: "I have {gold} coins"@ABCEDFGH-12345678
+  }
+}
+```
+
+That way we can have both lines localized appropriately.
+
+```csv
+"id","speaker","raw","en","zh-TW"
+"12345678-ABCDEFGH","Speaker","I have {gold} coin","I have {0} coin","我有 {0} 元"
+"ABCDEFGH-12345678","Speaker","I have {gold} coins","I have {0} coins","我有 {0} 元"
+```
+
+::: Note
+
+This will increase the localized word count,
+but with Translation Memory it shouldn't be much of a problem.
+
+:::
