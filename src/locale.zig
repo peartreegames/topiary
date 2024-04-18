@@ -118,7 +118,7 @@ pub const Locale = struct {
     // and only update the raw/base values, rather than replace the entire file
     // base language should be configurable as well
     pub fn exportFile(file: *File, writer: anytype) !void {
-        try writer.writeAll("\"id\",\"raw\",\"en\"\n");
+        try writer.writeAll("\"id\",\"speaker\",\"raw\",\"en\"\n");
         for (file.tree.root) |stmt| {
             try exportStatement(stmt, writer);
         }
@@ -135,13 +135,13 @@ pub const Locale = struct {
             .choice => |c| {
                 if (UUID.isEmpty(c.id) or UUID.isAuto(c.id)) return error.InvalidLocazationId;
                 const str = c.content.type.string;
-                try writer.print("\"{s}\",\"{s}\",\"{s}\"\n", .{ &c.id, str.raw, str.value });
+                try writer.print("\"{s}\",\"CHOICE\",\"{s}\",\"{s}\"\n", .{ &c.id, str.raw, str.value });
                 for (c.body) |s| try exportStatement(s, writer);
             },
             .dialogue => |d| {
                 if (UUID.isEmpty(d.id) or UUID.isAuto(d.id)) return error.InvalidLocazationId;
                 const str = d.content.type.string;
-                try writer.print("\"{s}\",\"{s}\",\"{s}\"\n", .{ &d.id, str.raw, str.value });
+                try writer.print("\"{s}\",\"{s}\",\"{s}\",\"{s}\"\n", .{ &d.id, &d.speaker, str.raw, str.value });
             },
             .@"for" => |f| {
                 for (f.body) |s| try exportStatement(s, writer);

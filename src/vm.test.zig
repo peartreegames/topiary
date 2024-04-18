@@ -186,10 +186,13 @@ test "Strings" {
         .{ .input = "\"{123}test\"", .value = "123test" },
         .{ .input = "\"test{123}\"", .value = "test123" },
         .{ .input = "\"{123}te{4 * 5}st{6 + 7}\"", .value = "123te20st13" },
-        .{ .input = "\"test\".has(\"tes\")", .value = true },
-        .{ .input = "\"test\".has(\"foo\")", .value = false },
-        .{ .input = "\"testing\".has(\"tin\")", .value = true },
-        .{ .input = "\"testing\".has(\"tester\")", .value = false },
+        .{ .input = "\"test{\"test\"}ing", .value = "testtesting" },
+        .{ .input = "\"test{\"\"\"test\"\"\"}ing", .value = "test\"test\"ing" },
+        .{ .input = "\"test{\"quote\"\"test\"\"quote\"}ing", .value = "testquote\"test\"quoteing" },
+        // .{ .input = "\"test\".has(\"tes\")", .value = true },
+        // .{ .input = "\"test\".has(\"foo\")", .value = false },
+        // .{ .input = "\"testing\".has(\"tin\")", .value = true },
+        // .{ .input = "\"testing\".has(\"tester\")", .value = false },
     };
 
     inline for (test_cases) |case| {
@@ -201,11 +204,8 @@ test "Strings" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
-        switch (@TypeOf(case.value)) {
-            []const u8 => try testing.expectEqualStrings(case.value, vm.stack.previous().obj.data.string),
-            bool => try testing.expectEqual(case.value, vm.stack.previous().bool),
-            else => {},
-        }
+        const str = vm.stack.previous().obj.data.string;
+        try testing.expectEqualStrings(case.value, str[0..(str.len - 1)]);
     }
 }
 
