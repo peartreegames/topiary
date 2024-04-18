@@ -1151,7 +1151,7 @@ pub const Parser = struct {
     }
 
     fn peekIsOneOf(self: *Parser, token_types: anytype) bool {
-        for (token_types) |token_type| {
+        inline for (token_types) |token_type| {
             if (self.peekIs(token_type)) return true;
         }
         return false;
@@ -1162,7 +1162,7 @@ pub const Parser = struct {
     }
 
     fn currentIsOneOf(self: Parser, token_types: anytype) bool {
-        for (token_types) |token_type| {
+        inline for (token_types) |token_type| {
             if (self.currentIs(token_type)) return true;
         }
         return false;

@@ -169,12 +169,14 @@ pub const Compiler = struct {
 
         var loc = std.ArrayList(u8).init(self.allocator);
         defer loc.deinit();
-        var it = self.module.includes.iterator();
-        while (it.next()) |kvp| {
-            const file = kvp.value_ptr.*;
-            try file.loadLoc();
-            defer file.unloadLoc();
-            if (file.loc_loaded) try loc.appendSlice(file.loc);
+        if (self.use_loc) {
+            var it = self.module.includes.iterator();
+            while (it.next()) |kvp| {
+                const file = kvp.value_ptr.*;
+                try file.loadLoc();
+                defer file.unloadLoc();
+                if (file.loc_loaded) try loc.appendSlice(file.loc);
+            }
         }
         return .{
             .instructions = try self.chunk.instructions.toOwnedSlice(),
@@ -809,10 +811,18 @@ pub const Compiler = struct {
                     try self.compileExpression(item);
                 }
                 const obj = try self.allocator.create(Value.Obj);
-                obj.* = .{ .data = .{ .string = try self.allocator.dupe(u8, s.value) } };
-                const i = try self.addConstant(.{ .obj = obj });
+                // remove secondary escape double quotes
+                var value = try std.ArrayList(u8).initCapacity(self.allocator, s.value.len);
+                defer value.deinit();
+                var i: usize = 0;
+                while (i < s.value.len) : (i += 1) {
+                    if (s.value[i] == '"') i += 1;
+                    value.appendAssumeCapacity(s.value[i]);
+                }
+                obj.* = .{ .data = .{ .string = try value.toOwnedSlice() } };
+                const index = try self.addConstant(.{ .obj = obj });
                 try self.writeOp(.string, token);
-                _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                _ = try self.writeInt(OpCode.Size(.constant), index, token);
                 _ = try self.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
             },
             .list => |l| {
