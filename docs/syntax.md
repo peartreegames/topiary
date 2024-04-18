@@ -411,7 +411,7 @@ switch "else" {
 ```
 
 
-### Inline Code
+### Strings and Inline Code
 
 Code can be executed within a dialogue line with braces `{}`.
 
@@ -424,6 +424,8 @@ const value = 42
     :Jane: "{greeting}, John. The password is {value}." // Hello, John. The password is 42.
 }
 ```
+
+Double quotation marks can be added by doubling them inside strings `"""Hello"", he said."` will output `"Hello", he said`
 
 ### Functions
 
