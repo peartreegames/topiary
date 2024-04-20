@@ -86,6 +86,7 @@ That way we can have both lines localized appropriately.
 ::: Note
 
 This will increase the localized word count,
-but with Translation Memory it shouldn't be much of a problem.
+but with modern software like Translation Memory 
+and Repitition analysis,  it shouldn't be much of a problem.
 
 :::
