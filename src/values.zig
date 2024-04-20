@@ -39,6 +39,8 @@ pub const ExportFunctionDelegate = *const fn (args: []Value) Value;
 
 pub const adapter = Value.Adapter{};
 
+// todo: Get proper names
+// https://ziglang.org/documentation/master/#toc-Avoid-Redundancy-in-Names
 pub const Value = union(Type) {
     void: void,
     nil: void,
@@ -57,11 +59,12 @@ pub const Value = union(Type) {
     enum_value: Enum.Val,
     ref: ID,
 
+    /// Allocated Value
     pub const Obj = struct {
         is_marked: bool = false,
+        next: ?*Obj = null,
         // used for serializing references
         id: ID = UUID.Empty,
-        next: ?*Obj = null,
         data: Data,
 
         pub const DataType = enum(u8) {
