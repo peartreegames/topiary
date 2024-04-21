@@ -131,7 +131,7 @@ pub const Statement = struct {
         choice: struct {
             id: UUID.ID,
             name: ?[]const u8,
-            text: Expression,
+            content: Expression,
             is_unique: bool,
             body: []const Statement,
             tags: [][]const u8,

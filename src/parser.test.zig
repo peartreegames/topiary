@@ -9,29 +9,32 @@ const File = module.File;
 const testing = std.testing;
 const allocator = testing.allocator;
 
-pub fn parseSource(source: []const u8, mod: *Module) !void {
+pub fn parseSource(source: []const u8) !*File {
     const file = try allocator.create(File);
+    errdefer file.destroy();
+    errdefer file.source_loaded = false;
     file.* = .{
+        .allocator = allocator,
         .path = "",
         .name = "",
         .dir_name = "",
         .dir = undefined,
-        .module = mod,
         .source = source,
         .source_loaded = true,
         .errors = Errors.init(allocator),
     };
-    mod.entry = file;
-    try mod.includes.putNoClobber(file.path, file);
-    try file.buildTree(allocator);
+    file.buildTree() catch |err| {
+        const errWriter = std.io.getStdErr().writer();
+        try file.errors.write(source, errWriter);
+        return err;
+    };
+    file.source_loaded = false;
+    return file;
 }
 
 test "Parse Include" {
     const input = "include \"./globals.topi\"";
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    const err = parseSource(input, &mod);
+    const err = parseSource(input);
     try testing.expectError(Parser.Error.ParserError, err);
 }
 
@@ -48,18 +51,13 @@ test "Parse Declaration" {
         \\     two,
         \\ }
         \\ const enumValue = EnumType.one
+        \\ const str = "string value"
     ;
 
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(t, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
-    try testing.expect(tree.root.len == 6);
+    const file = try parseSource(t);
+    defer file.destroy();
+    const tree = file.tree;
+    try testing.expect(tree.root.len == 7);
     try testing.expect(!tree.root[0].type.variable.is_mutable);
     try testing.expect(tree.root[1].type.variable.is_mutable);
     try testing.expect(tree.root[1].type.variable.initializer.type.number == 1.2);
@@ -86,15 +84,9 @@ test "Parse Function Declaration" {
         \\    return result    
         \\ }
     ;
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(t, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
+    const file = try parseSource(t);
+    defer file.destroy();
+    const tree = file.tree;
     try testing.expect(tree.root.len == 2);
     try testing.expect(!tree.root[0].type.variable.is_mutable);
     try testing.expectEqualStrings("x", tree.root[0].type.variable.initializer.type.function.parameters[0]);
@@ -107,15 +99,9 @@ test "Parse Function Arguments" {
         \\ const sum = |x, y| return x + y
         \\ sum(1, 2) + sum(3, 4)
     ;
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(t, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
+    const file = try parseSource(t);
+    defer file.destroy();
+    const tree = file.tree;
     try testing.expect(tree.root.len == 2);
     try testing.expect(tree.root[1].type.expression.type.binary.operator == .add);
     const bin = tree.root[1].type.expression.type.binary;
@@ -135,15 +121,9 @@ test "Parse Enums" {
         \\ }
         \\ var value = Test.one
     ;
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(t, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
+    const file = try parseSource(t);
+    defer file.destroy();
+    const tree = file.tree;
     try testing.expect(tree.root.len == 2);
     const e = tree.root[0].type.@"enum";
     try testing.expectEqualStrings("Test", e.name);
@@ -164,15 +144,9 @@ test "Parse Iterable Types" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
-        defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        parseSource(case.input, &mod) catch |err| {
-            const errWriter = std.io.getStdErr().writer();
-            try mod.writeErrors(errWriter);
-            return err;
-        };
-        const tree = mod.entry.tree;
+        const file = try parseSource(case.input);
+        defer file.destroy();
+        const tree = file.tree;
         const node = tree.root[0].type.variable;
         try testing.expectEqualStrings(case.id, node.name);
 
@@ -193,15 +167,9 @@ test "Parse Empty Iterable Types" {
         \\ const emptyMap = Map{}
         \\ const emptySet = Set{}
     ;
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(input, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
+    const file = try parseSource(input);
+    defer file.destroy();
+    const tree = file.tree;
     var decl = tree.root[0].type.variable;
     try testing.expectEqualStrings("emptyMap", decl.name);
     try testing.expect(decl.initializer.type.map.len == 0);
@@ -215,15 +183,9 @@ test "Parse Nested Iterable Types" {
     const input =
         \\ List{List{1,2}}
     ;
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(input, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
+    const file = try parseSource(input);
+    defer file.destroy();
+    const tree = file.tree;
 
     try testing.expect(tree.root[0].type.expression.type == .list);
     try testing.expect(tree.root[0].type.expression.type.list[0].type == .list);
@@ -236,15 +198,9 @@ test "Parse Extern" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
-        defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        parseSource(case.input, &mod) catch |err| {
-            const errWriter = std.io.getStdErr().writer();
-            try mod.writeErrors(errWriter);
-            return err;
-        };
-        const tree = mod.entry.tree;
+        const file = try parseSource(case.input);
+        defer file.destroy();
+        const tree = file.tree;
         const decl = tree.root[0].type.variable;
         try testing.expectEqualStrings(case.id, decl.name);
         try testing.expect(case.mutable == decl.is_mutable);
@@ -265,15 +221,9 @@ test "Parse Enum" {
         \\ }
         \\ const val = En.three
     ;
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(input, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
+    const file = try parseSource(input);
+    defer file.destroy();
+    const tree = file.tree;
     var decl = tree.root[0].type.@"enum";
     try testing.expectEqualStrings("E", decl.name);
     try testing.expectEqualStrings("one", decl.values[0]);
@@ -304,15 +254,9 @@ test "Parse If" {
         \\    value = 5    
         \\ }
     ;
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(input, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
+    const file = try parseSource(input);
+    defer file.destroy();
+    const tree = file.tree;
 
     var if_stmt = tree.root[1].type.@"if";
     try testing.expect(if_stmt.condition.type.boolean);
@@ -335,15 +279,9 @@ test "Parse Call expression" {
     const input =
         \\ add(1, 2 * 3, 4 + 5)
     ;
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(input, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
+    const file = try parseSource(input);
+    defer file.destroy();
+    const tree = file.tree;
 
     const call = tree.root[0].type.expression.type.call;
     try testing.expectEqualStrings("add", call.target.type.identifier);
@@ -363,15 +301,9 @@ test "Parse For loop" {
         \\ }
     ;
 
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(input, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
+    const file = try parseSource(input);
+    defer file.destroy();
+    const tree = file.tree;
 
     var loop = tree.root[0].type.@"for";
     try testing.expectEqualStrings("list", loop.iterator.type.identifier);
@@ -391,16 +323,10 @@ test "Parse While loop" {
     const input =
         \\ while x < y { x }"
     ;
+    const file = try parseSource(input);
+    defer file.destroy();
+    const tree = file.tree;
 
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(input, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
     const loop = tree.root[0].type.@"while";
     try testing.expect(loop.condition.type.binary.operator == .less_than);
     try testing.expectEqualStrings("x", loop.body[0].type.expression.type.identifier);
@@ -410,16 +336,10 @@ test "Parse Indexing" {
     const input =
         \\ test.other.third.final
     ;
+    const file = try parseSource(input);
+    defer file.destroy();
+    const tree = file.tree;
 
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(input, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
     var idx = tree.root[0].type.expression.type.indexer;
     const values = [_][]const u8{ "final", "third", "other" };
     inline for (values) |v| {
@@ -436,15 +356,9 @@ test "Parse Bough" {
         \\     :Speaker: "Text goes here" # tagline #tagother#taglast
         \\ }
     ;
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(input, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
+    const file = try parseSource(input);
+    defer file.destroy();
+    const tree = file.tree;
     const bough = tree.root[0].type.bough;
     try testing.expectEqualStrings(bough.name, "BOUGH");
 
@@ -462,15 +376,9 @@ test "Parse No Speaker" {
         \\      :: "Text goes here"
         \\  }
     ;
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(input, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
+    const file = try parseSource(input);
+    defer file.destroy();
+    const tree = file.tree;
     const line = tree.root[0].type.bough.body[0].type.dialogue;
     try testing.expect(line.speaker == null);
     try testing.expectEqualStrings("Text goes here", line.content.type.string.value);
@@ -481,15 +389,9 @@ test "Parse divert" {
         \\  === BOUGH {}
         \\  => BOUGH
     ;
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(input, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
+    const file = try parseSource(input);
+    defer file.destroy();
+    const tree = file.tree;
     const divert = tree.root[1].type.divert.path;
     try testing.expectEqualStrings("BOUGH", divert[0]);
 }
@@ -506,27 +408,21 @@ test "Parse Forks" {
         \\  }
         \\  === END {}
     ;
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(input, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
+    const file = try parseSource(input);
+    defer file.destroy();
+    const tree = file.tree;
 
     const fork = tree.root[0].type.bough.body[0].type.fork;
     try testing.expect(fork.name == null);
 
     var choice = fork.body[0].type.choice;
-    try testing.expectEqualStrings("choice 1", choice.text.type.string.value);
+    try testing.expectEqualStrings("choice 1", choice.content.type.string.value);
     const line = choice.body[0].type.dialogue;
     try testing.expectEqualStrings("Other", line.speaker.?);
     try testing.expectEqualStrings("Response", line.content.type.string.value);
 
     choice = fork.body[1].type.choice;
-    try testing.expectEqualStrings("choice 2", choice.text.type.string.value);
+    try testing.expectEqualStrings("choice 2", choice.content.type.string.value);
     try testing.expect(choice.body[0].type == .divert);
 }
 
@@ -536,17 +432,11 @@ test "Parse Inline Code" {
         \\      :Speaker: "{sayHello()}, how are you?"
         \\  }
     ;
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    parseSource(input, &mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
-    const tree = mod.entry.tree;
+    const file = try parseSource(input);
+    defer file.destroy();
+    const tree = file.tree;
     const dialogue = tree.root[0].type.bough.body[0].type.dialogue;
     const string = dialogue.content.type.string;
     try testing.expectEqualStrings("sayHello", string.expressions[0].type.call.target.type.identifier);
-    try testing.expectEqualStrings("{}, how are you?", string.value);
+    try testing.expectEqualStrings("{0}, how are you?", string.value);
 }

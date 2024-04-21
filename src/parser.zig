@@ -110,12 +110,18 @@ pub const Parser = struct {
     lexer: *Lexer,
     file: *File,
     depth: usize = 0,
+    mode: Mode = .standard,
 
     pub const Error = error{
         ParserError,
         OutOfMemory,
         Overflow,
         InvalidCharacter,
+    };
+
+    const Mode = union(enum) {
+        standard: void,
+        interpolated: []const u8,
     };
 
     fn allocate(self: Parser, value: anytype) !*@TypeOf(value) {
@@ -194,7 +200,7 @@ pub const Parser = struct {
 
         if (std.mem.eql(u8, self.file.path, "")) return self.fail("File Path not set", self.current_token, .{});
         const full_path = try std.fs.path.resolve(self.allocator, &.{ self.file.dir_name, path });
-        if (self.file.module.includes.contains(full_path)) {
+        if (self.file.module == null or self.file.module.?.includes.contains(full_path)) {
             return .{
                 .token = start,
                 .type = .{
@@ -206,18 +212,17 @@ pub const Parser = struct {
             };
         }
 
-        const file = try self.allocator.create(File);
-        file.* = File.create(full_path, self.file.module) catch |err| {
+        const file = File.create(self.allocator, full_path, self.file.module) catch |err| {
             return self.fail("Could not create include file '{s}': {}", self.current_token, .{ path, err });
         };
-        file.loadSource(self.allocator) catch |err| {
+        file.loadSource() catch |err| {
             return self.fail("Could not load include file '{s}': {}", self.current_token, .{ path, err });
         };
 
-        file.buildTree(self.allocator) catch |err| {
+        file.buildTree() catch |err| {
             return self.fail("Could not build include file tree '{s}': {}", self.current_token, .{ path, err });
         };
-        try self.file.module.includes.putNoClobber(full_path, file);
+        try self.file.module.?.includes.putNoClobber(full_path, file);
 
         return .{
             .token = start,
@@ -578,19 +583,21 @@ pub const Parser = struct {
         var start: usize = token.start;
 
         var exprs = std.ArrayList(Expression).init(self.allocator);
+        var expr_index: usize = 0;
         errdefer exprs.deinit();
         for (self.file.source[token.start..token.end], 0..) |char, i| {
             if (char == '{') {
                 if (depth == 0) {
-                    value = try std.fmt.allocPrint(self.allocator, "{s}{s}{s}", .{ value, self.file.source[start..(token.start + i)], "{}" });
+                    value = try std.fmt.allocPrint(self.allocator, "{s}{s}{{{d}}}", .{ value, self.file.source[start..(token.start + i)], expr_index });
                     start = token.start + i + 1;
+                    expr_index += 1;
                 }
                 depth += 1;
             }
             if (char == '}') {
                 depth -= 1;
                 if (depth == 0) {
-                    try self.parseInterpolatedExpression(self.file.source[start..(token.start + i)], &exprs, token.start);
+                    try self.parseInterpolatedExpression(self.file.source[start..(token.start + i)], &exprs, start);
                     start = token.start + i + 1;
                 }
             }
@@ -609,46 +616,19 @@ pub const Parser = struct {
     }
 
     fn parseInterpolatedExpression(self: *Parser, source: []const u8, exprs: *std.ArrayList(Expression), offset: usize) !void {
-        var lexer = Lexer.init(source);
-        var err = self.file.errors;
-        const tmp_pos = err.offset_pos;
-        const tmp_col = err.offset_col;
-        const tmp_line = err.offset_line;
-        const file = self.file;
-
-        err.offset_pos += offset;
-        err.offset_col += lexer.column + 1;
-        err.offset_line += if (lexer.line >= 2) lexer.line - 2 else 0;
-
-        const str_file = try self.allocator.create(File);
-        defer self.allocator.destroy(str_file);
-        str_file.* = .{
-            .path = file.path,
-            .name = file.name,
-            .source = source,
-            .dir_name = file.dir_name,
-            .dir = file.dir,
-            .module = file.module,
-            .errors = Errors.init(self.allocator),
-        };
-        self.file = str_file;
-
+        var lexer = Lexer.init(source, offset);
         var parser = Parser{
             .current_token = lexer.next(),
             .peek_token = lexer.next(),
             .arena = self.arena,
             .allocator = self.allocator,
             .lexer = &lexer,
-            .file = str_file,
+            .file = self.file,
         };
 
         while (!parser.currentIs(.eof)) : (parser.next()) {
             try exprs.append(try parser.expression(.lowest));
         }
-        err.offset_pos = tmp_pos;
-        err.offset_line = tmp_line;
-        err.offset_col = tmp_col;
-        self.file = file;
     }
 
     fn listExpression(self: *Parser) Error!Expression {
@@ -873,15 +853,24 @@ pub const Parser = struct {
         }
         self.next();
         const text = try self.stringExpression();
+
+        const id: UUID.ID = if (self.peekIs(.at)) blk: {
+            self.next();
+            break :blk UUID.fromString(self.file.source[self.current_token.start..self.current_token.end]);
+        } else blk: {
+            var new_id = UUID.create(std.hash.Wyhash.hash(0, text.type.string.raw));
+            UUID.setAuto(&new_id);
+            break :blk new_id;
+        };
         const tags = try self.getTagsList();
         self.next();
         return .{
             .token = start,
             .type = .{
                 .choice = .{
-                    .id = UUID.create(std.hash.Wyhash.hash(0, text.type.string.raw)),
+                    .id = id,
                     .name = name,
-                    .text = text,
+                    .content = text,
                     .is_unique = is_unique,
                     .body = try self.block(),
                     .tags = tags,
@@ -911,12 +900,21 @@ pub const Parser = struct {
         try self.expectCurrent(.colon);
         self.next();
         const text = try self.stringExpression();
+        const id: UUID.ID = if (self.peekIs(.at)) blk: {
+            self.next();
+            break :blk UUID.fromString(self.file.source[self.current_token.start..self.current_token.end]);
+        } else blk: {
+            var new_id = UUID.create(std.hash.Wyhash.hash(0, text.type.string.raw));
+            UUID.setAuto(&new_id);
+            break :blk new_id;
+        };
+
         const tags = try self.getTagsList();
         return .{
             .token = start_token,
             .type = .{
                 .dialogue = .{
-                    .id = UUID.create(std.hash.Wyhash.hash(0, text.type.string.raw)),
+                    .id = id,
                     .speaker = speaker,
                     .content = try self.allocate(text),
                     .tags = tags,
@@ -1153,7 +1151,7 @@ pub const Parser = struct {
     }
 
     fn peekIsOneOf(self: *Parser, token_types: anytype) bool {
-        for (token_types) |token_type| {
+        inline for (token_types) |token_type| {
             if (self.peekIs(token_type)) return true;
         }
         return false;
@@ -1164,7 +1162,7 @@ pub const Parser = struct {
     }
 
     fn currentIsOneOf(self: Parser, token_types: anytype) bool {
-        for (token_types) |token_type| {
+        inline for (token_types) |token_type| {
             if (self.currentIs(token_type)) return true;
         }
         return false;

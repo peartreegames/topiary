@@ -24,9 +24,23 @@ const Module = module.Module;
 const Compiler = compiler.Compiler;
 
 pub fn compileSource(source: []const u8, mod: *Module) !Bytecode {
-    const errWriter = std.io.getStdIn().writer();
-    parseSource(source, mod) catch |err| {
-        try mod.writeErrors(errWriter);
+    const file = try allocator.create(module.File);
+    file.* = .{
+        .allocator = allocator,
+        .path = "",
+        .name = "",
+        .dir_name = "",
+        .dir = undefined,
+        .source = source,
+        .source_loaded = true,
+        .module = mod,
+        .errors = Errors.init(allocator),
+    };
+    mod.entry = file;
+    try mod.includes.putNoClobber(file.path, file);
+    file.buildTree() catch |err| {
+        const errWriter = std.io.getStdErr().writer();
+        try file.errors.write(source, errWriter);
         return err;
     };
 

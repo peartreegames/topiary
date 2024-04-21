@@ -11,14 +11,16 @@ pub const Lexer = struct {
     char: u8 = 0,
     line: usize = 1,
     column: usize = 0,
+    offset: usize = 0,
 
-    pub fn init(source: []const u8) Lexer {
+    pub fn init(source: []const u8, offset: usize) Lexer {
         // Skip utf-8 BOM
         const src_start = if (std.mem.startsWith(u8, source, "\xEF\xBB\xBF")) 3 else @as(usize, 0);
         var lexer = Lexer{
             .source = source,
             .position = src_start,
             .read_position = src_start,
+            .offset = offset,
         };
         lexer.readChar();
         return lexer;
@@ -27,8 +29,8 @@ pub const Lexer = struct {
     fn createToken(self: *Lexer, token_type: TokenType, start: usize) Token {
         return .{
             .token_type = token_type,
-            .start = start,
-            .end = self.position,
+            .start = start + self.offset,
+            .end = self.position + self.offset,
             .line = self.line,
             .column = self.column - (self.position - start),
         };
@@ -63,6 +65,14 @@ pub const Lexer = struct {
                 return self.readAndCreateToken(.plus_equal, 2);
             } else .plus,
             ':' => .colon,
+            '@' => {
+                const start = self.position + 1;
+                while (!isWhitespace(self.peekChar()) and !isEndOfLine(self.peekChar())) {
+                    self.readChar();
+                }
+                self.readChar();
+                return self.createToken(.at, start);
+            },
             '#' => {
                 var start = self.position + 1;
                 while (isWhitespace(self.peekChar())) {
@@ -186,11 +196,13 @@ pub const Lexer = struct {
     fn readString(self: *Lexer) void {
         var count: usize = 0;
         var is_string = true;
-        while ((self.char != '"' or count > 0) and self.char != '\n' and self.char != 0) {
-            if (self.source[self.position] == '\\') {
+        while (true) {
+            // multi line strings not supported
+            if (self.char == '\n' or self.char == 0) break;
+            // two double quotes '""' become single double quotes
+            if (self.char == '"' and self.peekChar() != '"' and count == 0) break;
+            if (self.char == '"' and self.peekChar() == '"') {
                 self.readChar();
-                self.readChar();
-                continue;
             }
             if (self.char == '}' or self.char == '{') {
                 is_string = !is_string;
@@ -389,7 +401,7 @@ test "Check supported tokens" {
         .{ .token_type = .right_brace, .start = 470, .end = 470, .line = 36, .column = 28 },
     };
 
-    var lexer = Lexer.init(input);
+    var lexer = Lexer.init(input, 0);
     // var next = lexer.next();
     // while (next.token_type != .eof) : (next = lexer.next()) {
     //     std.debug.print("{}\n", .{next});

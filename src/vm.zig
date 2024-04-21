@@ -17,6 +17,7 @@ const runners = @import("runner.zig");
 const Runner = runners.Runner;
 const Line = runners.Line;
 const Choice = runners.Choice;
+const UUID = @import("utils/uuid.zig").UUID;
 
 test {
     _ = @import("vm.test.zig");
@@ -78,6 +79,14 @@ pub const Vm = struct {
     /// hopefully will remove with async?
     is_waiting: bool = false,
     can_continue: bool = false,
+
+    /// The localization language key
+    /// eg. en-US, zh-CN, de, etc
+    loc_key: ?[]const u8 = null,
+
+    /// The currently loaded localization map
+    loc_map: std.AutoHashMap(UUID.ID, []const u8),
+
     runner: *Runner,
 
     pub const Error = error{
@@ -132,6 +141,7 @@ pub const Vm = struct {
             .jump_backups = std.ArrayList(OpCode.Size(.jump)).init(allocator),
             .jump_requests = std.ArrayList(OpCode.Size(.jump)).init(allocator),
             .choices_list = std.ArrayList(Choice).init(allocator),
+            .loc_map = std.AutoHashMap(UUID.ID, []const u8).init(allocator),
         };
 
         vm.stack.resize(bytecode.locals_count);
@@ -139,7 +149,46 @@ pub const Vm = struct {
         return vm;
     }
 
-    /// Cleans up all allocations
+    pub fn setLocale(self: *Vm, key: ?[]const u8) !void {
+        self.loc_key = key;
+        self.loc_map.clearRetainingCapacity();
+        if (key == null) return;
+        var fbs = std.io.fixedBufferStream(self.bytecode.loc);
+        var reader = fbs.reader();
+        var line = std.ArrayList(u8).init(self.allocator);
+        defer line.deinit();
+        const writer = line.writer();
+        try reader.streamUntilDelimiter(writer, '\n', null);
+        var headers = std.mem.split(u8, line.items, ",");
+        var index: usize = 0;
+        while (headers.next()) |header| : (index += 1) {
+            if (std.mem.eql(u8, key.?, std.mem.trim(u8, header, "\""))) break;
+        }
+        line.clearRetainingCapacity();
+        while (true) {
+            defer line.clearRetainingCapacity();
+            reader.streamUntilDelimiter(writer, '\n', null) catch break;
+            var i: usize = 0;
+            var c_start: usize = 0;
+            var count: usize = 0;
+            var in_value = false;
+            const id: UUID.ID = UUID.fromString(line.items[1..(UUID.Size + 1)]);
+            // Since lines can include ',' and '""' we'll parse out the cells manually
+            while (i < line.items.len) : (i += 1) {
+                const c = line.items[i];
+                const is_end = i == line.items.len - 1;
+                if (!is_end) {
+                    if (c == '"' and line.items[i + 1] != '"') in_value = !in_value;
+                    if (in_value) continue;
+                    if (c == ',') count += 1;
+                    if (count == index) c_start = i + 2;
+                    if (count <= index) continue;
+                }
+                try self.loc_map.put(id, try self.allocator.dupe(u8, line.items[c_start..i]));
+            }
+        }
+    }
+
     pub fn deinit(self: *Vm) void {
         self.allocator.destroy(self.currentFrame().cl.data.closure.data);
         Value.Obj.destroy(self.allocator, self.currentFrame().cl);
@@ -323,7 +372,7 @@ pub const Vm = struct {
                         .number => try self.push(.{ .number = right.number + left.number }),
                         .obj => |o| {
                             switch (o.data) {
-                                .string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.allocator, u8, &.{ left.obj.data.string, s }) }),
+                                .string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.allocator, u8, &.{ left.obj.data.string[0..(left.obj.data.string.len - 1)], s }) }),
                                 else => return self.fail("Cannot add types {s} and {s}", .{ left.typeName(), right.typeName() }),
                             }
                         },
@@ -467,44 +516,48 @@ pub const Vm = struct {
                     var obj = self.currentFrame().cl;
                     obj.data.closure.free_values[index] = self.pop();
                 },
-                .string => {
+                .string, .loc => {
                     const index = self.readInt(OpCode.Size(.constant));
-                    const value = self.bytecode.constants[index];
+                    const str = if (op == .string) self.bytecode.constants[index].obj.*.data.string else self.loc_map.get(self.bytecode.uuids[index]) orelse return self.fail("Could not find localization id {s}", .{self.bytecode.uuids[index]});
                     var count = self.readInt(u8);
-                    var args = try std.ArrayList(Value).initCapacity(self.allocator, count);
-                    defer args.deinit();
+                    var args = try self.allocator.alloc(Value, count);
+                    defer self.allocator.free(args);
+                    // const total = count;
                     while (count > 0) : (count -= 1) {
-                        try args.append(self.pop());
+                        args[count - 1] = self.pop();
                     }
-                    std.mem.reverse(Value, args.items);
                     var list = std.ArrayList(u8).init(self.allocator);
                     defer list.deinit();
                     var writer = list.writer();
                     // index
                     var i: usize = 0;
-                    var a: usize = 0;
                     // start
                     var s: usize = 0;
-                    const str = value.obj.*.data.string;
+                    // need to implement our own formatter due to runtime values
                     while (i < str.len) : (i += 1) {
-                        const c = str[i];
+                        var c = str[i];
                         if (c == '{') {
                             try writer.writeAll(str[s..i]);
-                            switch (args.items[a]) {
+                            const open = i + 1;
+                            var close = open;
+                            while (c != '}') : (i += 1) {
+                                c = str[i];
+                                close = i;
+                            }
+                            const arg_index = try std.fmt.parseInt(u8, str[open..close], 10);
+                            switch (args[arg_index]) {
                                 .number => |n| {
-                                    var buf: [128]u8 = undefined;
-                                    const num = try std.fmt.formatFloat(&buf, n, .{ .precision = 5 });
-                                    try writer.writeAll(num);
+                                    try std.fmt.format(writer, "{d}", .{n});
                                 },
                                 .bool => |b| try writer.writeAll(if (b) "true" else "false"),
-                                // remove final 0
-                                .obj => |o| try writer.writeAll(o.data.string[0..(o.data.string.len - 1)]),
+                                .obj => |o| {
+                                    // remove final 0
+                                    try writer.writeAll(o.data.string[0..(o.data.string.len - 1)]);
+                                },
                                 .visit => |v| try std.fmt.formatIntValue(v, "", .{}, list.writer()),
-                                else => return self.fail("Unsupported interpolated type {s} for {s}", .{ args.items[a].typeName(), str }),
+                                else => return self.fail("Unsupported interpolated type {s} for {s}", .{ args[arg_index].typeName(), str }),
                             }
-                            i += 1;
-                            s = i + 1;
-                            a += 1;
+                            s = i;
                         }
                     }
                     try writer.writeAll(str[s..]);

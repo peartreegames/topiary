@@ -46,6 +46,7 @@ pub const Compiler = struct {
     identifier_cache: std.StringHashMap(OpCode.Size(.constant)),
     chunk: *Chunk,
     locals_count: usize = 0,
+    use_loc: bool = false,
 
     module: *Module,
     jump_tree: JumpTree,
@@ -165,6 +166,18 @@ pub const Compiler = struct {
                 try stack.append(node.children.items[child_i]);
             }
         }
+
+        var loc = std.ArrayList(u8).init(self.allocator);
+        defer loc.deinit();
+        if (self.use_loc) {
+            var it = self.module.includes.iterator();
+            while (it.next()) |kvp| {
+                const file = kvp.value_ptr.*;
+                try file.loadLoc();
+                defer file.unloadLoc();
+                if (file.loc_loaded) try loc.appendSlice(file.loc);
+            }
+        }
         return .{
             .instructions = try self.chunk.instructions.toOwnedSlice(),
             .boughs = try boughs.toOwnedSlice(),
@@ -173,6 +186,7 @@ pub const Compiler = struct {
             .global_symbols = global_symbols,
             .locals_count = self.locals_count,
             .uuids = try self.uuids.toOwnedSlice(),
+            .loc = try loc.toOwnedSlice(),
         };
     }
 
@@ -523,7 +537,16 @@ pub const Compiler = struct {
                 defer self.allocator.free(path);
                 const visit_symbol = try self.root_scope.resolve(path);
 
-                try self.compileExpression(&c.text);
+                if (self.use_loc) {
+                    const s = c.content.type.string;
+                    for (s.expressions) |*item| {
+                        try self.compileExpression(item);
+                    }
+                    try self.writeOp(.loc, token);
+                    try self.writeId(c.id, token);
+                    _ = try self.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
+                } else try self.compileExpression(&c.content);
+
                 try self.writeOp(.choice, token);
                 const start_pos = try self.writeInt(OpCode.Size(.jump), CHOICE_HOLDER, token);
                 _ = try self.writeInt(u8, if (c.is_unique) 1 else 0, token);
@@ -578,7 +601,16 @@ pub const Compiler = struct {
                     try self.getOrSetIdentifierConstant(tag, token);
                 }
 
-                try self.compileExpression(d.content);
+                if (self.use_loc) {
+                    const s = d.content.type.string;
+                    for (s.expressions) |*item| {
+                        try self.compileExpression(item);
+                    }
+                    try self.writeOp(.loc, token);
+                    try self.writeId(d.id, token);
+                    _ = try self.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
+                } else try self.compileExpression(d.content);
+
                 if (d.speaker) |speaker| {
                     try self.getOrSetIdentifierConstant(speaker, token);
                 }
@@ -779,10 +811,18 @@ pub const Compiler = struct {
                     try self.compileExpression(item);
                 }
                 const obj = try self.allocator.create(Value.Obj);
-                obj.* = .{ .data = .{ .string = try self.allocator.dupe(u8, s.value) } };
-                const i = try self.addConstant(.{ .obj = obj });
+                // remove secondary escape double quotes
+                var value = try std.ArrayList(u8).initCapacity(self.allocator, s.value.len);
+                defer value.deinit();
+                var i: usize = 0;
+                while (i < s.value.len) : (i += 1) {
+                    if (s.value[i] == '"') i += 1;
+                    value.appendAssumeCapacity(s.value[i]);
+                }
+                obj.* = .{ .data = .{ .string = try value.toOwnedSlice() } };
+                const index = try self.addConstant(.{ .obj = obj });
                 try self.writeOp(.string, token);
-                _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                _ = try self.writeInt(OpCode.Size(.constant), index, token);
                 _ = try self.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
             },
             .list => |l| {

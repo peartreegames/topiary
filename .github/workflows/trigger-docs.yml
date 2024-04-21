@@ -1,0 +1,23 @@
+name: trigger-docs
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Docs
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.PAT }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: 'peartreegames',
+              repo: 'website',
+              workflow_id: 'main.yml',
+              ref: 'main'
+            })
