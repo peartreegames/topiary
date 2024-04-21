@@ -63,14 +63,23 @@ fn log(comptime msg: []const u8, args: anytype, severity: Severity) void {
     }
 }
 
+/// Sets the global debug logger instance with
+/// a pointer to a logger instance.
+///
+///   Warning: Be careful when passing the logger pointer. Incorrect usage can
+///   lead to unexpected behavior. Also ensure to manage the life cycle of the
+///   logger instance properly to avoid memory leaks and dangling pointer issues.
 export fn setDebugLog(logger_ptr: usize) void {
     debug_log = @ptrFromInt(logger_ptr);
 }
 
+/// Sets the global debug severity
 export fn setDebugSeverity(severity: u8) void {
     debug_severity = @enumFromInt(severity);
 }
 
+/// Used to pre-calculate the size required
+/// for a compiled topi module
 export fn calculateCompileSize(path_ptr: [*c]const u8, path_length: usize) usize {
     log("Calculating Compile size", .{}, .debug);
     var counter = std.io.countingWriter(std.io.null_writer);
@@ -78,6 +87,8 @@ export fn calculateCompileSize(path_ptr: [*c]const u8, path_length: usize) usize
     return counter.bytes_written;
 }
 
+/// Compiles the given path to the byte array
+/// Can use `calculateCompileSize` to get the max required, or pass a larger than expected size
 export fn compile(path_ptr: [*c]const u8, path_length: usize, out_ptr: [*c]u8, max: usize) usize {
     var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
     const writer = fbs.writer();
@@ -154,6 +165,7 @@ fn writeBytecode(path_ptr: [*]const u8, path_length: usize, writer: anytype) voi
     };
 }
 
+/// Start of the vm dialogue
 export fn start(vm_ptr: usize, path_ptr: [*]const u8, path_len: usize) void {
     log("Starting VM", .{}, .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);

@@ -22,7 +22,7 @@ pub const File = module.File;
 
 /// Bytecode
 pub const Bytecode = @import("bytecode.zig").Bytecode;
-pub const StateMap = @import("state.zig").StateMap;
+pub const State = @import("state.zig").State;
 
 /// Runner interface to hook into the Vm
 pub const Runner = runner.Runner;

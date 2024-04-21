@@ -47,7 +47,8 @@ pub const RuntimeErr = struct {
         }
     }
 };
-
+/// Virtual Machine
+/// Executes bytecode
 pub const Vm = struct {
     allocator: std.mem.Allocator,
     frames: Stack(Frame),
@@ -86,6 +87,8 @@ pub const Vm = struct {
         Uninitialized,
     } || Compiler.Error;
 
+    /// Initialize Vm
+    /// Sets up globals, subscribers, root frames, and closures.
     pub fn init(allocator: std.mem.Allocator, bytecode: Bytecode, runner: anytype) !Vm {
         var globals = try allocator.alloc(Value, bytecode.global_symbols.len);
         var subs = try allocator.alloc(Subscriber, bytecode.global_symbols.len);
@@ -136,6 +139,7 @@ pub const Vm = struct {
         return vm;
     }
 
+    /// Cleans up all allocations
     pub fn deinit(self: *Vm) void {
         self.allocator.destroy(self.currentFrame().cl.data.closure.data);
         Value.Obj.destroy(self.allocator, self.currentFrame().cl);
@@ -151,6 +155,7 @@ pub const Vm = struct {
         self.allocator.free(self.globals);
     }
 
+    /// Returns root values that should not be cleaned up by the garbage collector
     pub fn roots(self: *Vm) []const []Value {
         return &([_][]Value{ self.globals, self.stack.backing });
     }
@@ -159,6 +164,7 @@ pub const Vm = struct {
         return self.frames.peek();
     }
 
+    /// Continue execution
     pub fn selectContinue(self: *Vm) void {
         self.is_waiting = false;
     }
