@@ -260,12 +260,9 @@ pub const Compiler = struct {
                 try node.children.append(bough_node);
             },
             .fork => |f| {
-                var buf: [11]u8 = undefined;
-                var fbs = std.io.fixedBufferStream(&buf);
-                try fbs.writer().writeByte('_');
                 var v_node = self.visit_tree.current;
-                try std.fmt.formatIntValue(v_node.anon_count, "", .{}, fbs.writer());
-                const fork_count = std.mem.trim(u8, buf[0..], &[_]u8{170});
+                const fork_count = try std.fmt.allocPrint(self.allocator, "_{d}", .{v_node.anon_count});
+                defer self.allocator.free(fork_count);
                 v_node.anon_count += 1;
 
                 try self.compileVisitDecl(f.name orelse fork_count, stmt.token);
