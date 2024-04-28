@@ -472,11 +472,9 @@ pub const Compiler = struct {
                 try self.setSymbol(symbol, token, true);
             },
             .fork => |f| {
-                var buf: [11]u8 = undefined;
-                var fbs = std.io.fixedBufferStream(&buf);
-                try fbs.writer().writeByte('_');
-                try std.fmt.formatIntValue(self.visit_tree.current.anon_count, "", .{}, fbs.writer());
-                const fork_count = std.mem.trim(u8, buf[0..], &[_]u8{170});
+                const anon_count = self.visit_tree.current.anon_count;
+                const fork_count = try std.fmt.allocPrint(self.allocator, "_{d}", .{anon_count});
+                defer self.allocator.free(fork_count);
 
                 self.visit_tree.current.anon_count += 1;
                 const cur = if (self.visit_tree.current.getChild(f.name orelse fork_count)) |n| n else {
