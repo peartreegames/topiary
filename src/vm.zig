@@ -540,17 +540,22 @@ pub const Vm = struct {
                                 close = i;
                             }
                             const arg_index = try std.fmt.parseInt(u8, str[open..close], 10);
-                            switch (args[arg_index]) {
+                            const val = args[arg_index];
+                            switch (val) {
                                 .number => |n| {
                                     try std.fmt.format(writer, "{d}", .{n});
                                 },
                                 .bool => |b| try writer.writeAll(if (b) "true" else "false"),
+                                .enum_value => |e| try writer.writeAll(e.base.data.@"enum".values[e.index]),
                                 .obj => |o| {
-                                    // remove final 0
-                                    try writer.writeAll(o.data.string[0..(o.data.string.len - 1)]);
+                                    switch (o.data) {
+                                        // remove final 0
+                                        .string => try writer.writeAll(o.data.string[0..(o.data.string.len - 1)]),
+                                        else => return self.fail("Unsupported interpolated type {s} for {s}", .{ val.typeName(), str }),
+                                    }
                                 },
                                 .visit => |v| try std.fmt.formatIntValue(v, "", .{}, list.writer()),
-                                else => return self.fail("Unsupported interpolated type {s} for {s}", .{ args[arg_index].typeName(), str }),
+                                else => return self.fail("Unsupported interpolated type {s} for {s}", .{ val.typeName(), str }),
                             }
                             s = i;
                         }
