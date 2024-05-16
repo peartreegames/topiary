@@ -163,7 +163,7 @@ pub const Parser = struct {
         return switch (self.current_token.token_type) {
             .include => try self.includeStatement(),
             .class => try self.classDeclaration(),
-            .@"enum" => try self.enumDeclaration(),
+            .@"enum", .enumseq => try self.enumDeclaration(),
             .@"extern", .@"var", .@"const" => try self.varDeclaration(),
             .bough => try self.boughStatement(),
             .divert => try self.divertStatement(),
@@ -274,6 +274,7 @@ pub const Parser = struct {
 
     fn enumDeclaration(self: *Parser) Error!Statement {
         const start = self.current_token;
+        const is_seq = start.token_type == .enumseq;
         self.next();
         const name = try self.consumeIdentifier();
         try self.expectCurrent(.equal);
@@ -291,6 +292,7 @@ pub const Parser = struct {
             .token = start,
             .type = .{
                 .@"enum" = .{
+                    .is_seq = is_seq,
                     .name = name,
                     .values = try values.toOwnedSlice(),
                 },

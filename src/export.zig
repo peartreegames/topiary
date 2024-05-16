@@ -511,25 +511,13 @@ const ExportRunner = struct {
 
 const TestRunner = struct {
     pub fn onLine(vm_ptr: usize, dialogue: *ExportLine) void {
-        std.debug.print("{s}: {s} ", .{
-            dialogue.speaker[0..dialogue.speaker_length],
-            dialogue.content[0..dialogue.content_length],
-        });
-        for (dialogue.tags[0..dialogue.tags_length]) |t| {
-            std.debug.print("#{s} ", .{t});
-        }
-        std.debug.print("\n", .{});
+        _ = dialogue;
         selectContinue(vm_ptr);
     }
 
     pub fn onChoices(vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) void {
-        for (choices, 0..choices_len) |choice, i| {
-            std.debug.print("[{d}] {s} ", .{ i, choice.content });
-            for (choice.tags[0..choice.tags_length]) |t| {
-                std.debug.print("#{s} ", .{t});
-            }
-            std.debug.print("\n", .{});
-        }
+        _ = choices;
+        _ = choices_len;
         selectChoice(vm_ptr, 0);
     }
 
@@ -539,7 +527,7 @@ const TestRunner = struct {
 };
 
 fn testSubscriber(value: ExportValue) void {
-    std.debug.print("ExportSubscriber: {s}\n", .{value.data.string});
+    std.testing.expectEqualSlices(u8, "321 test", value.data.string[0..8]) catch {};
 }
 
 test "Create and Destroy Vm" {
@@ -568,9 +556,7 @@ test "Create and Destroy Vm" {
     ;
 
     debug_log = TestRunner.log;
-    debug_severity = .info;
     defer debug_log = null;
-    defer debug_severity = .err;
 
     const file = try std.fs.cwd().createFile("tmp.topi", .{ .read = true });
     defer std.fs.cwd().deleteFile("tmp.topi") catch {};
@@ -595,9 +581,7 @@ test "Create and Destroy Vm" {
     const vm: *Vm = @ptrFromInt(vm_ptr);
 
     defer destroyVm(vm_ptr);
-    vm.bytecode.print(std.debug);
     defer vm.bytecode.free(alloc);
-    std.debug.print("\n=====\n", .{});
     const val_name = "value";
     subscribe(
         vm_ptr,
@@ -628,10 +612,11 @@ test "Create and Destroy Vm" {
         list_name.len,
         &list_value,
     )) {
-        std.debug.print("List: {}\n", .{list_value.data.list});
-        for (list_value.data.list.items[0..list_value.data.list.count]) |item| {
-            std.debug.print("List Item: {d}\n", .{item.data.number});
-        }
+        const list = list_value.data.list.items;
+        try std.testing.expectEqual(1, list[0].data.number);
+        try std.testing.expectEqual(2, list[1].data.number);
+        try std.testing.expectEqual(3, list[2].data.number);
+        try std.testing.expectEqual(4, list[3].data.number);
         destroyValue(&list_value);
     }
 
@@ -643,9 +628,10 @@ test "Create and Destroy Vm" {
         set_name.len,
         &set_value,
     )) {
-        for (set_value.data.list.items[0..set_value.data.list.count]) |item| {
-            std.debug.print("Set Item: {s}\n", .{item.data.string});
-        }
+        const set = set_value.data.list.items;
+        try std.testing.expectEqualSlices(u8, "some", set[0].data.string[0..4]);
+        try std.testing.expectEqualSlices(u8, "string", set[1].data.string[0..6]);
+        try std.testing.expectEqualSlices(u8, "values", set[2].data.string[0..6]);
         destroyValue(&set_value);
     }
 
@@ -657,9 +643,13 @@ test "Create and Destroy Vm" {
         map_name.len,
         &map_value,
     )) {
-        for (map_value.data.list.items[0 .. map_value.data.list.count * 2]) |item| {
-            std.debug.print("Map Item: {d}\n", .{item.data.number});
-        }
+        const map = map_value.data.list.items;
+        try std.testing.expectEqual(0, map[0].data.number);
+        try std.testing.expectEqual(0.0001, map[1].data.number);
+        try std.testing.expectEqual(1, map[2].data.number);
+        try std.testing.expectEqual(1.1111, map[3].data.number);
+        try std.testing.expectEqual(2, map[4].data.number);
+        try std.testing.expectEqual(2.222, map[5].data.number);
         destroyValue(&map_value);
     }
 }

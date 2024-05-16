@@ -69,7 +69,7 @@ pub const Vm = struct {
     bytecode: Bytecode,
     /// Current instruction position
     ip: usize = 0,
-    debug: bool = false,
+    break_on_assert: bool = true,
 
     /// Used to cache the choices
     choices_list: std.ArrayList(Choice),
@@ -202,6 +202,7 @@ pub const Vm = struct {
         for (self.subscribers) |*sub| sub.deinit();
         self.allocator.free(self.subscribers);
         self.allocator.free(self.globals);
+        if (self.err.msg) |msg| self.allocator.free(msg);
     }
 
     /// Returns root values that should not be cleaned up by the garbage collector
@@ -455,7 +456,11 @@ pub const Vm = struct {
                     if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{index});
 
                     if (index >= self.globals.len) return self.fail("Globals index {} is out of bounds of current size {}", .{ index, self.globals.len });
-                    const value = self.pop();
+                    var value = self.pop();
+                    const current = self.globals[index];
+                    if (current == .enum_value and value == .enum_value and current.enum_value.base == value.enum_value.base and current.enum_value.base.data.@"enum".is_seq) {
+                        if (current.enum_value.index > value.enum_value.index) value = current;
+                    }
                     self.globals[index] = value;
                     self.subscribers[index].invoke(value);
                 },
@@ -467,7 +472,12 @@ pub const Vm = struct {
                 .set_local => {
                     const index = self.readInt(OpCode.Size(.set_local));
                     const frame = self.currentFrame();
-                    self.stack.items[frame.bp + index] = self.pop();
+                    var value = self.pop();
+                    const current = self.stack.items[frame.bp + index];
+                    if (current == .enum_value and value == .enum_value and current.enum_value.base == value.enum_value.base and current.enum_value.base.data.@"enum".is_seq) {
+                        if (current.enum_value.index > value.enum_value.index) value = current;
+                    }
+                    self.stack.items[frame.bp + index] = value;
                 },
                 .get_local => {
                     const index = self.readInt(OpCode.Size(.get_local));
@@ -861,6 +871,9 @@ pub const Vm = struct {
                                     .{ b.arity, arg_count },
                                 );
                             const result = b.backing(&self.gc, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
+                            if (self.break_on_assert and std.mem.eql(u8, b.name, "assert") and result != .void) {
+                                return self.fail("Assertion Failed: {s}", .{result.obj.data.string});
+                            }
                             self.stack.count -= arg_count + 1;
                             try self.push(result);
                         },
@@ -1013,6 +1026,8 @@ pub const Vm = struct {
         if (@intFromEnum(right) != @intFromEnum(left)) {
             return self.fail("Cannot compare mismatched types '{s}' and '{s}'", .{ @tagName(left), @tagName(right) });
         }
+        if (right == .enum_value) right = .{ .number = @floatFromInt(right.enum_value.index) };
+        if (left == .enum_value) left = .{ .number = @floatFromInt(left.enum_value.index) };
         switch (op) {
             .equal => try self.push(.{ .bool = right.eql(left) }),
             .not_equal => try self.push(.{ .bool = !right.eql(left) }),

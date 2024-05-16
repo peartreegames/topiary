@@ -144,6 +144,7 @@ pub const Statement = struct {
         },
         @"enum": struct {
             name: []const u8,
+            is_seq: bool,
             values: [][]const u8,
         },
         expression: Expression,

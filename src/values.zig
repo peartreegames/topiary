@@ -301,6 +301,7 @@ pub const Value = union(Type) {
                     .@"enum" => |e| {
                         try writer.writeByte(@intCast(e.name.len));
                         try writer.writeAll(e.name);
+                        try writer.writeByte(if (e.is_seq) 1 else 0);
                         try writer.writeByte(@intCast(e.values.len));
                         for (e.values) |value| {
                             try writer.writeByte(@intCast(value.len));
@@ -425,9 +426,10 @@ pub const Value = union(Type) {
                         const name_length = try reader.readByte();
                         const name_buf = try allocator.alloc(u8, name_length);
                         try reader.readNoEof(name_buf);
+                        const is_seq = try reader.readByte() == 1;
                         const values_length = try reader.readByte();
                         const obj = try allocator.create(Value.Obj);
-                        obj.* = .{ .data = .{ .@"enum" = .{ .name = name_buf, .values = try allocator.alloc([]const u8, values_length) } } };
+                        obj.* = .{ .data = .{ .@"enum" = .{ .name = name_buf, .values = try allocator.alloc([]const u8, values_length), .is_seq = is_seq } } };
                         for (0..values_length) |i| {
                             const value_name_length = try reader.readByte();
                             const value_name_buf = try allocator.alloc(u8, value_name_length);

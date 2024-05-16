@@ -316,8 +316,6 @@ map.clear() // Map{}
 #### While
 
 While loops will execute so long as the condition is met. 
-~~However there is an internal limit of 100,000 to catch infinite loops. 
-This can be adjusted by setting `Topiary.MaxWhile = -1 // no limit`~~
 
 ```topi
 var i = 0
@@ -467,6 +465,43 @@ enum Cardinal = {
 
 var direction = Cardinal.North
 ```
+
+Under the hood they are just index integers, which cannot be changed.
+This does mean you can use comparitive operators with enums.
+
+```topi
+var north = Cardinal.North
+var south = Cardinal.South
+
+if (north < south) print(true) // true
+```
+
+## Sequences
+
+Enum Sequences (`enumseq`) are special enums, they are the same except they cannot be changed to a previous value.
+If attempted, topi will ignore the assignment and remain at the current value.
+
+```topi
+enumseq QuestGiver = {
+	None,
+	LearnedOfQuestGiver,
+	MetQuestGiver,
+	AcceptedQuest,
+	CompletedQuest,
+	RecievedAward
+}
+
+var seq = QuestGiver.None
+seq = QuestGiver.MetQuestGiver
+seq = QuestGiver.LearnedOfQuestGiver // ignored
+print(seq) // QuestGiver.MetQuestGiver
+```
+
+Sequences are useful in that all previous states are inferred from the current. 
+If the player met the quest giver, they must have learned of them.
+Same if they accepted the quest, they must have met them, and so on.
+For more information you can watch this great talk by 
+[Inkle's Jon Ingold](https://www.youtube.com/watch?v=HZft_U4Fc-U).
 
 ### Classes
 

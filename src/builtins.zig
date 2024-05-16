@@ -88,7 +88,30 @@ const Print = struct {
         const writer = std.debug;
         args[0].print(writer, null);
         writer.print("\n", .{});
-        return values.Nil;
+        return values.Void;
+    }
+};
+
+pub const Assert = struct {
+    const Self = @This();
+    var value: Value = .{
+        .obj = &Self.obj,
+    };
+    var obj: Value.Obj = .{
+        .data = .{
+            .builtin = .{
+                .backing = Self.builtin,
+                .arity = 2,
+                .is_method = false,
+                .name = "assert",
+            },
+        },
+    };
+    fn builtin(_: *Gc, args: []Value) Value {
+        const expr = args[0];
+        const msg = args[1];
+        if (!expr.eql(values.True)) return msg;
+        return values.Void;
     }
 };
 
@@ -97,24 +120,22 @@ const Definition = struct {
     value: *Value,
 };
 
-pub const builtins = [_]Definition{
-    .{
-        .name = "rnd",
-        .value = &Rnd.value,
-    },
-    .{
-        .name = "rnd01",
-        .value = &Rnd01.value,
-    },
-    .{
-        .name = "print",
-        .value = &Print.value,
-    },
-    .{
-        .name = "round",
-        .value = &Round.value,
-    },
-};
+pub const builtins = [_]Definition{ .{
+    .name = "rnd",
+    .value = &Rnd.value,
+}, .{
+    .name = "rnd01",
+    .value = &Rnd01.value,
+}, .{
+    .name = "print",
+    .value = &Print.value,
+}, .{
+    .name = "round",
+    .value = &Round.value,
+}, .{
+    .name = "assert",
+    .value = &Assert.value,
+} };
 
 pub const Count = struct {
     const Self = @This();
@@ -155,7 +176,7 @@ pub const Add = struct {
             .set => args[0].obj.data.set.put(item, {}) catch {},
             else => unreachable,
         }
-        return values.Nil;
+        return values.Void;
     }
 };
 
@@ -176,7 +197,7 @@ pub const AddMap = struct {
             .map => args[0].obj.data.map.put(key, item) catch {},
             else => unreachable,
         }
-        return values.Nil;
+        return values.Void;
     }
 };
 pub const Remove = struct {
@@ -203,7 +224,7 @@ pub const Remove = struct {
             .map => _ = args[0].obj.data.map.orderedRemove(item),
             else => unreachable,
         }
-        return values.Nil;
+        return values.Void;
     }
 };
 
@@ -259,6 +280,6 @@ pub const Clear = struct {
             .set => data.set.clearAndFree(),
             else => {},
         }
-        return values.Nil;
+        return values.Void;
     }
 };

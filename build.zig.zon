@@ -1,7 +1,6 @@
 .{
-	.name = "topiary",
-	.version = "0.12.0",
-	.paths = .{""},
-	.dependencies = .{
-	},
+    .name = "topiary",
+    .version = "0.12.1",
+    .paths = .{""},
+    .dependencies = .{},
 }

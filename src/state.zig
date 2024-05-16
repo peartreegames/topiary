@@ -88,6 +88,8 @@ pub const State = struct {
                 try stream.beginObject();
                 try stream.objectField("name");
                 try stream.write(e.name);
+                try stream.objectField("is_seq");
+                try stream.write(e.is_seq);
                 try stream.objectField("values");
                 try stream.beginArray();
                 for (e.values) |v| try stream.write(v);
@@ -275,6 +277,7 @@ pub const State = struct {
             for (values_items, 0..) |t, i| vals[i] = try vm.allocator.dupe(u8, t.string);
             var result = try vm.gc.create(vm, .{ .@"enum" = .{
                 .name = v.object.get("name").?.string,
+                .is_seq = v.object.get("is_seq").?.bool,
                 .values = vals,
             } });
             result.obj.id = id.?;

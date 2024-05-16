@@ -459,6 +459,7 @@ pub const Compiler = struct {
                 obj.* = .{
                     .data = .{
                         .@"enum" = .{
+                            .is_seq = e.is_seq,
                             .name = try self.allocator.dupe(u8, e.name),
                             .values = try names.toOwnedSlice(),
                         },

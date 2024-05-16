@@ -330,7 +330,6 @@ test "Index" {
             \\ const mid = List{inner, 6,7,8}
             \\ const outer = List{mid,9}
             \\ outer[0][0][4] = 99
-            \\ print(outer)
             \\ outer[0][0][4]
             ,
             .value = 99.0,
@@ -740,7 +739,6 @@ test "Loops" {
             return err;
         };
         const value = vm.stack.previous();
-        value.print(std.debug, vm.bytecode.constants);
         try testing.expectEqual(value.number, case.value);
     }
 }
@@ -774,21 +772,21 @@ test "Instance" {
         \\ }
         \\ const test = new Test{}
         \\ test.value = 5
-        \\ print(test)
-        \\ print(test.value)
+        \\ assert(test.value == 5, "test.value == 5")
         \\ test.value += 1
-        \\ print(test.value)
-        \\ print(test.fn())
+        \\ assert(test.value == 6, "test.value == 6")
+        \\ assert(test.fn() == "func", "test.fn() == ""func""")
         \\ test.incr(1)
-        \\ print(test.value)
+        \\ assert(test.value == 7, "test.value == 7")
         \\ test.list.add(1)
-        \\ print(test.list)
+        \\ assert(test.list.count() == 1, "test.list.count() == 1")
+        \\ assert(test.list[0] == 1, "test.list[0] == 1")
         \\ test.list[0] = 99
-        \\ print(test.list)
+        \\ assert(test.list[0] == 99, "test.list[0] == 99")
         \\ test.nested.add(2)
+        \\ assert(test.nested[0] == 2, "test.nested[2] == 2")
         \\ test.list.add(test.nested)
-        \\ print(test.list)
-        \\ print(test.list[1][0])
+        \\ assert(test.list[1][0] == 2, "test.list[1][0] == 2")
     ;
     var mod = Module.create(allocator);
     defer mod.deinit();
@@ -821,8 +819,21 @@ test "Enums" {
         \\  }
         \\ }
         \\
-        \\ print(timeOfDay(5))
-        \\
+        \\ assert(timeOfDay(5) == TimeOfDay.Morning, "timeOfDay(5) == TimeOfDay.Morning")
+        \\ var tod = TimeOfDay.Morning
+        \\ assert(tod < TimeOfDay.Evening, "tod < TimeOfDay.Evening");
+        \\ enumseq Quest = {
+        \\    None,
+        \\    KnowsOf,
+        \\    Started,
+        \\    Complete
+        \\ }
+        \\ var quest = Quest.None
+        \\ quest = Quest.Started
+        \\ quest = Quest.KnowsOf
+        \\ quest = Quest.Complete
+        \\ quest = Quest.None
+        \\ assert(quest == Quest.Complete, "Quest is not Complete")
     ;
 
     var mod = Module.create(allocator);
@@ -831,7 +842,10 @@ test "Enums" {
     var vm = try initTestVm(input, &mod, false);
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
-    try vm.interpret();
+    vm.interpret() catch |err| {
+        vm.err.print(std.io.getStdErr().writer());
+        return err;
+    };
 }
 
 test "Boughs" {
@@ -856,7 +870,6 @@ test "Boughs" {
         \\     while count > 0 {
         \\          result = result + str
         \\          count -= 1
-        \\          print(count)
         \\     }
         \\     return result
         \\ }
@@ -875,7 +888,10 @@ test "Boughs" {
         \\ === START {
         \\    if true :speaker: "True text goes here"
         \\    :speaker: "More text here"
-        \\    if false :speaker: "False text doesn't appear"
+        \\    if false { 
+        \\        :speaker: "False text doesn't appear"
+        \\        assert(false, "should not be here")
+        \\    }
         \\    :speaker: "Final text here"
         \\ }
         },
@@ -887,7 +903,7 @@ test "Boughs" {
         \\    }
         \\    :speaker: "More goes here"
         \\    => INNER
-        \\    :speaker: "Final goes here" // should not be printed
+        \\    assert(false, "should not be here")
         \\ }
         },
         .{ .input = 
@@ -901,7 +917,7 @@ test "Boughs" {
         \\    }
         \\    :speaker: "More goes here"
         \\    => OUTER.INNER
-        \\    :speaker: "Text doesn't appear here" // should not be printed
+        \\    assert(false, "should not be here")
         \\ }
         },
     };
@@ -1468,7 +1484,6 @@ test "Save and Load State" {
     var data = std.ArrayList(u8).init(alloc);
     defer data.deinit();
     try State.serialize(&vm, data.writer());
-    std.debug.print("\n{s}\n", .{data.items});
 
     const second_case =
         \\ var value = 10
@@ -1490,6 +1505,4 @@ test "Save and Load State" {
     try testing.expectEqual(vm2.globals[2].obj.data.instance.fields[1].number, 2);
     try vm2.interpret();
     try testing.expectEqual(vm2.globals[0].number, 6);
-
-    std.log.warn("CALC SIZE: {}, ACTUAL SIZE: {}", .{ try State.calculateSize(&vm), data.items.len });
 }
