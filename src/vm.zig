@@ -505,10 +505,12 @@ pub const Vm = struct {
                             const field_name = field_value.obj.data.string;
                             if (inst.base.data.class.getIndex(field_name)) |idx| {
                                 inst.fields[idx] = new_value;
-                            } else return self.fail("Instance of {s} does not contain {s}", .{ inst.base.data.class.name, field_name });
+                            } else {
+                                return self.fail("Instance of {s} does not contain field '{s}'", .{ inst.base.data.class.name, field_name });
+                            }
                         },
                         // todo add string indexing
-                        else => return self.fail("Cannot index {s} into type {s}", .{ @tagName(field_value), @tagName(instance_value.obj.data) }),
+                        else => return self.fail("Cannot index '{s}' into type {s}", .{ @tagName(field_value), @tagName(instance_value.obj.data) }),
                     }
                 },
                 .get_builtin => {
@@ -566,11 +568,11 @@ pub const Vm = struct {
                                     switch (o.data) {
                                         // remove final 0
                                         .string => try writer.writeAll(o.data.string[0..(o.data.string.len - 1)]),
-                                        else => return self.fail("Unsupported interpolated type {s} for {s}", .{ val.typeName(), str }),
+                                        else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), str }),
                                     }
                                 },
                                 .visit => |v| try std.fmt.formatIntValue(v, "", .{}, list.writer()),
-                                else => return self.fail("Unsupported interpolated type {s} for {s}", .{ val.typeName(), str }),
+                                else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), str }),
                             }
                             s = i;
                         }
@@ -773,9 +775,9 @@ pub const Vm = struct {
                             },
                             .instance => |i| {
                                 if (index != .obj)
-                                    return self.fail("Can only query instance fields by string name, not {s}", .{@tagName(index)});
+                                    return self.fail("Can only query instance fields by string name, not '{s}'", .{@tagName(index)});
                                 if (index.obj.data != .string)
-                                    return self.fail("Can only query instance fields by string name, not {s}", .{@tagName(index.obj.data)});
+                                    return self.fail("Can only query instance fields by string name, not '{s}'", .{@tagName(index.obj.data)});
                                 if (i.base.data.class.getIndex(index.obj.data.string)) |idx| {
                                     const field = i.fields[idx];
                                     try self.push(field);

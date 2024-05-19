@@ -26,14 +26,17 @@ fn usage(comptime msg: []const u8) !void {
     try out.print("\n", .{});
     try out.print("Commands:\n", .{});
     try out.print("        topi version\n", .{});
-    try out.print("        topi run <file> [start_bough] [--loc language_key] [--verbose]\n", .{});
-    try out.print("        topi auto <file> <count> [--verbose]\n", .{});
-    try out.print("        topi compile <file> <output_file|--dry|-d> [--loc | --verbose]\n", .{});
+    try out.print("        topi run <file> [start_bough] [--auto|-a] [--lang language_key] [--verbose]\n", .{});
+    try out.print("        topi test <file> <count> [--verbose]\n", .{});
+    try out.print("        topi compile <file> <output_file|--dry|-d> [--loc] [--verbose]\n", .{});
     try out.print("        topi loc validate <file> [--verbose]\n", .{});
     try out.print("        topi loc export <file> <output_file|--dry|-d> [--verbose]\n", .{});
     try out.print("\n", .{});
     try out.print("Flags:\n", .{});
     try out.print("        --verbose: Output debug logs\n", .{});
+    try out.print("        --auto, -a: Automatically continue to next line\n", .{});
+    try out.print("        --lang: Localization language key\n", .{});
+    try out.print("        --loc: Include localization in compiled bytecode\n", .{});
     try out.print("        --dry, -d: Dry-run only\n", .{});
 }
 
@@ -72,10 +75,10 @@ pub fn main() !void {
     }
 
     const is_run = std.mem.eql(u8, cmd, "run");
-    const is_auto = std.mem.eql(u8, cmd, "auto");
+    const is_test = std.mem.eql(u8, cmd, "auto");
     const is_compile = std.mem.eql(u8, cmd, "compile");
     const is_loc = std.mem.eql(u8, cmd, "loc");
-    if (!is_run and !is_auto and !is_compile and !is_loc) return usage("Unknown command");
+    if (!is_run and !is_test and !is_compile and !is_loc) return usage("Unknown command");
 
     var bough_path: ?[]const u8 = null;
     var out_path: ?[]const u8 = null;
@@ -83,6 +86,7 @@ pub fn main() !void {
     var is_dry = false;
     var is_export = false;
     var is_validate = false;
+    var is_auto = false;
 
     if (is_loc) {
         const maybe_sub = args.next();
@@ -111,7 +115,11 @@ pub fn main() !void {
     if (is_run) {
         while (args.next()) |arg| {
             if (std.mem.eql(u8, arg, "--verbose")) continue;
-            if (std.mem.eql(u8, arg, "--loc")) {
+            if (std.mem.eql(u8, arg, "--auto") or std.mem.eql(u8, arg, "-a")) {
+                is_auto = true;
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "--lang")) {
                 loc_key = args.next();
                 continue;
             }
@@ -193,7 +201,7 @@ pub fn main() !void {
     }
 
     const vm_alloc = arena.allocator();
-    if (is_auto) {
+    if (is_test) {
         const maybe_count = args.next();
         if (maybe_count == null) return usage("Auto requires a play count.");
         auto_count = std.fmt.parseInt(u64, maybe_count.?, 10) catch {
@@ -228,7 +236,7 @@ pub fn main() !void {
     }
 
     if (is_run) {
-        var cli_runner = CliRunner.init();
+        var cli_runner = CliRunner.init(is_auto);
         var vm = Vm.init(vm_alloc, bytecode, &cli_runner.runner) catch |err| {
             try std.io.getStdErr().writeAll("Could not initialize Vm");
             return checkVerbose(err);
@@ -254,9 +262,11 @@ fn getFilePath(allocator: std.mem.Allocator) !?[]const u8 {
 
 const CliRunner = struct {
     runner: Runner,
+    is_auto: bool,
 
-    pub fn init() CliRunner {
+    pub fn init(is_auto: bool) CliRunner {
         return .{
+            .is_auto = is_auto,
             .runner = .{
                 .onLineFn = onLine,
                 .onChoicesFn = onChoices,
@@ -280,9 +290,14 @@ const CliRunner = struct {
         }
         self.print(": ", .{});
         self.print("{s}", .{dialogue.content});
-        var buf: [2]u8 = undefined;
-        if (stdin.readUntilDelimiterOrEof(&buf, '\n') catch &buf) |_| {
+        if (self.is_auto) {
+            self.print("\n", .{});
             vm.selectContinue();
+        } else {
+            var buf: [2]u8 = undefined;
+            if (stdin.readUntilDelimiterOrEof(&buf, '\n') catch &buf) |_| {
+                vm.selectContinue();
+            }
         }
     }
 

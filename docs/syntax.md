@@ -549,6 +549,20 @@ john.increaseAge(2)
 print(john.age) // 27
 ```
 
+Fields can also be indexed as well with `[]` notation. 
+This can be especially useful for extern function calls.
+As an example with the above class:
+
+```topi
+const changeField = |instance, fieldName, newValue| {
+    instance[fieldName] = newValue
+}
+
+changeField(john, "firstName", "Johnny")
+changeField(john, "age", 28)
+print(john.fullName()) // "Johnny Doe"
+```
+
 ## Multiple Files
 
 Multiple files can be joined together to create a single story using `include "[PATH]"`.

@@ -26,7 +26,7 @@ pub const Class = struct {
     pub fn getIndex(self: *const Class, field_name: []const u8) ?usize {
         var i: usize = 0;
         while (i < self.fields.len) : (i += 1) {
-            if (!std.mem.eql(u8, self.fields[i].name, field_name)) continue;
+            if (!std.mem.eql(u8, self.fields[i].name, std.mem.trim(u8, field_name, &[_]u8{0}))) continue;
             return i;
         }
         return null;

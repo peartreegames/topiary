@@ -9,16 +9,21 @@ To run the CLI:
 ```shell
 topi - command line topiary processor
 Usage:
-        topi [-v | --version] [-h | --help] <command> <file> [flags]
+        topi <command> <file> [flags]
 
 Commands:
-        topi run <file> [start_bough] [--verbose]
-        topi auto <file> <count> [--verbose]
-        topi compile <file> <output_file|--dry|-d> [--verbose] 
+        topi version
+        topi run <file> [start_bough] [--auto|-a] [--lang language_key] [--verbose]
+        topi test <file> <count> [--verbose]
+        topi compile <file> <output_file|--dry|-d> [--loc] [--verbose] 
+        topi loc validate <file> [--verbose]
+        topi loc export <file> <output_file|--dry|-d> [--verbose]
 
 Flags:
-        --version, -v: Output current version
         --verbose: Output debug logs
+        --auto, -a: Automatically continue to next line
+        --lang: Localization language key
+        --loc: Include localization in compiled bytecode
         --dry, -d: Compile only
 ```
 
