@@ -549,8 +549,8 @@ john.increaseAge(2)
 print(john.age) // 27
 ```
 
-Fields can also be indexed as well with `[]` notation. 
-This can be especially useful for extern function calls.
+Fields can also be indexed as well with `[]` notation.
+This can be useful for function calls from game applications.
 As an example with the above class:
 
 ```topi
@@ -596,7 +596,7 @@ When making nested jumps be aware that preceeding code will be execuded to ensur
 Consider the following
 
 ```topi
-# topi run file.topi
+# topi run file.topi START.INNER
 // Expected output :Speaker: "End test 2"
 === START {
     :Speaker: "Start conversation"
