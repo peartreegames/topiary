@@ -316,6 +316,7 @@ pub const Vm = struct {
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {
         self.err.msg = try std.fmt.allocPrint(self.allocator, msg, args);
         self.err.line = self.currentFrame().cl.data.closure.data.function.lines[self.currentFrame().ip];
+        self.can_continue = false;
         return Error.RuntimeError;
     }
 

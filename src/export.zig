@@ -182,7 +182,7 @@ export fn run(vm_ptr: usize) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     vm.run() catch {
         if (vm.err.msg) |msg| {
-            log("Error Line {d}: {s}", .{ vm.err.line, msg }, .err);
+            log("Error at line {}: {s}", .{ vm.err.line, msg }, .err);
         }
     };
 }
