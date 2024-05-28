@@ -17,6 +17,7 @@ pub const False = Value{ .bool = false };
 pub const Nil = Value{ .nil = {} };
 pub const Void = Value{ .void = {} };
 
+pub const OnValueChanged = *const fn ([]const u8, value: Value) void;
 pub const Type = enum(u8) {
     void,
     nil,

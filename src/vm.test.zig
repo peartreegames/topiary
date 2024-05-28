@@ -1443,13 +1443,15 @@ test "Externs and Subscribers" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         const Listener = struct {
-            pub fn onChange(_: usize, value: Value) void {
-                std.debug.print("\nListener::{}\n", .{value});
+            pub fn onChange(name: []const u8, value: Value) void {
+                std.debug.print("\nListener \"{s}\"::{}\n", .{ name, value });
             }
         };
         try vm.setExtern("value", .{ .number = 2 });
-        try vm.subscribeCallback("value", Listener.onChange);
+        try vm.subscribeToValueChange("value");
+        vm.value_subscriber_callback = &Listener.onChange;
         try vm.interpret();
+        vm.unusbscribeToValueChange("value");
         try testing.expect(case.value == vm.stack.previous().number);
     }
 }

@@ -723,10 +723,14 @@ pub const Compiler = struct {
         const token = expr.token;
         switch (expr.type) {
             .binary => |bin| {
-                if (bin.operator == .less_than) {
+                if (bin.operator == .less_than or bin.operator == .less_than_equal) {
                     try self.compileExpression(bin.right);
                     try self.compileExpression(bin.left);
-                    try self.writeOp(.greater_than, token);
+                    try self.writeOp(switch (bin.operator) {
+                        .less_than => .greater_than,
+                        .less_than_equal => .greater_than_equal,
+                        else => unreachable,
+                    }, token);
                     return;
                 }
                 if (bin.operator == .assign) {
@@ -766,6 +770,7 @@ pub const Compiler = struct {
                     .equal => .equal,
                     .not_equal => .not_equal,
                     .greater_than => .greater_than,
+                    .greater_than_equal => .greater_than_equal,
                     .@"or" => .@"or",
                     .@"and" => .@"and",
                     else => {

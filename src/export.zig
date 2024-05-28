@@ -8,7 +8,6 @@ const Compiler = @import("compiler.zig").Compiler;
 const compileSource = @import("compiler.test.zig").compileSource;
 const Bytecode = @import("bytecode.zig").Bytecode;
 const runners = @import("runner.zig");
-const Subscriber = @import("subscriber.zig").Subscriber;
 const Module = @import("module.zig").Module;
 const File = @import("module.zig").File;
 const Runner = runners.Runner;
@@ -20,6 +19,7 @@ const State = @import("./state.zig").State;
 var alloc = std.heap.page_allocator;
 var debug_log: ?OnExportDebugLog = null;
 var debug_severity: Severity = .err;
+var value_changed_callback: ?OnExportValueChanged = null;
 
 const ExportLine = extern struct {
     content: [*c]const u8,
@@ -39,7 +39,7 @@ const ExportChoice = extern struct {
     ip: u32,
 };
 
-const OnExportValueChanged = *const fn (value: ExportValue) void;
+const OnExportValueChanged = *const fn (name: [*c]const u8, value: ExportValue) void;
 const OnExportLine = *const fn (vm_ptr: usize, dialogue: *ExportLine) void;
 const OnExportChoices = *const fn (vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) void;
 
@@ -283,27 +283,6 @@ export fn destroyValue(value: *ExportValue) void {
     value.deinit(alloc);
 }
 
-const ExportCallback = struct {
-    callback: OnExportValueChanged,
-
-    pub fn init(callback: OnExportValueChanged) ExportCallback {
-        return .{
-            .callback = callback,
-        };
-    }
-
-    pub fn onValueChanged(context_ptr: usize, value: Value) void {
-        var self: *ExportCallback = @ptrFromInt(context_ptr);
-        const ext = ExportValue.fromValue(value, alloc);
-        self.callback(ext);
-    }
-
-    pub fn onUnsubscribe(context_ptr: usize, allocator: std.mem.Allocator) void {
-        const self: *ExportCallback = @ptrFromInt(context_ptr);
-        allocator.destroy(self);
-    }
-};
-
 pub const ExportFunction = struct {
     func: Delegate,
 
@@ -332,43 +311,33 @@ pub const ExportFunction = struct {
     }
 };
 
-export fn subscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, callback_ptr: usize) void {
+fn exportValueChangedCallback(name: []const u8, value: Value) void {
+    log("ValueChangedCallback: {s}", .{name}, .debug);
+    if (value_changed_callback) |cb| {
+        cb(name.ptr, ExportValue.fromValue(value, alloc));
+    }
+}
+
+export fn setSubscriberCallback(vm_ptr: usize, callback_ptr: usize) void {
+    value_changed_callback = @ptrFromInt(callback_ptr);
+    var vm: *Vm = @ptrFromInt(vm_ptr);
+    vm.value_subscriber_callback = &exportValueChangedCallback;
+}
+
+export fn subscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize) bool {
     var vm: *Vm = @ptrFromInt(vm_ptr);
 
     const name = name_ptr[0..name_length];
-    const extern_callback = vm.allocator.create(ExportCallback) catch {
-        log("Could not allocate ExportCallback", .{}, .err);
-        return;
-    };
-    extern_callback.* = ExportCallback.init(@ptrFromInt(callback_ptr));
-
-    vm.subscribeDelegate(
-        name,
-        .{
-            .onUnsubscribe = &ExportCallback.onUnsubscribe,
-            .context_ptr = @intFromPtr(extern_callback),
-            .callback = &ExportCallback.onValueChanged,
-        },
-    ) catch |err| {
+    return vm.subscribeToValueChange(name) catch |err| {
         log("Could not subscribe to variable '{s}': {s}", .{ name, @errorName(err) }, .warn);
-        return;
+        return false;
     };
 }
 
-export fn unsubscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, callback_ptr: usize) void {
+export fn unsubscribe(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize) bool {
     var vm: *Vm = @ptrFromInt(vm_ptr);
-
     const name = name_ptr[0..name_length];
-    var callback: OnExportValueChanged = @ptrFromInt(callback_ptr);
-    const extern_callback: *ExportCallback = @fieldParentPtr("callback", &callback);
-
-    vm.unsubscribeDelegate(name, .{
-        .context_ptr = @intFromPtr(extern_callback),
-        .callback = &ExportCallback.onValueChanged,
-    }) catch |err| {
-        log("Could not unsubscribe from variable '{s}': {s}", .{ name, @errorName(err) }, .warn);
-        return;
-    };
+    return vm.unusbscribeToValueChange(name);
 }
 
 export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_ptr: usize, on_choice_ptr: usize) usize {
@@ -526,7 +495,8 @@ const TestRunner = struct {
     }
 };
 
-fn testSubscriber(value: ExportValue) void {
+fn testSubscriber(name: [*c]const u8, value: ExportValue) void {
+    std.log.warn("testSubscribe: {s}", .{name});
     std.testing.expectEqualSlices(u8, "321 test", value.data.string[0..8]) catch {};
 }
 
@@ -579,16 +549,12 @@ test "Create and Destroy Vm" {
 
     const vm_ptr = createVm(buf.ptr, buf.len, @intFromPtr(on_dialogue), @intFromPtr(on_choices));
     const vm: *Vm = @ptrFromInt(vm_ptr);
+    setSubscriberCallback(vm_ptr, @intFromPtr(&testSubscriber));
 
     defer destroyVm(vm_ptr);
     defer vm.bytecode.free(alloc);
     const val_name = "value";
-    subscribe(
-        vm_ptr,
-        val_name,
-        val_name.len,
-        @intFromPtr(&testSubscriber),
-    );
+    subscribe(vm_ptr, val_name, val_name.len);
     start(vm_ptr, "", 0);
     while (canContinue(vm_ptr)) {
         run(vm_ptr);
@@ -597,12 +563,7 @@ test "Create and Destroy Vm" {
             break;
         }
     }
-    unsubscribe(
-        vm_ptr,
-        val_name,
-        val_name.len,
-        @intFromPtr(&testSubscriber),
-    );
+    unsubscribe(vm_ptr, val_name, val_name.len);
 
     const list_name = "list";
     var list_value: ExportValue = undefined;

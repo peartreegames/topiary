@@ -11,7 +11,6 @@ const Frame = @import("frame.zig").Frame;
 const Class = @import("class.zig").Class;
 const builtins = @import("builtins.zig");
 const Rnd = @import("builtins.zig").Rnd;
-const Subscriber = @import("subscriber.zig").Subscriber;
 const StateMap = @import("state.zig").StateMap;
 const runners = @import("runner.zig");
 const Runner = runners.Runner;
@@ -48,6 +47,7 @@ pub const RuntimeErr = struct {
         }
     }
 };
+
 /// Virtual Machine
 /// Executes bytecode
 pub const Vm = struct {
@@ -56,7 +56,8 @@ pub const Vm = struct {
     err: RuntimeErr,
     gc: Gc,
     globals: []Value,
-    subscribers: []Subscriber,
+    value_subscriber_callback: ?values.OnValueChanged = null,
+    value_subscribers: std.StringHashMap(void),
 
     stack: Stack(Value),
     /// Current iterators to allow easy nesting
@@ -97,15 +98,13 @@ pub const Vm = struct {
     } || Compiler.Error;
 
     /// Initialize Vm
-    /// Sets up globals, subscribers, root frames, and closures.
+    /// Sets up globals, root frames, and closures.
     pub fn init(allocator: std.mem.Allocator, bytecode: Bytecode, runner: anytype) !Vm {
         var globals = try allocator.alloc(Value, bytecode.global_symbols.len);
-        var subs = try allocator.alloc(Subscriber, bytecode.global_symbols.len);
 
         var i: usize = 0;
         while (i < bytecode.global_symbols.len) : (i += 1) {
             globals[i] = .void;
-            subs[i] = Subscriber.init(allocator);
         }
 
         const root_frame = try allocator.create(Value.Obj.Data);
@@ -133,7 +132,6 @@ pub const Vm = struct {
             .frames = try Stack(Frame).init(allocator, frame_size),
             .err = .{},
             .globals = globals,
-            .subscribers = subs,
             .runner = runner,
             .gc = Gc.init(allocator),
             .stack = try Stack(Value).init(allocator, stack_size),
@@ -141,6 +139,7 @@ pub const Vm = struct {
             .jump_backups = std.ArrayList(OpCode.Size(.jump)).init(allocator),
             .jump_requests = std.ArrayList(OpCode.Size(.jump)).init(allocator),
             .choices_list = std.ArrayList(Choice).init(allocator),
+            .value_subscribers = std.StringHashMap(void).init(allocator),
             .loc_map = std.AutoHashMap(UUID.ID, []const u8).init(allocator),
         };
 
@@ -199,8 +198,7 @@ pub const Vm = struct {
         self.jump_requests.deinit();
         self.frames.deinit();
         self.gc.deinit();
-        for (self.subscribers) |*sub| sub.deinit();
-        self.allocator.free(self.subscribers);
+        self.value_subscribers.deinit();
         self.allocator.free(self.globals);
         if (self.err.msg) |msg| self.allocator.free(msg);
     }
@@ -260,20 +258,18 @@ pub const Vm = struct {
         return self.globals[index];
     }
 
-    pub fn subscribeCallback(self: *Vm, name: []const u8, callback: Subscriber.OnValueChanged) !void {
-        try self.subscribers[try self.getGlobalsIndex(name)].subscribe(.{ .callback = callback });
+    pub fn subscribeToValueChange(self: *Vm, name: []const u8) !bool {
+        if (self.value_subscribers.contains(name)) return;
+        for (self.bytecode.global_symbols) |s| {
+            if (!std.mem.eql(u8, name, s.name)) continue;
+            try self.value_subscribers.put(s.name, {});
+            return true;
+        }
+        return false;
     }
 
-    pub fn subscribeDelegate(self: *Vm, name: []const u8, delegate: Subscriber.Delegate) !void {
-        try self.subscribers[try self.getGlobalsIndex(name)].subscribe(delegate);
-    }
-
-    pub fn unsubscribeCallback(self: *Vm, name: []const u8, callback: Subscriber.OnValueChanged) !void {
-        self.subscribers[try self.getGlobalsIndex(name)].unsubscribe(.{ .callback = callback });
-    }
-
-    pub fn unsubscribeDelegate(self: *Vm, name: []const u8, delegate: Subscriber.Delegate) !void {
-        self.subscribers[try self.getGlobalsIndex(name)].unsubscribe(delegate);
+    pub fn unusbscribeToValueChange(self: *Vm, name: []const u8) bool {
+        return self.value_subscribers.remove(name);
     }
 
     pub fn interpret(self: *Vm) !void {
@@ -381,7 +377,7 @@ pub const Vm = struct {
                     }
                 },
                 .subtract, .multiply, .divide, .modulus => try self.binaryNumberOp(op),
-                .equal, .not_equal, .greater_than => try self.comparisonOp(op),
+                .equal, .not_equal, .greater_than, .greater_than_equal => try self.comparisonOp(op),
                 .true => try self.push(values.True),
                 .false => try self.push(values.False),
                 .nil => try self.push(values.Nil),
@@ -462,7 +458,12 @@ pub const Vm = struct {
                         if (current.enum_value.index > value.enum_value.index) value = current;
                     }
                     self.globals[index] = value;
-                    self.subscribers[index].invoke(value);
+                    const name = self.bytecode.global_symbols[index].name;
+                    if (self.value_subscribers.contains(name)) {
+                        if (self.value_subscriber_callback) |cb| {
+                            cb(name, value);
+                        }
+                    }
                 },
                 .get_global => {
                     const index = self.readInt(OpCode.Size(.get_global));
@@ -1034,6 +1035,7 @@ pub const Vm = struct {
             .equal => try self.push(.{ .bool = right.eql(left) }),
             .not_equal => try self.push(.{ .bool = !right.eql(left) }),
             .greater_than => try self.push(.{ .bool = left.number > right.number }),
+            .greater_than_equal => try self.push(.{ .bool = left.number >= right.number }),
             else => return self.fail("Unknown comparison operator '{s}'", .{@tagName(op)}),
         }
     }
