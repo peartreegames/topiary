@@ -253,7 +253,7 @@ pub const Has = struct {
             .string => |s| blk: {
                 if (item.obj.data != .string) break :blk false;
                 // need to remove the null termination of the needle
-                const indexOf = std.mem.indexOf(u8, s, item.obj.data.string[0 .. item.obj.data.string.len - 1]);
+                const indexOf = std.mem.indexOf(u8, s, std.mem.trimRight(u8, item.obj.data.string, &[_]u8{0}));
                 break :blk indexOf != null;
             },
             else => false,

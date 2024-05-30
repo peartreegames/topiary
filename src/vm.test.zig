@@ -189,6 +189,7 @@ test "Strings" {
         .{ .input = "\"test{\"test\"}ing", .value = "testtesting" },
         .{ .input = "\"test{\"\"\"test\"\"\"}ing", .value = "test\"test\"ing" },
         .{ .input = "\"test{\"quote\"\"test\"\"quote\"}ing", .value = "testquote\"test\"quoteing" },
+        .{ .input = "var t = \"test\" t += \"ing\"", .value = "testing" },
         // .{ .input = "\"test\".has(\"tes\")", .value = true },
         // .{ .input = "\"test\".has(\"foo\")", .value = false },
         // .{ .input = "\"testing\".has(\"tin\")", .value = true },
@@ -761,6 +762,23 @@ test "Classes" {
     try testing.expectEqualStrings("Test", value.obj.data.class.name);
 }
 
+test "Class Error" {
+    const input =
+        \\ class Test = {
+        \\    value = 0
+        \\ }
+        \\ var test = new Test{
+        \\    val = 2
+        \\ }
+        \\
+    ;
+    var mod = Module.create(allocator);
+    defer mod.deinit();
+    defer mod.entry.source_loaded = false;
+    const err = initTestVm(input, &mod, false);
+    try testing.expectError(Vm.Error.CompilerError, err);
+}
+
 test "Instance" {
     const input =
         \\ class Test = {
@@ -846,6 +864,25 @@ test "Enums" {
         vm.err.print(std.io.getStdErr().writer());
         return err;
     };
+}
+
+test "Enum Error" {
+    const input =
+        \\ enum TimeOfDay = {
+        \\  Morning,
+        \\  Afternoon,
+        \\  Evening,
+        \\  Night
+        \\ }
+        \\
+        \\ var time = TimeOfDay.morn
+    ;
+
+    var mod = Module.create(allocator);
+    defer mod.deinit();
+    defer mod.entry.source_loaded = false;
+    const err = initTestVm(input, &mod, false);
+    try testing.expectError(Vm.Error.CompilerError, err);
 }
 
 test "Boughs" {
@@ -1448,10 +1485,10 @@ test "Externs and Subscribers" {
             }
         };
         try vm.setExtern("value", .{ .number = 2 });
-        try vm.subscribeToValueChange("value");
+        _ = try vm.subscribeToValueChange("value");
         vm.value_subscriber_callback = &Listener.onChange;
         try vm.interpret();
-        vm.unusbscribeToValueChange("value");
+        _ = vm.unusbscribeToValueChange("value");
         try testing.expect(case.value == vm.stack.previous().number);
     }
 }

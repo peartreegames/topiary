@@ -259,7 +259,7 @@ pub const Vm = struct {
     }
 
     pub fn subscribeToValueChange(self: *Vm, name: []const u8) !bool {
-        if (self.value_subscribers.contains(name)) return;
+        if (self.value_subscribers.contains(name)) return true;
         for (self.bytecode.global_symbols) |s| {
             if (!std.mem.eql(u8, name, s.name)) continue;
             try self.value_subscribers.put(s.name, {});
@@ -370,7 +370,7 @@ pub const Vm = struct {
                         .number => try self.push(.{ .number = right.number + left.number }),
                         .obj => |o| {
                             switch (o.data) {
-                                .string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.allocator, u8, &.{ left.obj.data.string[0..(left.obj.data.string.len - 1)], s }) }),
+                                .string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.allocator, u8, &.{ std.mem.trimRight(u8, left.obj.data.string, &[_]u8{0}), s }) }),
                                 else => return self.fail("Cannot add types {s} and {s}", .{ left.typeName(), right.typeName() }),
                             }
                         },
@@ -569,7 +569,7 @@ pub const Vm = struct {
                                 .obj => |o| {
                                     switch (o.data) {
                                         // remove final 0
-                                        .string => try writer.writeAll(o.data.string[0..(o.data.string.len - 1)]),
+                                        .string => try writer.writeAll(std.mem.trimRight(u8, o.data.string, &[_]u8{0})),
                                         else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), str }),
                                     }
                                 },

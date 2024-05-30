@@ -554,7 +554,7 @@ test "Create and Destroy Vm" {
     defer destroyVm(vm_ptr);
     defer vm.bytecode.free(alloc);
     const val_name = "value";
-    subscribe(vm_ptr, val_name, val_name.len);
+    _ = subscribe(vm_ptr, val_name, val_name.len);
     start(vm_ptr, "", 0);
     while (canContinue(vm_ptr)) {
         run(vm_ptr);
@@ -563,7 +563,7 @@ test "Create and Destroy Vm" {
             break;
         }
     }
-    unsubscribe(vm_ptr, val_name, val_name.len);
+    _ = unsubscribe(vm_ptr, val_name, val_name.len);
 
     const list_name = "list";
     var list_value: ExportValue = undefined;

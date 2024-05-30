@@ -53,6 +53,8 @@ pub const Compiler = struct {
     divert_log: std.ArrayList(JumpTree.Entry),
     visit_tree: VisitTree,
 
+    types: std.ArrayList(*const ast.Statement),
+
     pub const Chunk = struct {
         instructions: std.ArrayList(u8),
         token_lines: std.ArrayList(u32),
@@ -104,6 +106,7 @@ pub const Compiler = struct {
             .jump_tree = try JumpTree.init(allocator),
             .visit_tree = try VisitTree.init(allocator),
             .divert_log = std.ArrayList(JumpTree.Entry).init(allocator),
+            .types = std.ArrayList(*const ast.Statement).init(allocator),
             .err = undefined,
             .module = undefined,
         };
@@ -114,10 +117,16 @@ pub const Compiler = struct {
         self.root_scope.destroy();
         self.jump_tree.deinit();
         self.visit_tree.deinit();
+        for (self.constants.items) |item| {
+            if (item == .obj) {
+                Value.Obj.destroy(self.allocator, item.obj);
+            }
+        }
         self.constants.deinit();
         self.divert_log.deinit();
         self.identifier_cache.deinit();
         self.builtins.destroy();
+        self.types.deinit();
     }
 
     fn fail(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype) Error {
@@ -432,6 +441,7 @@ pub const Compiler = struct {
                 try self.setSymbol(symbol, token, true);
             },
             .class => |c| {
+                try self.types.append(&stmt);
                 try self.enterScope(.local);
                 for (c.fields, 0..) |field, i| {
                     try self.compileExpression(&field);
@@ -448,6 +458,7 @@ pub const Compiler = struct {
                 try self.setSymbol(symbol, token, true);
             },
             .@"enum" => |e| {
+                try self.types.append(&stmt);
                 var names = std.ArrayList([]const u8).init(self.allocator);
                 defer names.deinit();
                 const obj = try self.allocator.create(Value.Obj);
@@ -795,7 +806,7 @@ pub const Compiler = struct {
                                 try self.compileExpression(bin.left);
                                 return;
                             },
-                            else => unreachable,
+                            else => return self.fail("Cannot assign value of type '{s}'", bin.left.token, .{@tagName(bin.left.type)}),
                         }
                     },
                     else => {},
@@ -863,6 +874,20 @@ pub const Compiler = struct {
                 }
                 try self.compileExpression(idx.target);
                 if (token.token_type == .dot) {
+                    if (idx.target.type == .identifier) {
+                        for (self.types.items) |stmt| {
+                            if (stmt.type != .@"enum") continue;
+                            if (std.mem.eql(u8, idx.target.type.identifier, stmt.type.@"enum".name)) {
+                                var found = false;
+                                for (stmt.type.@"enum".values) |value| {
+                                    if (!std.mem.eql(u8, idx.index.type.identifier, value)) continue;
+                                    found = true;
+                                    break;
+                                }
+                                if (!found) return self.fail("Enum {s} does not contain a value '{s}'", idx.index.token, .{ idx.target.type.identifier, idx.index.type.identifier });
+                            }
+                        }
+                    }
                     try self.getOrSetIdentifierConstant(idx.index.type.identifier, token);
                 } else try self.compileExpression(idx.index);
                 try self.writeOp(.index, token);
@@ -948,7 +973,23 @@ pub const Compiler = struct {
                 _ = try self.writeInt(u8, @as(u8, @intCast(free_symbols.len)), token);
             },
             .instance => |ins| {
+                var cls: ?*const ast.Statement = null;
+                for (self.types.items) |stmt| {
+                    if (stmt.type == .class and std.mem.eql(u8, ins.name, stmt.type.class.name)) {
+                        cls = stmt;
+                        break;
+                    }
+                }
+                if (cls == null) return self.fail("Unknown class {s}", token, .{ins.name});
                 for (ins.fields, 0..) |field, i| {
+                    var found = false;
+                    for (cls.?.type.class.field_names) |field_name| {
+                        if (!std.mem.eql(u8, field_name, ins.field_names[i])) continue;
+                        found = true;
+                        break;
+                    }
+                    if (!found) return self.fail("Class {s} does not contain a field named '{s}'", token, .{ ins.name, ins.field_names[i] });
+
                     try self.compileExpression(&field);
                     try self.getOrSetIdentifierConstant(ins.field_names[i], token);
                 }
