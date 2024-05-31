@@ -749,6 +749,7 @@ test "Classes" {
         \\ class Test = {
         \\    value = 0
         \\ }
+        \\ assert(Test.value == 0, "Test.value == 0")
     ;
     var mod = Module.create(allocator);
     defer mod.deinit();
@@ -757,26 +758,55 @@ test "Classes" {
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
     try vm.interpret();
-    const value = vm.stack.previous();
-    try testing.expect(value.obj.data == .class);
-    try testing.expectEqualStrings("Test", value.obj.data.class.name);
 }
 
-test "Class Error" {
-    const input =
+test "Class Runtime Error" {
+    const tests = .{
+        \\ class Test = {
+        \\    value = 0
+        \\ }
+        \\ var test = new Test{}
+        \\ test.val = 55
+        ,
+    };
+    inline for (tests) |input| {
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        var vm = try initTestVm(input, &mod, false);
+        defer vm.deinit();
+        defer vm.bytecode.free(testing.allocator);
+        const err = vm.interpret();
+        try std.testing.expectError(error.RuntimeError, err);
+    }
+}
+
+test "Class Compile Error" {
+    const tests = .{
         \\ class Test = {
         \\    value = 0
         \\ }
         \\ var test = new Test{
         \\    val = 2
         \\ }
-        \\
-    ;
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    const err = initTestVm(input, &mod, false);
-    try testing.expectError(Vm.Error.CompilerError, err);
+        ,
+        \\ class Test = {
+        \\    value = 0
+        \\ }
+        \\ Test.value = 55
+        ,
+        \\ class Test = {
+        \\    value = 0
+        \\ }
+        \\ Test = 55
+    };
+    inline for (tests) |input| {
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        const err = initTestVm(input, &mod, false);
+        try testing.expectError(Vm.Error.CompilerError, err);
+    }
 }
 
 test "Instance" {
@@ -867,7 +897,7 @@ test "Enums" {
 }
 
 test "Enum Error" {
-    const input =
+    const tests = .{
         \\ enum TimeOfDay = {
         \\  Morning,
         \\  Afternoon,
@@ -876,13 +906,30 @@ test "Enum Error" {
         \\ }
         \\
         \\ var time = TimeOfDay.morn
-    ;
+        ,
+        \\ enum TimeOfDay = {
+        \\  Morning,
+        \\  Afternoon,
+        \\  Evening,
+        \\  Night
+        \\ }
+        \\
+        \\ TimeOfDay.Morning = 5
+        ,
+        \\ enum TimeOfDay = {
+        \\  Morning,
+        \\ }
+        \\
+        \\ TimeOfDay = 5
+    };
 
-    var mod = Module.create(allocator);
-    defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    const err = initTestVm(input, &mod, false);
-    try testing.expectError(Vm.Error.CompilerError, err);
+    inline for (tests) |input| {
+        var mod = Module.create(allocator);
+        defer mod.deinit();
+        defer mod.entry.source_loaded = false;
+        const err = initTestVm(input, &mod, false);
+        try testing.expectError(Vm.Error.CompilerError, err);
+    }
 }
 
 test "Boughs" {

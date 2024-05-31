@@ -802,6 +802,20 @@ pub const Vm = struct {
                                 }
                                 if (!found) return self.fail("Unknown value \"{s}\" on enum {s}", .{ index.obj.data.string, e.name });
                             },
+                            .class => |c| {
+                                if (index != .obj)
+                                    return self.fail("Can only query instance fields by string name, not {s}", .{@tagName(index)});
+                                if (index.obj.data != .string)
+                                    return self.fail("Can only query instance fields by string name, not {s}", .{@tagName(index.obj.data)});
+                                var found = false;
+                                for (c.fields) |field| {
+                                    if (std.mem.eql(u8, field.name, index.obj.data.string)) {
+                                        try self.push(field.value);
+                                        found = true;
+                                    }
+                                }
+                                if (!found) return self.fail("Unknown value \"{s}\" on Class {s}", .{ index.obj.data.string, c.name });
+                            },
                             else => return self.fail("Unknown target type {s} to index. Only lists, maps, sets, or instances can be indexed.", .{@tagName(target)}),
                         },
                         .map_pair => |mp| {

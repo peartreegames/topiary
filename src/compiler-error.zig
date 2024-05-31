@@ -73,7 +73,8 @@ pub const CompilerErrors = struct {
                 var lineStart: usize = 0;
                 if (lineNumber == 1) lineStart = if (std.mem.startsWith(u8, l, "\xEF\xBB\xBF")) 3 else @as(usize, 0);
                 try writer.print("{s}\n", .{l[lineStart..]});
-                try writer.writeByteNTimes(' ', @max(column - 1, 0));
+                const offset_col: u8 = if (lineNumber == 1) 1 else 2;
+                try writer.writeByteNTimes(' ', @max(column - offset_col, 0));
                 try writer.print("{s}", .{color_prefix});
                 try writer.writeByteNTimes('~', end - start);
                 try writer.writeAll("\n\x1b[0m");
