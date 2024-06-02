@@ -799,6 +799,8 @@ test "Class Compile Error" {
         \\    value = 0
         \\ }
         \\ Test = 55
+        ,
+        \\ var test = new Test{}
     };
     inline for (tests) |input| {
         var mod = Module.create(allocator);
@@ -818,6 +820,7 @@ test "Instance" {
         \\    list = List{},
         \\    nested = List{}
         \\ }
+        \\ assert(Test.value == 0, "Test.value == 0")
         \\ const test = new Test{}
         \\ test.value = 5
         \\ assert(test.value == 5, "test.value == 5")
@@ -835,6 +838,8 @@ test "Instance" {
         \\ assert(test.nested[0] == 2, "test.nested[2] == 2")
         \\ test.list.add(test.nested)
         \\ assert(test.list[1][0] == 2, "test.list[1][0] == 2")
+        \\ test.value = Test.value
+        \\ assert(test.value == 0, "test.value == 0")
     ;
     var mod = Module.create(allocator);
     defer mod.deinit();

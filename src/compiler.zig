@@ -762,7 +762,7 @@ pub const Compiler = struct {
                         .indexer => |idx| {
                             if (idx.target.type == .identifier) {
                                 if (self.types.get(idx.target.type.identifier)) |stmt|
-                                    return self.fail("Cannot assign value to {s}", token, .{@tagName(stmt.type)});
+                                    return self.fail("Cannot assign value to {s} field", token, .{@tagName(stmt.type)});
                             }
                             try self.compileExpression(bin.right);
                             try self.compileExpression(bin.left);
@@ -988,11 +988,8 @@ pub const Compiler = struct {
                 _ = try self.writeInt(u8, @as(u8, @intCast(free_symbols.len)), token);
             },
             .instance => |ins| {
-                var cls: ?*const ast.Statement = null;
-                if (self.types.get(ins.name)) |stmt| {
-                    cls = stmt;
-                }
-                if (cls == null or cls.?.type != .class) return self.fail("Unknown class {s}", token, .{ins.name});
+                const cls: ?*const ast.Statement = self.types.get(ins.name);
+                if (cls == null or cls.?.type != .class) return self.fail("Unknown class '{s}'", token, .{ins.name});
                 for (ins.fields, 0..) |field, i| {
                     if (!arrayOfTypeContains(u8, cls.?.type.class.field_names, ins.field_names[i]))
                         return self.fail("Class {s} does not contain a field named '{s}'", token, .{ ins.name, ins.field_names[i] });
