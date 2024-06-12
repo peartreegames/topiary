@@ -75,7 +75,7 @@ pub fn main() !void {
     }
 
     const is_run = std.mem.eql(u8, cmd, "run");
-    const is_test = std.mem.eql(u8, cmd, "auto");
+    const is_test = std.mem.eql(u8, cmd, "test");
     const is_compile = std.mem.eql(u8, cmd, "compile");
     const is_loc = std.mem.eql(u8, cmd, "loc");
     if (!is_run and !is_test and !is_compile and !is_loc) return usage("Unknown command");

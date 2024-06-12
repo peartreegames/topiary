@@ -59,8 +59,8 @@ pub const TestRunner = struct {
 
 var test_runner = TestRunner.init();
 pub fn initTestVm(source: []const u8, mod: *Module, debug: bool) !Vm {
-    const errWriter = std.io.getStdErr().writer();
     var bytecode = compileSource(source, mod) catch |err| {
+        const errWriter = std.io.getStdErr().writer();
         try mod.writeErrors(errWriter);
         return err;
     };
@@ -1414,6 +1414,7 @@ test "Switch" {
             \\     0: i = 0,
             \\     1: i = 1
             \\ }
+            \\ assert(i == 1, "{i} == 1");
             \\ i
             ,
             .value = 1.0,
@@ -1425,6 +1426,7 @@ test "Switch" {
             \\     0: i = 0,
             \\     1: i = 1
             \\ }
+            \\ assert(i == -1, "{i} == -1");
             \\ i
             ,
             .value = -1.0,
@@ -1436,6 +1438,7 @@ test "Switch" {
             \\     0: i = 0,
             \\     1: i = 1,
             \\ }
+            \\ assert(i == 1, "{i} == 1");
             \\ i
             ,
             .value = 1.0,
@@ -1448,6 +1451,7 @@ test "Switch" {
             \\     1: i = 1,
             \\     else: i = 5
             \\ }
+            \\ assert(i == 1, "{i} == 1");
             \\ i
             ,
             .value = 1.0,
@@ -1460,6 +1464,7 @@ test "Switch" {
             \\     1: i = 1,
             \\     else: i = 5
             \\ }
+            \\ assert(i == 5, "{i} == 5");
             \\ i
             ,
             .value = 5.0,
@@ -1472,6 +1477,7 @@ test "Switch" {
             \\     4,5,6,7: i = 4,
             \\     else: i = 5
             \\ }
+            \\ assert(i == 4, "{i} == 4");
             \\ i
             ,
             .value = 4.0,
@@ -1484,6 +1490,7 @@ test "Switch" {
             \\     4..7: i = 4,
             \\     else: i = 5
             \\ }
+            \\ assert(i == 4, "{i} == 4");
             \\ i
             ,
             .value = 4.0,
@@ -1496,6 +1503,7 @@ test "Switch" {
             \\     "two": i = 4,
             \\     "test": i = 5
             \\ }
+            \\ assert(i == 5, "{i} == 5");
             \\ i
             ,
             .value = 5.0,
@@ -1508,7 +1516,10 @@ test "Switch" {
         var vm = try initTestVm(case.input, &mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
-        try vm.interpret();
+        vm.interpret() catch |err| {
+            vm.err.print(std.io.getStdErr().writer());
+            return err;
+        };
     }
 }
 
@@ -1534,6 +1545,9 @@ test "Externs and Subscribers" {
         const Listener = struct {
             pub fn onChange(name: []const u8, value: Value) void {
                 std.debug.print("\nListener \"{s}\"::{}\n", .{ name, value });
+                testing.expectEqual(case.value, value.number) catch {
+                    std.debug.print("Unexpected listener value", .{});
+                };
             }
         };
         try vm.setExtern("value", .{ .number = 2 });

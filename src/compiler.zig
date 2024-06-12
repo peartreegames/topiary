@@ -345,19 +345,30 @@ pub const Compiler = struct {
                 const start = self.instructionPos();
                 try self.compileExpression(&s.capture);
                 var prong_jumps = try self.allocator.alloc(usize, s.prongs.len);
+                var inferred_else_jump: ?usize = null;
                 defer self.allocator.free(prong_jumps);
                 // compile expressions and jumps
+                var has_else = false;
                 for (s.prongs, 0..) |prong_stmt, i| {
                     const prong = prong_stmt.type.switch_prong;
                     if (prong.values) |p| {
                         for (p) |value| {
                             try self.compileExpression(&value);
                         }
+                    } else {
+                        has_else = true;
                     }
                     try self.writeOp(.prong, prong_stmt.token);
                     const prong_jump = try self.writeInt(OpCode.Size(.jump), PRONG_HOLDER, prong_stmt.token);
                     _ = try self.writeInt(u8, @as(u8, @intCast(if (prong.values) |p| p.len else 0)), prong_stmt.token);
                     prong_jumps[i] = prong_jump;
+                }
+                // add an empty else if none found
+                if (!has_else) {
+                    try self.writeOp(.prong, token);
+                    const prong_jump = try self.writeInt(OpCode.Size(.jump), PRONG_HOLDER, token);
+                    _ = try self.writeInt(u8, 0, token);
+                    inferred_else_jump = prong_jump;
                 }
 
                 // replace jumps and compile body
@@ -370,6 +381,16 @@ pub const Compiler = struct {
                     _ = try self.writeInt(OpCode.Size(.jump), SWITCH_END_HOLDER, prong_stmt.token);
                     try self.exitScope();
                 }
+
+                if (inferred_else_jump) |jump| {
+                    try self.replaceValue(jump, OpCode.Size(.jump), self.instructionPos());
+                    try self.enterScope(.local);
+                    try self.compileBlock(&[_]ast.Statement{});
+                    try self.writeOp(.jump, token);
+                    _ = try self.writeInt(OpCode.Size(.jump), SWITCH_END_HOLDER, token);
+                    try self.exitScope();
+                }
+
                 try replaceJumps(self.chunk.instructions.items[start..], SWITCH_END_HOLDER, self.instructionPos());
                 try self.writeOp(.pop, token);
             },

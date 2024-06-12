@@ -1,5 +1,5 @@
 .idea
 .DS_Store
-zig-cache
+.zig-cache
 zig-out
 *.topib

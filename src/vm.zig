@@ -1057,10 +1057,11 @@ pub const Vm = struct {
 
     fn prongIsMatch(self: *Vm, capture: Value, case: Value) bool {
         _ = self;
-        return switch (case) {
+        const result = switch (case) {
             .range => |r| @as(i32, @intFromFloat(capture.number)) >= r.start and @as(i32, @intFromFloat(capture.number)) <= r.end,
             else => capture.eql(case),
         };
+        return result;
     }
 
     fn push(self: *Vm, value: Value) !void {

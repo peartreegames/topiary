@@ -5,12 +5,12 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     _ = b.addModule("topi", .{
-        .root_source_file = .{ .path = "src/topi.zig" },
+        .root_source_file = b.path("src/topi.zig"),
     });
 
     const topidll = b.addSharedLibrary(.{
         .name = "topi",
-        .root_source_file = .{ .path = "src/export.zig" },
+        .root_source_file = b.path("src/export.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "topi",
-        .root_source_file = .{ .path = "src/cli.zig" },
+        .root_source_file = b.path("src/cli.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -36,7 +36,7 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     const tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/vm.zig" },
+        .root_source_file = b.path("src/vm.zig"),
         .target = target,
         .optimize = optimize,
     });

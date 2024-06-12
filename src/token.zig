@@ -92,7 +92,7 @@ pub const TokenType = enum {
     illegal,
 };
 
-pub const Keywords = std.ComptimeStringMap(TokenType, .{
+pub const Keywords = std.StaticStringMap(TokenType).initComptime(.{
     .{ "and", .@"and" },
     .{ "bough", .bough },
     .{ "break", .@"break" },
