@@ -1,7 +1,6 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
-const Arena = std.heap.ArenaAllocator;
 const testing = std.testing;
 const Lexer = @import("lexer.zig").Lexer;
 const tok = @import("token.zig");
@@ -9,7 +8,6 @@ const ast = @import("ast.zig");
 const File = @import("module.zig").File;
 const Errors = @import("compiler-error.zig").CompilerErrors;
 const UUID = @import("utils/uuid.zig").UUID;
-const Tree = ast.Tree;
 const Statement = ast.Statement;
 const Expression = ast.Expression;
 const TokenType = tok.TokenType;
@@ -51,61 +49,9 @@ fn findPrecedence(token_type: TokenType) Precedence {
     };
 }
 
-/// Used for parsing files
-/// Required if topi file has "include" statements
-pub fn parseFile(allocator: Allocator, dir: std.fs.Dir, path: []const u8, err: *Errors) Parser.Error!Tree {
-    const file = dir.openFile(path, .{}) catch |e| {
-        err.add("Could not open file {s}: {}", undefined, .err, .{ path, e }) catch {};
-        return Parser.Error.ParserError;
-    };
-    defer file.close();
-
-    const stat = file.stat() catch |e| {
-        err.add("Could not read file stats {s}: {}", undefined, .err, .{ path, e }) catch {};
-        return Parser.Error.ParserError;
-    };
-    const file_size = stat.size;
-    const source = try allocator.alloc(u8, file_size);
-    defer allocator.free(source);
-    file.reader().readNoEof(source) catch |e| {
-        err.add("Could not read file {s}: {}", undefined, .err, .{ path, e }) catch {};
-        return Parser.Error.ParserError;
-    };
-    errdefer err.write(source, std.io.getStdErr().writer()) catch {};
-    var lexer = Lexer.init(source);
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
-
-    var parser = Parser{
-        .current_token = lexer.next(),
-        .peek_token = lexer.next(),
-        .arena = arena.state,
-        .allocator = arena.allocator(),
-        .lexer = &lexer,
-        .directory = dir,
-        .source = source,
-        .err = err,
-    };
-
-    var nodes = ArrayList(Statement).init(parser.allocator);
-    errdefer nodes.deinit();
-
-    while (!parser.currentIs(.eof)) : (parser.next()) {
-        try nodes.append(try parser.statement());
-    }
-
-    return Tree{
-        .root = try nodes.toOwnedSlice(),
-        .arena = arena.state,
-        .allocator = allocator,
-        .source = source,
-    };
-}
-
 pub const Parser = struct {
     current_token: Token,
     peek_token: Token,
-    arena: std.heap.ArenaAllocator.State,
     allocator: Allocator,
     lexer: *Lexer,
     file: *File,
@@ -124,7 +70,7 @@ pub const Parser = struct {
         interpolated: []const u8,
     };
 
-    fn allocate(self: Parser, value: anytype) !*@TypeOf(value) {
+    inline fn allocate(self: Parser, value: anytype) !*@TypeOf(value) {
         const T = @TypeOf(value);
         std.debug.assert(@typeInfo(T) != .Pointer);
         const ptr = try self.allocator.create(T);
@@ -133,7 +79,7 @@ pub const Parser = struct {
         return ptr;
     }
 
-    fn fail(self: *Parser, comptime msg: []const u8, token: Token, args: anytype) Error {
+    inline fn fail(self: *Parser, comptime msg: []const u8, token: Token, args: anytype) Error {
         try self.file.errors.add(msg, token, .err, args);
         return Error.ParserError;
     }
@@ -196,11 +142,9 @@ pub const Parser = struct {
     fn includeStatement(self: *Parser) Error!Statement {
         const start = self.current_token;
         self.next();
-        const path = try self.getStringValue();
 
-        if (std.mem.eql(u8, self.file.path, "")) return self.fail("File Path not set", self.current_token, .{});
-        const full_path = try std.fs.path.resolve(self.allocator, &.{ self.file.dir_name, path });
-        if (self.file.module == null or self.file.module.?.includes.contains(full_path)) {
+        const path = self.file.source[self.current_token.start..self.current_token.end];
+        if (!self.file.module.allow_includes) {
             return .{
                 .token = start,
                 .type = .{
@@ -212,23 +156,37 @@ pub const Parser = struct {
             };
         }
 
-        const file = File.create(self.allocator, full_path, self.file.module) catch |err| {
+        if (std.mem.eql(u8, self.file.path, "")) return self.fail("Cannot include as current file path not set", start, .{});
+        const full_path = try std.fs.path.resolve(self.allocator, &.{ self.file.dir_name, path });
+        defer self.allocator.free(full_path);
+
+        if (self.file.module.includes.getKey(full_path)) |k| {
+            return .{
+                .token = start,
+                .type = .{
+                    .include = .{
+                        .path = k,
+                        .contents = &.{},
+                    },
+                },
+            };
+        }
+
+        const file = self.file.module.addFileAtPath(full_path) catch |err| {
             return self.fail("Could not create include file '{s}': {}", self.current_token, .{ path, err });
         };
         file.loadSource() catch |err| {
             return self.fail("Could not load include file '{s}': {}", self.current_token, .{ path, err });
         };
-
         file.buildTree() catch |err| {
             return self.fail("Could not build include file tree '{s}': {}", self.current_token, .{ path, err });
         };
-        try self.file.module.?.includes.putNoClobber(full_path, file);
 
         return .{
             .token = start,
             .type = .{
                 .include = .{
-                    .path = path,
+                    .path = file.path,
                     .contents = file.tree.root,
                 },
             },
@@ -284,8 +242,7 @@ pub const Parser = struct {
         var values = std.ArrayList([]const u8).init(self.allocator);
         errdefer values.deinit();
         while (!self.currentIs(.right_brace)) {
-            try values.append(try self.getStringValue());
-            self.next();
+            try values.append(try self.consumeIdentifier());
             if (self.currentIs(.comma)) self.next();
         }
         return .{
@@ -622,7 +579,6 @@ pub const Parser = struct {
         var parser = Parser{
             .current_token = lexer.next(),
             .peek_token = lexer.next(),
-            .arena = self.arena,
             .allocator = self.allocator,
             .lexer = &lexer,
             .file = self.file,
@@ -1079,7 +1035,7 @@ pub const Parser = struct {
     fn switchProng(self: *Parser) Error!Statement {
         const start_token = self.current_token;
         var values = std.ArrayList(Expression).init(self.allocator);
-        defer values.deinit();
+        errdefer values.deinit();
         const is_else = start_token.token_type == .@"else";
         if (!is_else) {
             try values.append(try self.expression(.lowest));

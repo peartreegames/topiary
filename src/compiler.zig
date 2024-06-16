@@ -59,7 +59,7 @@ pub const Compiler = struct {
     divert_log: std.ArrayList(JumpTree.Entry),
     visit_tree: VisitTree,
 
-    types: std.StringHashMap(*const ast.Statement),
+    types: std.StringHashMap(ast.Statement),
 
     pub const Chunk = struct {
         instructions: std.ArrayList(u8),
@@ -112,7 +112,7 @@ pub const Compiler = struct {
             .jump_tree = try JumpTree.init(allocator),
             .visit_tree = try VisitTree.init(allocator),
             .divert_log = std.ArrayList(JumpTree.Entry).init(allocator),
-            .types = std.StringHashMap(*const ast.Statement).init(allocator),
+            .types = std.StringHashMap(ast.Statement).init(allocator),
             .err = undefined,
             .module = undefined,
         };
@@ -263,7 +263,14 @@ pub const Compiler = struct {
     pub fn precompileJumps(self: *Compiler, stmt: ast.Statement, node: *JumpTree.Node) Error!void {
         switch (stmt.type) {
             .include => |i| {
+                const tmp = self.err;
+                if (self.module.includes.get(i.path)) |file| {
+                    self.err = &file.errors;
+                } else {
+                    return self.fail("Unknown include file {s}", stmt.token, .{i.path});
+                }
                 for (i.contents) |s| try self.precompileJumps(s, node);
+                self.err = tmp;
             },
             .bough => |b| {
                 try self.compileVisitDecl(b.name, stmt.token);
@@ -320,7 +327,14 @@ pub const Compiler = struct {
         const token = stmt.token;
         switch (stmt.type) {
             .include => |i| {
+                const tmp = self.err;
+                if (self.module.includes.get(i.path)) |file| {
+                    self.err = &file.errors;
+                } else {
+                    return self.fail("Unknown include file {s}", stmt.token, .{i.path});
+                }
                 try self.compileBlock(i.contents);
+                self.err = tmp;
             },
             .@"if" => |i| {
                 try self.compileExpression(i.condition);
@@ -468,7 +482,7 @@ pub const Compiler = struct {
                 try self.setSymbol(symbol, token, true);
             },
             .class => |c| {
-                try self.types.put(c.name, &stmt);
+                try self.types.putNoClobber(c.name, stmt);
                 try self.enterScope(.local);
                 for (c.fields, 0..) |field, i| {
                     try self.compileExpression(&field);
@@ -485,13 +499,12 @@ pub const Compiler = struct {
                 try self.setSymbol(symbol, token, true);
             },
             .@"enum" => |e| {
-                try self.types.put(e.name, &stmt);
-                var names = std.ArrayList([]const u8).init(self.allocator);
-                defer names.deinit();
+                try self.types.putNoClobber(e.name, stmt);
+                var values = try self.allocator.alloc([]const u8, e.values.len);
                 const obj = try self.allocator.create(Value.Obj);
 
-                for (e.values) |value| {
-                    try names.append(try self.allocator.dupe(u8, value));
+                for (e.values, 0..) |value, i| {
+                    values[i] = try self.allocator.dupe(u8, value);
                 }
 
                 obj.* = .{
@@ -499,7 +512,7 @@ pub const Compiler = struct {
                         .@"enum" = .{
                             .is_seq = e.is_seq,
                             .name = try self.allocator.dupe(u8, e.name),
-                            .values = try names.toOwnedSlice(),
+                            .values = values,
                         },
                     },
                 };
@@ -1009,7 +1022,7 @@ pub const Compiler = struct {
                 _ = try self.writeInt(u8, @as(u8, @intCast(free_symbols.len)), token);
             },
             .instance => |ins| {
-                const cls: ?*const ast.Statement = self.types.get(ins.name);
+                const cls: ?ast.Statement = self.types.get(ins.name);
                 if (cls == null or cls.?.type != .class) return self.fail("Unknown class '{s}'", token, .{ins.name});
                 for (ins.fields, 0..) |field, i| {
                     if (!arrayOfTypeContains(u8, cls.?.type.class.field_names, ins.field_names[i]))

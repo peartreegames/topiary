@@ -24,9 +24,8 @@ const Module = module.Module;
 const Compiler = compiler.Compiler;
 
 pub fn compileSource(source: []const u8, mod: *Module) !Bytecode {
-    const file = try allocator.create(module.File);
+    const file = try mod.arena.allocator().create(module.File);
     file.* = .{
-        .allocator = allocator,
         .path = "",
         .name = "",
         .dir_name = "",
@@ -38,17 +37,7 @@ pub fn compileSource(source: []const u8, mod: *Module) !Bytecode {
     };
     mod.entry = file;
     try mod.includes.putNoClobber(file.path, file);
-    file.buildTree() catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try file.errors.write(source, errWriter);
-        return err;
-    };
-
-    var comp = try Compiler.init(allocator);
-    defer comp.deinit();
-
-    try comp.compile(mod);
-    return comp.bytecode();
+    return mod.generateBytecode(allocator);
 }
 
 test "Basic Compile" {
@@ -73,15 +62,10 @@ test "Basic Compile" {
         },
     };
 
-    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var bytecode = compileSource(case.input, &mod) catch |err| {
-            try mod.writeErrors(errWriter);
-            return err;
-        };
+        var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
         for (case.instructions, 0..) |instruction, i| {
             errdefer std.log.warn("Error on {}", .{i});
@@ -166,15 +150,10 @@ test "Conditionals Compile" {
         },
     };
 
-    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var bytecode = compileSource(case.input, &mod) catch |err| {
-            try mod.writeErrors(errWriter);
-            return err;
-        };
+        var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
         for (case.instructions, 0..) |instruction, i| {
             errdefer std.log.warn("Error on instruction:{}", .{i});
@@ -258,15 +237,10 @@ test "Variables" {
         },
     };
 
-    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var bytecode = compileSource(case.input, &mod) catch |err| {
-            try mod.writeErrors(errWriter);
-            return err;
-        };
+        var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
         for (case.instructions, 0..) |instruction, i| {
             errdefer std.log.warn("{s} -- {}", .{ case.input, i });
@@ -318,15 +292,10 @@ test "Strings" {
         },
     };
 
-    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var bytecode = compileSource(case.input, &mod) catch |err| {
-            try mod.writeErrors(errWriter);
-            return err;
-        };
+        var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
         for (case.instructions, 0..) |instruction, i| {
             errdefer std.log.warn("{}", .{i});
@@ -420,15 +389,10 @@ test "Lists" {
         },
     };
 
-    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var bytecode = compileSource(case.input, &mod) catch |err| {
-            try mod.writeErrors(errWriter);
-            return err;
-        };
+        var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
         for (case.instructions, 0..) |instruction, i| {
             errdefer std.log.warn("{}", .{i});
@@ -617,15 +581,10 @@ test "Maps and Sets" {
         },
     };
 
-    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var bytecode = compileSource(case.input, &mod) catch |err| {
-            try mod.writeErrors(errWriter);
-            return err;
-        };
+        var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
         for (case.instructions, 0..) |instruction, i| {
             errdefer std.log.warn("Error on: {} \n{s}", .{ i, case.input });
@@ -711,15 +670,10 @@ test "Index" {
         },
     };
 
-    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var bytecode = compileSource(case.input, &mod) catch |err| {
-            try mod.writeErrors(errWriter);
-            return err;
-        };
+        var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
         for (case.instructions, 0..) |instruction, i| {
             errdefer std.log.warn("Error on: {}", .{i});
@@ -1111,16 +1065,11 @@ test "Functions" {
         },
     };
 
-    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var bytecode = compileSource(case.input, &mod) catch |err| {
-            try mod.writeErrors(errWriter);
-            return err;
-        };
+        var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
         errdefer bytecode.print(std.debug);
         for (case.instructions, 0..) |instruction, i| {
@@ -1262,16 +1211,11 @@ test "Locals" {
         },
     };
 
-    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var bytecode = compileSource(case.input, &mod) catch |err| {
-            try mod.writeErrors(errWriter);
-            return err;
-        };
+        var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
         for (case.instructions, 0..) |instruction, i| {
             errdefer std.log.warn("Error on: {}", .{i});
@@ -1325,16 +1269,11 @@ test "Builtin Functions" {
         },
     };
 
-    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var bytecode = compileSource(case.input, &mod) catch |err| {
-            try mod.writeErrors(errWriter);
-            return err;
-        };
+        var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
         errdefer bytecode.print(std.debug);
         for (case.instructions, 0..) |instruction, i| {
@@ -1606,16 +1545,11 @@ test "Closures" {
         },
     };
 
-    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var bytecode = compileSource(case.input, &mod) catch |err| {
-            try mod.writeErrors(errWriter);
-            return err;
-        };
+        var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
         errdefer bytecode.print(std.debug);
         for (case.instructions, 0..) |instruction, i| {
@@ -1684,16 +1618,11 @@ test "Classes" {
         },
     };
 
-    const errWriter = std.io.getStdIn().writer();
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var bytecode = compileSource(case.input, &mod) catch |err| {
-            try mod.writeErrors(errWriter);
-            return err;
-        };
+        var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
         errdefer bytecode.print(std.debug);
         for (case.instructions, 0..) |instruction, i| {
@@ -1715,13 +1644,9 @@ test "Global Jump Error" {
         \\ => START
     ;
 
-    var mod = Module.create(allocator);
+    var mod = try Module.initEmpty(allocator);
     defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    const err = compileSource(input, &mod);
-    const errWriter = std.io.getStdErr().writer();
-    try mod.writeErrors(errWriter);
-
+    const err = compileSource(input, mod);
     try testing.expect(Compiler.Error.CompilerError == err);
 }
 
@@ -1737,15 +1662,9 @@ test "Serialize" {
         \\ const map = Map{1:2.2, 3: 4.4}
     ;
 
-    const errWriter = std.io.getStdIn().writer();
-    errdefer std.log.warn("{s}", .{input});
-    var mod = Module.create(allocator);
+    var mod = try Module.initEmpty(allocator);
     defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    var bytecode = compileSource(input, &mod) catch |err| {
-        try mod.writeErrors(errWriter);
-        return err;
-    };
+    var bytecode = try compileSource(input, mod);
     defer bytecode.free(allocator);
 
     // this doesn't need to be a file, but it's nice to sometimes not delete it and inspect it

@@ -137,6 +137,7 @@ pub fn main() !void {
     var mod = Module.init(allocator, full_path) catch |err| {
         return checkVerbose(err);
     };
+    errdefer mod.deinit();
     mod.use_loc = try checkFlag("--loc");
 
     if (is_loc) {
@@ -175,11 +176,11 @@ pub fn main() !void {
         return;
     }
 
-    var bytecode = mod.generateBytecode() catch |err| {
+    var bytecode = mod.generateBytecode(allocator) catch |err| {
         return checkVerbose(err);
     };
-    defer bytecode.free(allocator);
     mod.deinit();
+    defer bytecode.free(allocator);
 
     if (is_compile) {
         if (is_dry) {
@@ -203,9 +204,9 @@ pub fn main() !void {
     const vm_alloc = arena.allocator();
     if (is_test) {
         const maybe_count = args.next();
-        if (maybe_count == null) return usage("Auto requires a play count.");
+        if (maybe_count == null) return usage("Test requires a play count.");
         auto_count = std.fmt.parseInt(u64, maybe_count.?, 10) catch {
-            return usage("Invalid auto count specified");
+            return usage("Invalid test count specified");
         };
 
         var i: usize = 0;

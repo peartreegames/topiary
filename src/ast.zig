@@ -1,26 +1,18 @@
 const std = @import("std");
-const token = @import("./token.zig");
-const UUID = @import("./utils/uuid.zig").UUID;
+const token = @import("token.zig");
+const UUID = @import("utils/uuid.zig").UUID;
 const Token = token.Token;
 const Allocator = std.mem.Allocator;
 
 pub const Tree = struct {
-    arena: std.heap.ArenaAllocator.State,
-    allocator: Allocator,
-
     root: []const Statement,
-    source: []const u8,
-
-    pub fn deinit(self: *const Tree) void {
-        self.arena.promote(self.allocator).deinit();
-    }
 
     pub fn print(self: *const Tree, writer: anytype) void {
         writer.print("\n===TREE===", .{});
         for (self.root) |state| {
             state.print(writer, "", 0);
         }
-        writer.print("\n", .{});
+        writer.print("\n===    ===\n", .{});
     }
 };
 
@@ -89,25 +81,35 @@ pub const Expression = struct {
         writer.print("\n", .{});
         var d: usize = 0;
         while (d < depth) : (d += 1) {
-            writer.print("    ", .{});
+            writer.print("  ", .{});
         }
         writer.print("{s}", .{prefix});
         switch (self.type) {
             .binary => |b| {
-                writer.print("BINARY::{s}", .{b.operator.toString()});
-                b.left.print(writer, "LEFT::", depth + 1);
-                b.right.print(writer, "RIGHT::", depth + 1);
+                writer.print("BINARY:: {s}", .{@tagName(b.operator)});
+                b.left.print(writer, "LEFT:: ", depth + 1);
+                b.right.print(writer, "RIGHT:: ", depth + 1);
             },
             .call => |c| {
-                writer.print("CALL::{d}", .{c.arguments.len});
+                writer.print("CALL::", .{});
+                c.target.print(writer, "TARGET::", depth + 1);
                 for (c.arguments) |arg| {
                     arg.print(writer, "ARG::", depth + 1);
                 }
             },
-            .identifier => |i| writer.print("{s}", .{i}),
-            .number => |n| writer.print("{d}", .{n}),
+            .indexer => |i| {
+                writer.print("INDEXER:: ", .{});
+                i.target.print(writer, "TARGET:: ", depth + 1);
+                i.index.print(writer, "INDEX:: ", depth + 1);
+            },
+            .identifier => |i| writer.print("IDENTIFIER:: {s}", .{i}),
+            .number => |n| writer.print("NUM:: {d}", .{n}),
+            .string => |s| {
+                writer.print("STRING:: {s}", .{s.raw});
+                for (s.expressions) |e| e.print(writer, "EXP:: ", depth + 1);
+            },
             .function => |f| {
-                writer.print("FUNCTION::{s}", .{f.parameters});
+                writer.print("FUNCTION:: {s}", .{f.parameters});
                 for (f.body) |s| {
                     s.print(writer, "", depth + 1);
                 }
@@ -210,22 +212,34 @@ pub const Statement = struct {
         }
         writer.print("{s}", .{prefix});
         switch (self.type) {
-            .block => |b| {
-                for (b) |s| s.print(writer, "BLOCK::", depth + 1);
+            .include => |i| {
+                writer.print("INCLUDE:: {s}", .{i.path});
+                for (i.contents) |c| c.print(writer, "", depth + 1);
             },
-            .expression => |e| e.print(writer, "EXPRESSION::", depth + 1),
+            .block => |b| {
+                for (b) |s| s.print(writer, "", depth + 1);
+            },
+            .expression => |e| e.print(writer, "EXPRESSION:: ", depth),
             .@"if" => |i| {
-                writer.print("IF", .{});
-                i.condition.print(writer, "CONDITION", depth + 1);
-                for (i.then_branch) |s| s.print(writer, "THEN", depth + 1);
+                writer.print("IF:: ", .{});
+                i.condition.print(writer, "CONDITION:: ", depth + 1);
+                for (i.then_branch) |s| s.print(writer, "THEN:: ", depth + 1);
                 if (i.else_branch) |eb| {
-                    for (eb) |s| s.print(writer, "ELSE", depth + 1);
+                    for (eb) |s| s.print(writer, "ELSE:: ", depth + 1);
                 }
             },
-            .return_expression => |re| re.print(writer, "RETURN VALUE::", depth + 1),
-            .return_void => writer.print("RETURN::", .{}),
+            .@"enum" => |e| {
+                writer.print("ENUM:: {s} [", .{e.name});
+                for (e.values) |v| {
+                    writer.print("{s},", .{v});
+                }
+                writer.print("]", .{});
+            },
+            .return_expression => |re| re.print(writer, "RETURN VALUE:: ", depth + 1),
+            .return_void => writer.print("RETURN VOID", .{}),
             .variable => |v| {
-                v.initializer.print(writer, "VARIABLE::", depth + 1);
+                writer.print("VARIABLE:: {s}", .{v.name});
+                v.initializer.print(writer, "", depth + 1);
             },
             else => {
                 writer.print("{any}", .{self});

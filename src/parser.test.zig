@@ -9,27 +9,27 @@ const File = module.File;
 const testing = std.testing;
 const allocator = testing.allocator;
 
-pub fn parseSource(source: []const u8) !*File {
-    const file = try allocator.create(File);
-    errdefer file.destroy();
-    errdefer file.source_loaded = false;
+pub fn parseSource(source: []const u8) !*Module {
+    const mod = try Module.initEmpty(allocator);
+    errdefer mod.deinit();
+    const file = try mod.arena.allocator().create(File);
     file.* = .{
-        .allocator = allocator,
+        .module = mod,
         .path = "",
         .name = "",
         .dir_name = "",
         .dir = undefined,
         .source = source,
         .source_loaded = true,
-        .errors = Errors.init(allocator),
+        .errors = Errors.init(mod.arena.allocator()),
     };
+    mod.entry = file;
     file.buildTree() catch |err| {
         const errWriter = std.io.getStdErr().writer();
-        try file.errors.write(source, errWriter);
+        try file.errors.write("N/A", source, errWriter);
         return err;
     };
-    file.source_loaded = false;
-    return file;
+    return mod;
 }
 
 test "Parse Include" {
@@ -54,8 +54,9 @@ test "Parse Declaration" {
         \\ const str = "string value"
     ;
 
-    const file = try parseSource(t);
-    defer file.destroy();
+    const mod = try parseSource(t);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
     try testing.expect(tree.root.len == 7);
     try testing.expect(!tree.root[0].type.variable.is_mutable);
@@ -84,8 +85,9 @@ test "Parse Function Declaration" {
         \\    return result    
         \\ }
     ;
-    const file = try parseSource(t);
-    defer file.destroy();
+    const mod = try parseSource(t);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
     try testing.expect(tree.root.len == 2);
     try testing.expect(!tree.root[0].type.variable.is_mutable);
@@ -99,8 +101,9 @@ test "Parse Function Arguments" {
         \\ const sum = |x, y| return x + y
         \\ sum(1, 2) + sum(3, 4)
     ;
-    const file = try parseSource(t);
-    defer file.destroy();
+    const mod = try parseSource(t);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
     try testing.expect(tree.root.len == 2);
     try testing.expect(tree.root[1].type.expression.type.binary.operator == .add);
@@ -121,8 +124,9 @@ test "Parse Enums" {
         \\ }
         \\ var value = Test.one
     ;
-    const file = try parseSource(t);
-    defer file.destroy();
+    const mod = try parseSource(t);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
     try testing.expect(tree.root.len == 2);
     const e = tree.root[0].type.@"enum";
@@ -144,8 +148,9 @@ test "Parse Iterable Types" {
     };
 
     inline for (test_cases) |case| {
-        const file = try parseSource(case.input);
-        defer file.destroy();
+        const mod = try parseSource(case.input);
+        defer mod.deinit();
+        const file = mod.entry;
         const tree = file.tree;
         const node = tree.root[0].type.variable;
         try testing.expectEqualStrings(case.id, node.name);
@@ -167,8 +172,9 @@ test "Parse Empty Iterable Types" {
         \\ const emptyMap = Map{}
         \\ const emptySet = Set{}
     ;
-    const file = try parseSource(input);
-    defer file.destroy();
+    const mod = try parseSource(input);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
     var decl = tree.root[0].type.variable;
     try testing.expectEqualStrings("emptyMap", decl.name);
@@ -183,8 +189,9 @@ test "Parse Nested Iterable Types" {
     const input =
         \\ List{List{1,2}}
     ;
-    const file = try parseSource(input);
-    defer file.destroy();
+    const mod = try parseSource(input);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
 
     try testing.expect(tree.root[0].type.expression.type == .list);
@@ -198,8 +205,9 @@ test "Parse Extern" {
     };
 
     inline for (test_cases) |case| {
-        const file = try parseSource(case.input);
-        defer file.destroy();
+        const mod = try parseSource(case.input);
+        defer mod.deinit();
+        const file = mod.entry;
         const tree = file.tree;
         const decl = tree.root[0].type.variable;
         try testing.expectEqualStrings(case.id, decl.name);
@@ -221,8 +229,9 @@ test "Parse Enum" {
         \\ }
         \\ const val = En.three
     ;
-    const file = try parseSource(input);
-    defer file.destroy();
+    const mod = try parseSource(input);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
     var decl = tree.root[0].type.@"enum";
     try testing.expectEqualStrings("E", decl.name);
@@ -254,8 +263,9 @@ test "Parse If" {
         \\    value = 5    
         \\ }
     ;
-    const file = try parseSource(input);
-    defer file.destroy();
+    const mod = try parseSource(input);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
 
     var if_stmt = tree.root[1].type.@"if";
@@ -279,8 +289,9 @@ test "Parse Call expression" {
     const input =
         \\ add(1, 2 * 3, 4 + 5)
     ;
-    const file = try parseSource(input);
-    defer file.destroy();
+    const mod = try parseSource(input);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
 
     const call = tree.root[0].type.expression.type.call;
@@ -301,8 +312,9 @@ test "Parse For loop" {
         \\ }
     ;
 
-    const file = try parseSource(input);
-    defer file.destroy();
+    const mod = try parseSource(input);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
 
     var loop = tree.root[0].type.@"for";
@@ -323,8 +335,9 @@ test "Parse While loop" {
     const input =
         \\ while x < y { x }"
     ;
-    const file = try parseSource(input);
-    defer file.destroy();
+    const mod = try parseSource(input);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
 
     const loop = tree.root[0].type.@"while";
@@ -336,8 +349,9 @@ test "Parse Indexing" {
     const input =
         \\ test.other.third.final
     ;
-    const file = try parseSource(input);
-    defer file.destroy();
+    const mod = try parseSource(input);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
 
     var idx = tree.root[0].type.expression.type.indexer;
@@ -356,8 +370,9 @@ test "Parse Bough" {
         \\     :Speaker: "Text goes here" # tagline #tagother#taglast
         \\ }
     ;
-    const file = try parseSource(input);
-    defer file.destroy();
+    const mod = try parseSource(input);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
     const bough = tree.root[0].type.bough;
     try testing.expectEqualStrings(bough.name, "BOUGH");
@@ -376,8 +391,9 @@ test "Parse No Speaker" {
         \\      :: "Text goes here"
         \\  }
     ;
-    const file = try parseSource(input);
-    defer file.destroy();
+    const mod = try parseSource(input);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
     const line = tree.root[0].type.bough.body[0].type.dialogue;
     try testing.expect(line.speaker == null);
@@ -389,8 +405,9 @@ test "Parse divert" {
         \\  === BOUGH {}
         \\  => BOUGH
     ;
-    const file = try parseSource(input);
-    defer file.destroy();
+    const mod = try parseSource(input);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
     const divert = tree.root[1].type.divert.path;
     try testing.expectEqualStrings("BOUGH", divert[0]);
@@ -408,8 +425,9 @@ test "Parse Forks" {
         \\  }
         \\  === END {}
     ;
-    const file = try parseSource(input);
-    defer file.destroy();
+    const mod = try parseSource(input);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
 
     const fork = tree.root[0].type.bough.body[0].type.fork;
@@ -432,8 +450,9 @@ test "Parse Inline Code" {
         \\      :Speaker: "{sayHello()}, how are you?"
         \\  }
     ;
-    const file = try parseSource(input);
-    defer file.destroy();
+    const mod = try parseSource(input);
+    defer mod.deinit();
+    const file = mod.entry;
     const tree = file.tree;
     const dialogue = tree.root[0].type.bough.body[0].type.dialogue;
     const string = dialogue.content.type.string;

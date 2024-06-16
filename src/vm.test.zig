@@ -59,11 +59,7 @@ pub const TestRunner = struct {
 
 var test_runner = TestRunner.init();
 pub fn initTestVm(source: []const u8, mod: *Module, debug: bool) !Vm {
-    var bytecode = compileSource(source, mod) catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try mod.writeErrors(errWriter);
-        return err;
-    };
+    var bytecode = try compileSource(source, mod);
     errdefer bytecode.free(allocator);
     if (debug) {
         bytecode.print(std.debug);
@@ -93,10 +89,9 @@ test "Basics" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -122,10 +117,9 @@ test "Conditionals" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -151,10 +145,9 @@ test "Variables" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -170,10 +163,9 @@ test "Constant Variables" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        const err = initTestVm(case, &mod, false);
+        const err = initTestVm(case, mod, false);
         try testing.expectError(Vm.Error.CompilerError, err);
     }
 }
@@ -197,11 +189,10 @@ test "Strings" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         errdefer std.log.err("Error on: {s}", .{case.input});
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -222,10 +213,9 @@ test "Lists" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -246,10 +236,9 @@ test "Maps" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -275,10 +264,9 @@ test "Sets" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -338,10 +326,9 @@ test "Index" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -403,10 +390,9 @@ test "Functions" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -475,10 +461,9 @@ test "Locals" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -539,10 +524,9 @@ test "Function Arguments" {
         , .value = 50.0 },
     };
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -566,10 +550,9 @@ test "Builtin Functions" {
         },
     };
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
@@ -640,10 +623,9 @@ test "Closures" {
         },
     };
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -729,10 +711,9 @@ test "Loops" {
         , .value = 15 },
     };
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
@@ -751,10 +732,9 @@ test "Classes" {
         \\ }
         \\ assert(Test.value == 0, "Test.value == 0")
     ;
-    var mod = Module.create(allocator);
+    var mod = try Module.initEmpty(allocator);
     defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    var vm = try initTestVm(input, &mod, false);
+    var vm = try initTestVm(input, mod, false);
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
     try vm.interpret();
@@ -770,10 +750,9 @@ test "Class Runtime Error" {
         ,
     };
     inline for (tests) |input| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(input, &mod, false);
+        var vm = try initTestVm(input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         const err = vm.interpret();
@@ -803,10 +782,9 @@ test "Class Compile Error" {
         \\ var test = new Test{}
     };
     inline for (tests) |input| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        const err = initTestVm(input, &mod, false);
+        const err = initTestVm(input, mod, false);
         try testing.expectError(Vm.Error.CompilerError, err);
     }
 }
@@ -841,10 +819,9 @@ test "Instance" {
         \\ test.value = Test.value
         \\ assert(test.value == 0, "test.value == 0")
     ;
-    var mod = Module.create(allocator);
+    var mod = try Module.initEmpty(allocator);
     defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    var vm = try initTestVm(input, &mod, false);
+    var vm = try initTestVm(input, mod, false);
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
     vm.interpret() catch |err| {
@@ -889,10 +866,9 @@ test "Enums" {
         \\ assert(quest == Quest.Complete, "Quest is not Complete")
     ;
 
-    var mod = Module.create(allocator);
+    var mod = try Module.initEmpty(allocator);
     defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    var vm = try initTestVm(input, &mod, false);
+    var vm = try initTestVm(input, mod, false);
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
     vm.interpret() catch |err| {
@@ -929,10 +905,9 @@ test "Enum Error" {
     };
 
     inline for (tests) |input| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        const err = initTestVm(input, &mod, false);
+        const err = initTestVm(input, mod, false);
         try testing.expectError(Vm.Error.CompilerError, err);
     }
 }
@@ -1012,11 +987,10 @@ test "Boughs" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
         std.debug.print("\n======\n", .{});
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -1042,10 +1016,9 @@ test "Bough Loops" {
         },
     };
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
@@ -1127,10 +1100,9 @@ test "Bough Functions" {
 
     inline for (test_cases) |case| {
         std.debug.print("\n======\n", .{});
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -1179,10 +1151,9 @@ test "Forks" {
 
     inline for (test_cases) |case| {
         std.debug.print("\n======\n", .{});
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -1273,11 +1244,10 @@ test "Visits" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
         std.debug.print("\n======\n", .{});
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -1344,10 +1314,9 @@ test "Jump Backups" {
 
     inline for (test_cases) |case| {
         std.debug.print("\n======\n", .{});
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -1392,10 +1361,9 @@ test "Jump Code" {
 
     inline for (test_cases) |case| {
         std.debug.print("\n======\n", .{});
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
@@ -1510,10 +1478,9 @@ test "Switch" {
         },
     };
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
@@ -1536,10 +1503,9 @@ test "Externs and Subscribers" {
     };
 
     inline for (test_cases) |case| {
-        var mod = Module.create(allocator);
+        var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        defer mod.entry.source_loaded = false;
-        var vm = try initTestVm(case.input, &mod, false);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         const Listener = struct {
@@ -1578,10 +1544,9 @@ test "Save and Load State" {
     ;
     const alloc = testing.allocator;
 
-    var mod = Module.create(allocator);
+    var mod = try Module.initEmpty(allocator);
     defer mod.deinit();
-    defer mod.entry.source_loaded = false;
-    var vm = try initTestVm(test_case, &mod, false);
+    var vm = try initTestVm(test_case, mod, false);
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
     try vm.interpret();
@@ -1597,17 +1562,68 @@ test "Save and Load State" {
         \\ var test = "t"
     ;
 
-    var mod2 = Module.create(allocator);
+    var mod2 = try Module.initEmpty(allocator);
     defer mod2.deinit();
-    defer mod2.entry.source_loaded = false;
-    var vm2 = try initTestVm(second_case, &mod2, false);
+    var vm2 = try initTestVm(second_case, mod2, false);
     defer vm2.deinit();
     defer vm2.bytecode.free(testing.allocator);
     try State.deserialize(&vm2, data.items);
-    // try vm2.loadState(&save);
     try testing.expectEqual(vm2.globals[0].number, 1);
     try testing.expectEqualSlices(u8, vm2.globals[1].obj.data.list.items[0].obj.data.list.items[0].obj.data.string, "changed");
     try testing.expectEqual(vm2.globals[2].obj.data.instance.fields[1].number, 2);
     try vm2.interpret();
     try testing.expectEqual(vm2.globals[0].number, 6);
+}
+
+test "Includes" {
+    const main_contents =
+        \\ include "./test1.topi"
+        \\ var m = Test.Main
+        \\ assert(m == Test.Main, "m == Test.Main")
+        \\ assert(t1 == Test.One, "t1 == Test.One")
+        \\ assert(t2 == Test.Two, "t2 == Test.Two")
+    ;
+    const test1_contents =
+        \\ include "./test2.topi"
+        \\ var t1 = Test.One
+    ;
+    const test2_contents =
+        \\ enum Test = {
+        \\   Main,
+        \\   One,
+        \\   Two
+        \\ }
+        \\ var t2 = Test.Two
+    ;
+
+    const cwd = std.fs.cwd();
+    const main_file = try cwd.createFile("main.topi", .{ .read = true });
+    const test1_file = try cwd.createFile("test1.topi", .{ .read = true });
+    const test2_file = try cwd.createFile("test2.topi", .{ .read = true });
+    defer cwd.deleteFile("main.topi") catch {};
+    defer cwd.deleteFile("test1.topi") catch {};
+    defer cwd.deleteFile("test2.topi") catch {};
+
+    try main_file.writeAll(main_contents);
+    try test1_file.writeAll(test1_contents);
+    try test2_file.writeAll(test2_contents);
+    main_file.close();
+    test1_file.close();
+    test2_file.close();
+
+    const err_writer = std.io.getStdIn().writer();
+    const entry_path = try std.fs.cwd().realpathAlloc(std.testing.allocator, "main.topi");
+    defer std.testing.allocator.free(entry_path);
+    var mod = try Module.init(std.testing.allocator, entry_path);
+    defer mod.deinit();
+
+    const bytecode = mod.generateBytecode(std.testing.allocator) catch |err| {
+        try mod.writeErrors(err_writer);
+        return err;
+    };
+    defer bytecode.free(std.testing.allocator);
+
+    var vm = try Vm.init(std.testing.allocator, bytecode, &test_runner.runner);
+    defer vm.deinit();
+    try vm.interpret();
 }

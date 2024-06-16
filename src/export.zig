@@ -107,11 +107,12 @@ fn writeBytecode(path_ptr: [*]const u8, path_length: usize, writer: anytype) voi
     };
     defer alloc.free(full_path);
     var mod = Module{
+        .arena = arena,
         .allocator = comp_alloc,
         .entry = undefined,
-        .includes = std.StringArrayHashMap(*File).init(comp_alloc),
+        .includes = std.StringHashMap(*File).init(comp_alloc),
     };
-    const file = File.create(comp_alloc, full_path, &mod) catch |err| {
+    const file = File.create(&mod, full_path) catch |err| {
         log("Could not create Module File: {s}", .{@errorName(err)}, .err);
         return;
     };

@@ -15,7 +15,7 @@ pub const CompilerErr = struct {
 };
 
 pub const CompilerErrors = struct {
-    list: std.ArrayListUnmanaged(CompilerErr),
+    list: std.ArrayList(CompilerErr),
     allocator: std.mem.Allocator,
 
     // used for interpolatedExpressions
@@ -24,14 +24,12 @@ pub const CompilerErrors = struct {
     offset_col: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) CompilerErrors {
-        return .{ .list = std.ArrayListUnmanaged(CompilerErr){}, .allocator = allocator };
+        return .{ .list = std.ArrayList(CompilerErr).init(allocator), .allocator = allocator };
     }
 
     pub fn add(self: *CompilerErrors, comptime fmt: []const u8, token: Token, severity: CompilerErr.Severity, args: anytype) !void {
         const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
-        errdefer self.allocator.free(msg);
-
-        return self.list.append(self.allocator, .{
+        try self.list.append(.{
             .fmt = msg,
             .severity = severity,
             .token = token,
@@ -41,11 +39,10 @@ pub const CompilerErrors = struct {
         for (self.list.items) |err| {
             self.allocator.free(err.fmt);
         }
-        self.list.deinit(self.allocator);
-        self.* = undefined;
+        self.list.deinit();
     }
 
-    pub fn write(self: *CompilerErrors, source: []const u8, writer: anytype) !void {
+    pub fn write(self: *CompilerErrors, file_path: []const u8, source: []const u8, writer: anytype) !void {
         while (self.list.popOrNull()) |err| {
             defer self.allocator.free(err.fmt);
             const color_prefix = switch (err.severity) {
@@ -64,7 +61,7 @@ pub const CompilerErrors = struct {
             start = @min(start, source.len - 1);
             end = @min(end, source.len);
 
-            try writer.print("type: {s}, line: {}, column_start: {}, column_end: {}, source_start: {}, source_end: {}\n", .{ tok.toString(err.token.token_type), line, column, column + end - start, start, end });
+            try writer.print("file: {s}\ntype: {s}, line: {}, column_start: {}, column_end: {}, source_start: {}, source_end: {}\n", .{ file_path, tok.toString(err.token.token_type), line, column, column + end - start, start, end });
 
             var lines = std.mem.splitSequence(u8, source, "\n");
             var lineNumber: usize = 1;
