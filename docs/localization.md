@@ -43,9 +43,9 @@ disk space and not much memory.
 
 ## Run
 
-When running topiary pass in the `--loc language-key` flag
+When running topiary pass in the `--lang language-key` flag
 
-eg `topi run ./examples/locale/locale.topi --loc fr`
+eg `topi run ./examples/locale/locale.topi --lang fr`
 
 
 ## Tips
@@ -87,6 +87,6 @@ That way we can have both lines localized appropriately.
 
 This will increase the localized word count,
 but with modern software like Translation Memory 
-and Repitition analysis,  it shouldn't be much of a problem.
+and Repitition analysis,  it hopefully shouldn't be much of a problem.
 
 :::

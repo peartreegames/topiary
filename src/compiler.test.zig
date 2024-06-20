@@ -1668,8 +1668,8 @@ test "Serialize" {
     defer bytecode.free(allocator);
 
     // this doesn't need to be a file, but it's nice to sometimes not delete it and inspect it
-    const file = try std.fs.cwd().createFile("tmp.topib", .{ .read = true });
-    defer std.fs.cwd().deleteFile("tmp.topib") catch {};
+    const file = try std.fs.cwd().createFile("tmp.topi.byte", .{ .read = true });
+    defer std.fs.cwd().deleteFile("tmp.topi.byte") catch {};
     defer file.close();
     try bytecode.serialize(file.writer());
 

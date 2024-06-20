@@ -6,6 +6,7 @@ const Errors = @import("compiler-error.zig").CompilerErrors;
 const module = @import("module.zig");
 const runners = @import("runner.zig");
 const Locale = @import("locale.zig").Locale;
+const version = @import("build").version;
 
 const Runner = runners.Runner;
 const Line = runners.Line;
@@ -27,7 +28,7 @@ fn usage(comptime msg: []const u8) !void {
     try out.print("Commands:\n", .{});
     try out.print("        topi version\n", .{});
     try out.print("        topi run <file> [start_bough] [--auto|-a] [--lang language_key] [--verbose]\n", .{});
-    try out.print("        topi test <file> <count> [--verbose]\n", .{});
+    try out.print("        topi test <file> <count> [--quiet] [--verbose]\n", .{});
     try out.print("        topi compile <file> <output_file|--dry|-d> [--loc] [--verbose]\n", .{});
     try out.print("        topi loc validate <file> [--verbose]\n", .{});
     try out.print("        topi loc export <file> <output_file|--dry|-d> [--verbose]\n", .{});
@@ -70,7 +71,9 @@ pub fn main() !void {
 
     const is_version = std.mem.eql(u8, cmd, "version");
     if (is_version) {
-        try std.io.getStdErr().writeAll("v0.12.0");
+        const out = std.io.getStdOut();
+        try out.writeAll(version);
+        try out.writeAll("\n");
         return;
     }
 
@@ -185,7 +188,7 @@ pub fn main() !void {
     if (is_compile) {
         if (is_dry) {
             var out = std.io.getStdOut().writer();
-            try out.writeAll("Success");
+            try out.writeAll("Success\n");
             return;
         }
         const dir = std.fs.cwd();
@@ -210,6 +213,7 @@ pub fn main() !void {
         };
 
         var i: usize = 0;
+        const is_quiet = try checkFlag("--quiet");
         var visit_counts = std.StringArrayHashMap(u64).init(vm_alloc);
         defer visit_counts.deinit();
         while (i < auto_count) : (i += 1) {
@@ -217,9 +221,10 @@ pub fn main() !void {
             var vm = try Vm.init(vm_alloc, bytecode, &auto_runner.runner);
             vm.interpret() catch {
                 vm.err.print(std.io.getStdErr().writer());
-                continue;
+                return;
             };
             defer vm.deinit();
+            if (is_quiet) continue;
             for (vm.globals, 0..) |g, idx| {
                 if (g == .visit) {
                     const name = bytecode.global_symbols[idx].name;
@@ -229,9 +234,13 @@ pub fn main() !void {
                 // all visits are first so we can break
             }
         }
+        const out = std.io.getStdOut().writer();
+        if (is_quiet) {
+            try out.writeAll("Success\n");
+        }
         var it = visit_counts.iterator();
         while (it.next()) |entry| {
-            std.debug.print("{s} = {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+            try out.print("{s} = {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
         }
         return;
     }

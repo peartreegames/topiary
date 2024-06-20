@@ -1,7 +1,7 @@
 ![](https://github.com/peartreegames/topiary/blob/main/assets/logo_horizontal_outline.png)
 
-Topiary is a narrative scripting tool which uses the Topi language to write interactive stories.
-It is designed to be integrated into video games which require a large amount of state and control flow in their narrative.
+Topiary is a dialogue scripting tool which uses the Topi language to write interactive stories.
+It is designed to be integrated into video games which require a large amount of state and control flow in their dialogue.
 
 Think of Topiary as programming a screenplay for your video game.
 
@@ -16,7 +16,7 @@ It is recommended to start there to see how you can use topiary in your projects
 To run the CLI:
 
 ```sh
-zig build //or download from release page
+zig build // or download from release page
 ./zig-out/bin/topi run ./examples/hello.topi
 ```
 
@@ -78,4 +78,4 @@ zig build
 ```
 
 I'm confident there are many areas of improvement so please feel free to submit pull requests.
-This is my first time writing a compiler, and I'm still not sure that I fully understand everything.
+This is my first time writing a compiler, and I'm definitely don't understand everything.

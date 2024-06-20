@@ -14,7 +14,7 @@ Usage:
 Commands:
         topi version
         topi run <file> [start_bough] [--auto|-a] [--lang language_key] [--verbose]
-        topi test <file> <count> [--verbose]
+        topi test <file> <count> [--quiet] [--verbose]
         topi compile <file> <output_file|--dry|-d> [--loc] [--verbose] 
         topi loc validate <file> [--verbose]
         topi loc export <file> <output_file|--dry|-d> [--verbose]
@@ -24,7 +24,8 @@ Flags:
         --auto, -a: Automatically continue to next line
         --lang: Localization language key
         --loc: Include localization in compiled bytecode
-        --dry, -d: Compile only
+        --dry, -d: Compile only without output file
+        --quiet: Do not output results
 ```
 
 While running a topi file you can press `enter` for the next line, and select a choice with `0-9` then `enter`
