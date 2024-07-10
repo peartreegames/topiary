@@ -10,6 +10,7 @@ const Tag = enum(u8) {
     list,
     set,
     map,
+    enum_value,
 };
 
 pub const ExportValue = extern struct {
@@ -23,6 +24,10 @@ pub const ExportValue = extern struct {
             items: [*c]ExportValue,
             count: u16,
         },
+        enum_value: extern struct {
+            enum_name: [*c]const u8,
+            value_name: [*c]const u8,
+        },
     },
 
     pub const Nil: ExportValue = .{ .tag = Tag.nil, .data = .{ .nil = {} } };
@@ -33,6 +38,10 @@ pub const ExportValue = extern struct {
         return switch (value) {
             .bool => |b| if (b) True else False,
             .number => |n| .{ .tag = Tag.number, .data = .{ .number = n } },
+            .enum_value => |e| .{ .tag = Tag.enum_value, .data = .{ .enum_value = .{
+                .enum_name = e.base.data.@"enum".name.ptr,
+                .value_name = e.base.data.@"enum".values[e.index].ptr,
+            } } },
             .obj => |o| switch (o.data) {
                 // We're mixing memory management here, which is a very bad idea,
                 // Tried passing in a "ExportAllocator" and copying the values to the memory

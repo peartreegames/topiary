@@ -53,12 +53,12 @@ pub const State = struct {
             if (seen.contains(value.obj.id)) continue;
             try seen.put(value.obj.id, {});
             try stream.objectField(&value.obj.id);
-            try serializeObj(value, &stream, &references);
+            try serializeObj(vm.allocator, value, &stream, &references);
         }
         try stream.endObject();
     }
 
-    fn serializeObj(value: Value, stream: anytype, references: *std.ArrayList(Value)) !void {
+    fn serializeObj(allocator: std.mem.Allocator, value: Value, stream: anytype, references: *std.ArrayList(Value)) !void {
         try stream.beginObject();
         try stream.objectField(@tagName(value.obj.data));
         switch (value.obj.data) {
@@ -101,7 +101,9 @@ pub const State = struct {
                 try stream.objectField("arity");
                 try stream.write(f.arity);
                 try stream.objectField("inst");
-                try stream.write(&f.instructions);
+                const buf = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(f.instructions.len));
+                defer allocator.free(buf);
+                try stream.write(std.base64.standard.Encoder.encode(buf, f.instructions));
                 try stream.objectField("lines");
                 try stream.beginArray();
                 for (f.lines) |l| try stream.write(l);
@@ -292,9 +294,11 @@ pub const State = struct {
             for (lines_items, 0..) |t, i| lines[i] = @intCast(t.integer);
             const locals = v.object.get("locals_count").?.integer;
             const is_method = v.object.get("is_method").?.bool;
+            const inst_alloc = try vm.allocator.alloc(u8, try std.base64.standard.Decoder.calcSizeForSlice(inst));
+            try std.base64.standard.Decoder.decode(inst_alloc, inst);
             var result = try vm.gc.create(vm, .{ .function = .{
                 .arity = @intCast(arity),
-                .instructions = try vm.allocator.dupe(u8, inst),
+                .instructions = inst_alloc,
                 .lines = try vm.allocator.dupe(u32, lines),
                 .locals_count = @intCast(locals),
                 .is_method = is_method,

@@ -179,9 +179,10 @@ export fn start(vm_ptr: usize, path_ptr: [*]const u8, path_len: usize) void {
 }
 
 export fn run(vm_ptr: usize) void {
-    log("Running VM", .{}, .info);
+    log("Running Vm", .{}, .debug);
     var vm: *Vm = @ptrFromInt(vm_ptr);
-    vm.run() catch {
+    vm.run() catch |err| {
+        log("Vm Error: {s}", .{ @errorName(err) }, .err);
         if (vm.err.msg) |msg| {
             log("Error at line {}: {s}", .{ vm.err.line, msg }, .err);
         }
@@ -244,6 +245,28 @@ export fn setExternNumber(vm_ptr: usize, name_ptr: [*c]const u8, name_length: us
     vm.setExtern(name, .{ .number = value }) catch |err| {
         log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
     };
+}
+
+export fn setExternEnum(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, enum_name_ptr: [*c]const u8, enum_name_length: usize, enum_value_ptr: [*c]const u8, enum_value_length: usize) void {
+    var vm: *Vm = @ptrFromInt(vm_ptr);
+    const name = name_ptr[0..name_length];
+    const enum_name = enum_name_ptr[0..enum_name_length];
+    const enum_value = enum_value_ptr[0..enum_value_length];
+    for (vm.bytecode.constants) |c| {
+        if (c != .obj or c.obj.data != .@"enum") continue;
+        const e = c.obj.data.@"enum";
+        if (!std.mem.eql(u8, e.name, enum_name)) continue;
+        for (e.values, 0..) |v, i| {
+            if (!std.mem.eql(u8, v, enum_value)) continue;
+            vm.setExtern(name, .{ .enum_value = .{ .base = c.obj, .index = @intCast(i) }}) catch |err| {
+                log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
+                return;
+            };
+            log("Set extern enum \"{s}\" to {s}.{s} ({})", .{ name, enum_name, enum_value, i}, .debug);
+            return;
+        }
+    }
+    log("Could not set extern enum \"{s}\" {s}.{s}", .{ name, enum_name, enum_value }, .err);
 }
 
 export fn setExternBool(vm_ptr: usize, name_ptr: [*c]const u8, name_length: usize, value: bool) void {

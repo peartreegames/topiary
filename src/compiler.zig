@@ -508,6 +508,7 @@ pub const Compiler = struct {
                 }
 
                 obj.* = .{
+                    .id = UUID.fromString(e.name),
                     .data = .{
                         .@"enum" = .{
                             .is_seq = e.is_seq,

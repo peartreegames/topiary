@@ -11,18 +11,19 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", version);
 
-    _ = b.addModule("topi", .{
-        .root_source_file = b.path("src/topi.zig"),
-    });
+     _ = b.addModule("topi", .{
+         .root_source_file = b.path("src/topi.zig"),
+     });
 
-    const topidll = b.addSharedLibrary(.{
+    const topilib = b.addSharedLibrary(.{
         .name = "topi",
         .root_source_file = b.path("src/export.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    b.installArtifact(topidll);
+    const art = b.addInstallArtifact(topilib, .{ .dest_dir = .{ .override = .lib } });
+    b.getInstallStep().dependOn(&art.step);
 
     const exe = b.addExecutable(.{
         .name = "topi",
