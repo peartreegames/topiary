@@ -156,7 +156,7 @@ All boughs, forks, and choices have visit counts.
 If a choice is not in a named fork its path is the fork index within the bough preceeded by an underscore `_0`, `_1`, etc
 (but this is not recommended, best to give it a name).
 
-```
+```topi
 === START {
     // Not Recommended
     fork^ {
@@ -184,7 +184,7 @@ If a choice is not in a named fork its path is the fork index within the bough p
 
 Visit paths can be found within scopes and don't need the full path written out.
 
-```
+```topi
 === START {
     :speaker: "Starting"
     fork NAMED {
@@ -285,7 +285,7 @@ Topi has three builtin collection types. Lists, Sets, and Maps. Each type has fi
 
 Lists are a collections of values in order.
 
-```
+```topi
 var list = List{"one", "two", "three"} // List{"one", "two", "three"}
 var emptyList = List{}
 
@@ -298,7 +298,7 @@ list.clear() // List{}
 
 Sets are a collection of unique values.
 
-```
+```topi
 var set = Set{"one", "two", "one"} // Set{one, two}
 const emptySet = Set{}
 
@@ -311,7 +311,7 @@ set.clear() // Set{}
 
 Maps are a collection of key/value pairs.
 
-```
+```topi
 const map = Map{"one": 1, "two": 2} // Map{one:1, two:2}
 const emptyMap = Map{}
 
