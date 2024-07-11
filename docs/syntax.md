@@ -487,7 +487,7 @@ var south = Cardinal.South
 if (north < south) print(true) // true
 ```
 
-## Sequences
+#### Sequences
 
 Enum Sequences (`enumseq`) are special enums, they are the same except they cannot be changed to a previous value.
 If attempted, topi will ignore the assignment and remain at the current value.
