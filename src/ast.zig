@@ -176,6 +176,7 @@ pub const Statement = struct {
         },
         return_expression: Expression,
         return_void: void,
+        fin: void,
         class: struct {
             name: []const u8,
             field_names: [][]const u8,

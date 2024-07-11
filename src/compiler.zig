@@ -699,6 +699,9 @@ pub const Compiler = struct {
             .return_void => {
                 try self.writeOp(.return_void, token);
             },
+            .fin => {
+                try self.writeOp(.fin, token);
+            },
             else => {},
         }
     }

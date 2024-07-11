@@ -84,8 +84,9 @@ pub const TokenType = enum {
     @"while",
 
     bough,
-    fork,
     divert,
+    fork,
+    fin,
 
     comment,
     eof,
@@ -105,6 +106,7 @@ pub const Keywords = std.StaticStringMap(TokenType).initComptime(.{
     .{ "false", .false },
     .{ "for", .@"for" },
     .{ "fork", .fork },
+    .{ "fin", .fin },
     .{ "if", .@"if" },
     .{ "include", .include },
     .{ "List", .list },
@@ -194,8 +196,9 @@ pub fn toString(token_type: TokenType) []const u8 {
         .@"while" => "while",
 
         .bough => "bough",
-        .fork => "fork",
         .divert => "=>",
+        .fork => "fork",
+        .fin => "fin",
 
         .comment => "[comment]",
         .eof => "[eof]",

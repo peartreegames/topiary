@@ -1357,6 +1357,18 @@ test "Jump Code" {
             \\ }
             ,
         },
+        .{
+            .input =
+            \\ === START {
+            \\    => INNER^
+            \\    :: "Fin executed correctly"
+            \\    === INNER {
+            \\        if (INNER == 1) fin
+            \\        :: "Fin did not work!"
+            \\    }
+            \\ }
+            ,
+        },
     };
 
     inline for (test_cases) |case| {

@@ -37,6 +37,8 @@ As a convenience, if you don't pass in a jump to the CLI the first bough in the 
 # topi run file.topi // START will run in the above example
 ```
 
+Be careful though, if you include other files the "first" bough will be the first in the other file.
+
 ### Nesting
 
 Boughs can be nested and jumped to with `.` like so:
@@ -201,9 +203,18 @@ Visit paths can be found within scopes and don't need the full path written out.
 }
 ```
 
-### Flow and Jump Back Ups
+### Flow, Fin, and Jump Back Ups
 
-If the flow of the story hits a closing backet it will end. 
+If the flow of the story hits a closing backet or `fin`, it will end. 
+`fin` can be useful to break out of a bough early.
+
+```topi
+=== START {
+    if (true) fin
+    :: "Will not get here"
+}
+```
+
 But sometimes we want to temporarily duck into a bough and then continue on.
 We can do that by adding a caret `^` to a jump name `=> [NAME]^` (meaning jump then come back up).
 
@@ -441,7 +452,7 @@ const fib = |n| {
 }
 ```
 
-## Return Void
+#### Return Void
 
 If you want to return out of a function early you have to specify `return void` and not just `return` like most langauges.
 

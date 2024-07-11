@@ -117,6 +117,7 @@ pub const Parser = struct {
             .tilde => try self.choiceStatement(),
             .fork => try self.forkStatement(),
             .@"for" => try self.forStatement(),
+            .fin => .{ .token = self.current_token, .type = .fin },
             .@"if" => try self.ifStatement(),
             .@"switch" => try self.switchStatement(),
             .@"while" => try self.whileStatement(),
