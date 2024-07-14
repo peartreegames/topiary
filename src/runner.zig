@@ -1,5 +1,6 @@
 const Vm = @import("./vm.zig").Vm;
 const UUID = @import("./utils/uuid.zig").UUID;
+const Value = @import("values.zig").Value;
 const ID = UUID.ID;
 
 pub const Line = struct {
@@ -18,17 +19,23 @@ pub const Choice = struct {
 };
 
 pub const Runner = struct {
-    onLineFn: OnLine,
-    onChoicesFn: OnChoices,
+    on_line: OnLine,
+    on_choices: OnChoices,
+    on_value_changed: OnValueChanged,
 
     pub const OnLine = *const fn (runner: *Runner, vm: *Vm, dialogue: Line) void;
     pub const OnChoices = *const fn (runner: *Runner, vm: *Vm, choices: []Choice) void;
+    pub const OnValueChanged = *const fn(runner: *Runner, vm: *Vm, name: []const u8, value: Value) void;
 
     pub fn onLine(runner: *Runner, vm: *Vm, dialogue: Line) void {
-        runner.onLineFn(runner, vm, dialogue);
+        runner.on_line( runner, vm, dialogue);
     }
 
     pub fn onChoices(runner: *Runner, vm: *Vm, choices: []Choice) void {
-        runner.onChoicesFn(runner, vm, choices);
+        runner.on_choices( runner, vm, choices);
+    }
+
+    pub fn onValueChanged(runner: *Runner, vm: *Vm, name: []const u8, value: Value) void {
+        runner.on_value_changed(runner, vm, name, value);
     }
 };

@@ -1,5 +1,6 @@
 const std = @import("std");
 const values = @import("./values.zig");
+const Vm = @import("vm.zig").Vm;
 const Value = values.Value;
 
 const Tag = enum(u8) {
@@ -19,14 +20,14 @@ pub const ExportValue = extern struct {
         nil: void,
         bool: bool,
         number: f32,
-        string: [*c]const u8,
+        string: [*:0]const u8,
         list: extern struct {
             items: [*c]ExportValue,
             count: u16,
         },
         enum_value: extern struct {
-            enum_name: [*c]const u8,
-            value_name: [*c]const u8,
+            name: [*:0]const u8,
+            value: [*:0]const u8,
         },
     },
 
@@ -39,14 +40,11 @@ pub const ExportValue = extern struct {
             .bool => |b| if (b) True else False,
             .number => |n| .{ .tag = Tag.number, .data = .{ .number = n } },
             .enum_value => |e| .{ .tag = Tag.enum_value, .data = .{ .enum_value = .{
-                .enum_name = e.base.data.@"enum".name.ptr,
-                .value_name = e.base.data.@"enum".values[e.index].ptr,
+                .name = e.base.data.@"enum".name[0..:0],
+                .value = e.base.data.@"enum".values[e.index][0..:0],
             } } },
             .obj => |o| switch (o.data) {
-                // We're mixing memory management here, which is a very bad idea,
-                // Tried passing in a "ExportAllocator" and copying the values to the memory
-                // but that didn't work out. Will revisit one day
-                .string => |s| .{ .tag = Tag.string, .data = .{ .string = s.ptr } },
+                .string => |s| .{ .tag = Tag.string, .data = .{ .string = s[0..:0] } },
                 .list => |l| blk: {
                     var list = allocator.alloc(ExportValue, l.items.len) catch @panic("Could not allocate list items");
                     var i: usize = 0;
@@ -80,13 +78,80 @@ pub const ExportValue = extern struct {
         };
     }
 
-    pub fn toValue(self: *const ExportValue) Value {
+    pub fn toValue(self: *const ExportValue, vm: *Vm) !Value {
         return switch (self.tag) {
             .nil => values.Nil,
             .bool => if (self.data.bool) values.True else values.False,
             .number => .{ .number = self.data.number },
+            .string => {
+                const str = try vm.allocator.dupe(u8, std.mem.sliceTo(self.data.string, 0));
+                return vm.gc.create(vm, .{ .string = str });
+            },
+            .list => {
+                var list = std.ArrayList(Value).init(vm.allocator);
+                for (0..self.data.list.count) |i| {
+                    const item: *ExportValue = @ptrCast(&self.data.list.items[i]);
+                    try list.append(try item.toValue(vm));
+                }
+                return vm.gc.create(vm, .{ .list = list });
+            },
+            .set => {
+                var set = Value.Obj.SetType.initContext(vm.allocator, values.adapter);
+                const length = self.data.list.count;
+                var i: usize = 0;
+                while (i < length) : (i += 1) {
+                    const item: *ExportValue = @ptrCast(&self.data.list.items[i]);
+                    try set.put(try item.toValue(vm), {});
+                }
+                return vm.gc.create(vm, .{ .set = set });
+            },
+            .map => {
+                var map = Value.Obj.MapType.initContext(vm.allocator, values.adapter);
+                const length = self.data.list.count * 2;
+                var i: usize = 0;
+                while (i < length) : (i += 2) {
+                    const key: *ExportValue = @ptrCast(&self.data.list.items[i]);
+                    const value: *ExportValue = @ptrCast(&self.data.list.items[i + 1]);
+                    try map.put(try key.toValue(vm), try value.toValue(vm));
+                }
+                return  vm.gc.create(vm, .{ .map = map });
+            },
             else => unreachable,
         };
+    }
+    pub fn print(self: ExportValue, writer: anytype) void {
+        switch (self.tag) {
+            .nil => writer.print("nil", .{}),
+            .bool => writer.print("{}", .{self.data.bool}),
+            .number => writer.print("{d:.5}", .{self.data.number}),
+            .enum_value => writer.print("{s}.{s}", .{ self.data.enum_value.name, self.data.enum_value.value }),
+            .string => writer.print("{s}", .{self.data.string}),
+            .list => {
+                writer.print("List{{", .{});
+                for (0..self.data.list.count) |i| {
+                    self.data.list.items[i].print(writer);
+                }
+                writer.print("}}", .{});
+            },
+            .set => {
+                writer.print("Set{{", .{});
+                for (0..self.data.list.count) |i| {
+                    self.data.list.items[i].print(writer);
+                }
+                writer.print("}}", .{});
+            },
+            .map => {
+                writer.print("Map{{", .{});
+                var i: usize = 0;
+                while (i < self.data.list.count) : (i += 2) {
+                    self.data.list.items[i].print(writer);
+                    writer.print(":", .{});
+                    self.data.list.items[i + 1].print(writer);
+                    writer.print(",", .{});
+                }
+                writer.print("}}", .{});
+            },
+        }
     }
 
     pub fn deinit(self: *const ExportValue, allocator: std.mem.Allocator) void {

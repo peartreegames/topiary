@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const Gc = @import("gc.zig").Gc;
+const Vm = @import("vm.zig").Vm;
 const UUID = @import("utils/uuid.zig").UUID;
 const Bytecode = @import("bytecode.zig").Bytecode;
 const Builtin = @import("builtins.zig").Builtin;
@@ -17,7 +18,7 @@ pub const False = Value{ .bool = false };
 pub const Nil = Value{ .nil = {} };
 pub const Void = Value{ .void = {} };
 
-pub const OnValueChanged = *const fn ([]const u8, value: Value) void;
+pub const OnValueChanged = *const fn (vm: *Vm, []const u8, value: Value) void;
 pub const Type = enum(u8) {
     void,
     nil,
@@ -40,8 +41,6 @@ pub const ExportFunctionDelegate = *const fn (args: []Value) Value;
 
 pub const adapter = Value.Adapter{};
 
-// todo: Get proper names
-// https://ziglang.org/documentation/master/#toc-Avoid-Redundancy-in-Names
 pub const Value = union(Type) {
     void: void,
     nil: void,
@@ -66,6 +65,7 @@ pub const Value = union(Type) {
         next: ?*Obj = null,
         // used for serializing references
         id: ID = UUID.Empty,
+        index: ?OpCode.Size(.get_global) = null,
         data: Data,
 
         pub const DataType = enum(u8) {
