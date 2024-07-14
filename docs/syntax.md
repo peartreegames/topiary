@@ -452,7 +452,6 @@ const fib = |n| {
 }
 ```
 
-<<<<<<< Updated upstream
 #### Return Void
 
 If you want to return out of a function early you have to specify `return void` and not just `return` like most langauges.
@@ -463,8 +462,6 @@ const early = || {
 }
 ```
 
-=======
->>>>>>> Stashed changes
 ### Enums
 
 Enums are pretty standard
@@ -575,16 +572,6 @@ const changeField = |instance, fieldName, newValue| {
 changeField(john, "firstName", "Johnny")
 changeField(john, "age", 28)
 print(john.fullName()) // "Johnny Doe"
-```
-
-### Return Void
-
-If you want to return out of a function early you have to specify `return void` and not just `return` like most langauges.
-
-```topi
-const early = || {
-    if (true) return void
-}
 ```
 
 ## Multiple Files

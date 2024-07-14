@@ -186,7 +186,7 @@ pub const State = struct {
             .ref => |r| try stream.write(&r),
             .obj => |o| {
                 switch (o.data) {
-                    .string => |s| try stream.write(&s[0 .. s.len - 1]),
+                    .string => |s| try stream.write(s),
                     else => {
                         try references.append(value);
                         try stream.write(&o.id);

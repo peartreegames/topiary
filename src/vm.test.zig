@@ -203,7 +203,7 @@ test "Strings" {
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
         const str = vm.stack.previous().obj.data.string;
-        try testing.expectEqualStrings(case.value, str[0..(str.len - 1)]);
+        try testing.expectEqualStrings(case.value, str);
     }
 }
 

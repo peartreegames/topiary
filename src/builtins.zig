@@ -176,7 +176,9 @@ pub const Add = struct {
             .set => args[0].obj.data.set.put(item, {}) catch {},
             else => unreachable,
         }
-        vm.notifyValueChange(vm.bytecode.global_symbols[args[0].obj.index.?].name, args[0]);
+        if (args[0].obj.index) |i| {
+            vm.notifyValueChange(i, args[0]);
+        }
         return values.Void;
     }
 };
@@ -198,7 +200,9 @@ pub const AddMap = struct {
             .map => args[0].obj.data.map.put(key, item) catch {},
             else => unreachable,
         }
-        vm.notifyValueChange(vm.bytecode.global_symbols[args[0].obj.index.?].name, args[0]);
+        if (args[0].obj.index) |i| {
+            vm.notifyValueChange(i, args[0]);
+        }
         return values.Void;
     }
 };
@@ -226,7 +230,9 @@ pub const Remove = struct {
             .map => _ = args[0].obj.data.map.orderedRemove(item),
             else => unreachable,
         }
-        vm.notifyValueChange(vm.bytecode.global_symbols[args[0].obj.index.?].name, args[0]);
+        if (args[0].obj.index) |i| {
+            vm.notifyValueChange(i, args[0]);
+        }
         return values.Void;
     }
 };
@@ -283,7 +289,9 @@ pub const Clear = struct {
             .set => data.set.clearAndFree(),
             else => unreachable,
         }
-        vm.notifyValueChange(vm.bytecode.global_symbols[args[0].obj.index.?].name, args[0]);
+        if (args[0].obj.index) |i| {
+            vm.notifyValueChange(i, args[0]);
+        }
         return values.Void;
     }
 };
