@@ -40,11 +40,11 @@ pub const ExportValue = extern struct {
             .bool => |b| if (b) True else False,
             .number => |n| .{ .tag = Tag.number, .data = .{ .number = n } },
             .enum_value => |e| .{ .tag = Tag.enum_value, .data = .{ .enum_value = .{
-                .name = e.base.data.@"enum".name[0..:0],
-                .value = e.base.data.@"enum".values[e.index][0..:0],
+                .name = e.base.data.@"enum".name[0.. :0],
+                .value = e.base.data.@"enum".values[e.index][0.. :0],
             } } },
             .obj => |o| switch (o.data) {
-                .string => |s| .{ .tag = Tag.string, .data = .{ .string = s[0..:0] } },
+                .string => |s| .{ .tag = Tag.string, .data = .{ .string = s[0.. :0] } },
                 .list => |l| blk: {
                     var list = allocator.alloc(ExportValue, l.items.len) catch @panic("Could not allocate list items");
                     var i: usize = 0;
@@ -107,14 +107,14 @@ pub const ExportValue = extern struct {
             },
             .map => {
                 var map = Value.Obj.MapType.initContext(vm.allocator, values.adapter);
-                const length = self.data.list.count * 2;
+                const length = self.data.list.count;
                 var i: usize = 0;
                 while (i < length) : (i += 2) {
                     const key: *ExportValue = @ptrCast(&self.data.list.items[i]);
                     const value: *ExportValue = @ptrCast(&self.data.list.items[i + 1]);
                     try map.put(try key.toValue(vm), try value.toValue(vm));
                 }
-                return  vm.gc.create(vm, .{ .map = map });
+                return vm.gc.create(vm, .{ .map = map });
             },
             else => unreachable,
         };

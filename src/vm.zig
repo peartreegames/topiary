@@ -272,7 +272,8 @@ pub const Vm = struct {
         return self.value_subscribers.remove(name);
     }
 
-    pub fn notifyValueChange(self: *Vm, name: []const u8, value: Value) void {
+    pub fn notifyValueChange(self: *Vm, index: OpCode.Size(.get_global), value: Value) void {
+        const name = self.bytecode.global_symbols[index].name;
         if (self.value_subscribers.contains(name)) {
             self.runner.onValueChanged(self, name, value);
         }
@@ -376,7 +377,7 @@ pub const Vm = struct {
                         .number => try self.push(.{ .number = right.number + left.number }),
                         .obj => |o| {
                             switch (o.data) {
-                                .string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.allocator, u8, &.{ std.mem.trimRight(u8, left.obj.data.string, &[_]u8{0}), s }) }),
+                                .string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.allocator, u8, &.{ left.obj.data.string, s }) }),
                                 else => return self.fail("Cannot add types {s} and {s}", .{ left.typeName(), right.typeName() }),
                             }
                         },
@@ -467,8 +468,7 @@ pub const Vm = struct {
                     }
                     if (value == .obj) value.obj.index = @intCast(index);
                     self.globals[index] = value;
-                    const name = self.bytecode.global_symbols[index].name;
-                    self.notifyValueChange(name, value);
+                    self.notifyValueChange(index, value);
                 },
                 .get_global => {
                     const index = self.readInt(OpCode.Size(.get_global));
@@ -572,8 +572,7 @@ pub const Vm = struct {
                                 .enum_value => |e| try writer.writeAll(e.base.data.@"enum".values[e.index]),
                                 .obj => |o| {
                                     switch (o.data) {
-                                        // remove final 0
-                                        .string => try writer.writeAll(std.mem.trimRight(u8, o.data.string, &[_]u8{0})),
+                                        .string => try writer.writeAll(o.data.string),
                                         else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), str }),
                                     }
                                 },
@@ -584,7 +583,6 @@ pub const Vm = struct {
                         }
                     }
                     try writer.writeAll(str[s..]);
-                    try list.append(0);
                     try self.pushAlloc(.{ .string = try list.toOwnedSlice() });
                 },
                 .list => {

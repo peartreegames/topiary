@@ -23,25 +23,28 @@ var debug_severity: Severity = .err;
 var value_changed_callback: ?OnExportValueChanged = null;
 
 const ExportLine = extern struct {
-    content: [*:0]const u8,
-    speaker: [*:0]const u8,
+    content: [*c]const u8,
+    content_len: usize,
+    speaker: [*c]const u8,
+    speaker_len: usize,
     tags: [*][*c]const u8,
     tags_length: u8,
 };
 
 const ExportChoice = extern struct {
-    content: [*:0]const u8,
+    content: [*]const u8,
+    content_len: usize,
     tags: [*][*c]const u8,
     tags_length: u8,
     visit_count: u32,
     ip: u32,
 };
 
-const OnExportValueChanged = *const fn (vm_ptr: usize, name: [*:0]const u8, value: ExportValue) void;
-const OnExportLine = *const fn (vm_ptr: usize, dialogue: *ExportLine) void;
-const OnExportChoices = *const fn (vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) void;
+const OnExportValueChanged = *const fn (vm_ptr: usize, name_ptr: [*c]const u8, name_len: usize, value: ExportValue) callconv(.C) void;
+const OnExportLine = *const fn (vm_ptr: usize, dialogue: *ExportLine) callconv(.C) void;
+const OnExportChoices = *const fn (vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) callconv(.C) void;
 
-const OnExportDebugLog = *const fn (msg: [*:0]const u8, severity: Severity) void;
+const OnExportDebugLog = *const fn (msg: [*:0]const u8, severity: Severity) callconv(.C) void;
 const Severity = enum(u8) {
     debug,
     info,
@@ -56,43 +59,37 @@ fn log(comptime msg: []const u8, args: anytype, severity: Severity) void {
             std.log.err("Error fmt: {}", .{err});
             break :blk msg;
         };
-        defer alloc.free(fmt);
-        l(fmt[0..:0], severity);
+        defer alloc.free(fmt[0 .. fmt.len - 1]);
+        l(@ptrCast(fmt), severity);
     }
 }
 
 /// Sets the global debug logger instance with
 /// a pointer to a logger instance.
-///
-///   Warning: Be careful when passing the logger pointer. Incorrect usage can
-///   lead to unexpected behavior. Also ensure to manage the life cycle of the
-///   logger instance properly to avoid memory leaks and dangling pointer issues.
-export fn setDebugLog(logger_ptr: usize) void {
+export fn setDebugLog(logger_ptr: usize) callconv(.C) void {
     debug_log = @ptrFromInt(logger_ptr);
 }
 
 /// Sets the global debug severity
-export fn setDebugSeverity(severity: u8) void {
+export fn setDebugSeverity(severity: u8) callconv(.C) void {
     debug_severity = @enumFromInt(severity);
 }
 
 /// Used to pre-calculate the size required
 /// for a compiled topi module
-export fn calculateCompileSize(path_ptr: [*:0]const u8) usize {
+export fn calculateCompileSize(path_ptr: [*:0]const u8) callconv(.C) usize {
     log("Calculating Compile size", .{}, .debug);
     var counter = std.io.countingWriter(std.io.null_writer);
-    for(0..5) |i| std.debug.print("{c}", .{path_ptr[i]});
-    std.debug.assert(false);
-    writeBytecode(std.mem.sliceTo(path_ptr, '0'), counter.writer());
+    writeBytecode(std.mem.sliceTo(path_ptr, 0), counter.writer());
     return counter.bytes_written;
 }
 
 /// Compiles the given path to the byte array
 /// Can use `calculateCompileSize` to get the max required, or pass a larger than expected size
-export fn compile(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize) usize {
+export fn compile(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize) callconv(.C) usize {
     var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
     const writer = fbs.writer();
-    writeBytecode(std.mem.sliceTo(path_ptr, '0'), writer);
+    writeBytecode(std.mem.sliceTo(path_ptr, 0), writer);
     return fbs.pos;
 }
 
@@ -101,7 +98,6 @@ fn writeBytecode(path: []const u8, writer: anytype) void {
     defer arena.deinit();
     const comp_alloc = arena.allocator();
 
-    std.debug.assert(false);
     const full_path = alloc.dupe(u8, path) catch |err| {
         log("Could not allocate file full_path: {s}", .{@errorName(err)}, .err);
         return;
@@ -164,7 +160,7 @@ fn writeBytecode(path: []const u8, writer: anytype) void {
 }
 
 /// Start of the vm dialogue
-export fn start(vm_ptr: usize, path_ptr: [*:0]const u8) void {
+export fn start(vm_ptr: usize, path_ptr: [*:0]const u8) callconv(.C) void {
     log("Starting VM", .{}, .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);
     for (vm.bytecode.global_symbols) |sym| {
@@ -173,14 +169,14 @@ export fn start(vm_ptr: usize, path_ptr: [*:0]const u8) void {
         }
     }
 
-    const path = if (path_ptr[0] != 0) std.mem.sliceTo(path_ptr, '0') else if (vm.bytecode.boughs.len > 0) vm.bytecode.boughs[0].name else {
+    const path = if (path_ptr[0] != 0) std.mem.sliceTo(path_ptr, 0) else if (vm.bytecode.boughs.len > 0) vm.bytecode.boughs[0].name else {
         log("Topi file does not have a start bough", .{}, .err);
         return;
     };
     vm.start(path) catch |err| log("Could not start vm: {any}", .{err}, .err);
 }
 
-export fn run(vm_ptr: usize) void {
+export fn run(vm_ptr: usize) callconv(.C) void {
     log("Running Vm", .{}, .debug);
     var vm: *Vm = @ptrFromInt(vm_ptr);
     vm.run() catch |err| {
@@ -191,54 +187,29 @@ export fn run(vm_ptr: usize) void {
     };
 }
 
-export fn canContinue(vm_ptr: usize) bool {
+export fn canContinue(vm_ptr: usize) callconv(.C) bool {
     const vm: *Vm = @ptrFromInt(vm_ptr);
     return vm.can_continue;
 }
 
-export fn isWaiting(vm_ptr: usize) bool {
+export fn isWaiting(vm_ptr: usize) callconv(.C) bool {
     const vm: *Vm = @ptrFromInt(vm_ptr);
     return vm.is_waiting;
 }
 
-export fn selectContinue(vm_ptr: usize) void {
+export fn selectContinue(vm_ptr: usize) callconv(.C) void {
     log("Selecting continue", .{}, .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);
     vm.selectContinue();
 }
 
-export fn selectChoice(vm_ptr: usize, index: usize) void {
+export fn selectChoice(vm_ptr: usize, index: usize) callconv(.C) void {
     log("Selecting choice", .{}, .info);
     var vm: *Vm = @ptrFromInt(vm_ptr);
     vm.selectChoice(index) catch log("Invalid choice", .{}, .err);
 }
 
-// export fn setExternString(vm_ptr: usize, name_ptr: [*:0]const u8, name_length: usize, value_ptr: [*:0]const u8, value_length: usize) void {
-//     var vm: *Vm = @ptrFromInt(vm_ptr);
-//     const name = name_ptr[0..name_length];
-//     const value = value_ptr[0..value_length];
-//     const dupe = vm.allocator.dupe(u8, value) catch |err| {
-//         log("Could not allocate memory for string \"{s}\": {s}", .{ name, @errorName(err) }, .err);
-//         return;
-//     };
-//     const str = vm.gc.create(vm, .{ .string = dupe }) catch |err| {
-//         log("Could not allocate GC value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
-//         return;
-//     };
-//     vm.setExtern(name, str) catch |err| {
-//         log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
-//     };
-// }
-
-// export fn setExternNumber(vm_ptr: usize, name_ptr: [*:0]const u8, name_length: usize, value: f32) void {
-//     var vm: *Vm = @ptrFromInt(vm_ptr);
-//     const name = name_ptr[0..name_length];
-//     vm.setExtern(name, .{ .number = value }) catch |err| {
-//         log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
-//     };
-// }
-
-export fn setExtern(vm_ptr: usize, name_ptr: [*:0]const u8, exp_value: ExportValue) void {
+export fn setExtern(vm_ptr: usize, name_ptr: [*:0]const u8, exp_value: ExportValue) callconv(.C) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const name = std.mem.sliceTo(name_ptr, 0);
     const value = exp_value.toValue(vm) catch |err| {
@@ -251,47 +222,9 @@ export fn setExtern(vm_ptr: usize, name_ptr: [*:0]const u8, exp_value: ExportVal
     };
 }
 
-// export fn setExternEnum(vm_ptr: usize, name_ptr: [*:0]const u8, name_length: usize, enum_name_ptr: [*:0]const u8, enum_name_length: usize, enum_value_ptr: [*:0]const u8, enum_value_length: usize) void {
-//     var vm: *Vm = @ptrFromInt(vm_ptr);
-//     const name = name_ptr[0..name_length];
-//     const enum_name = enum_name_ptr[0..enum_name_length];
-//     const enum_value = enum_value_ptr[0..enum_value_length];
-//     for (vm.bytecode.constants) |c| {
-//         if (c != .obj or c.obj.data != .@"enum") continue;
-//         const e = c.obj.data.@"enum";
-//         if (!std.mem.eql(u8, e.name, enum_name)) continue;
-//         for (e.values, 0..) |v, i| {
-//             if (!std.mem.eql(u8, v, enum_value)) continue;
-//             vm.setExtern(name, .{ .enum_value = .{ .base = c.obj, .index = @intCast(i) } }) catch |err| {
-//                 log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
-//                 return;
-//             };
-//             log("Set extern enum \"{s}\" to {s}.{s} ({})", .{ name, enum_name, enum_value, i }, .debug);
-//             return;
-//         }
-//     }
-//     log("Could not set extern enum \"{s}\" {s}.{s}", .{ name, enum_name, enum_value }, .err);
-// }
-//
-// export fn setExternBool(vm_ptr: usize, name_ptr: [*:0]const u8, name_length: usize, value: bool) void {
-//     var vm: *Vm = @ptrFromInt(vm_ptr);
-//     const name = name_ptr[0..name_length];
-//     vm.setExtern(name, if (value) values.True else values.False) catch |err| {
-//         log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
-//     };
-// }
-//
-// export fn setExternNil(vm_ptr: usize, name_ptr: [*:0]const u8, name_length: usize) void {
-//     var vm: *Vm = @ptrFromInt(vm_ptr);
-//     const name = name_ptr[0..name_length];
-//     vm.setExtern(name, values.Nil) catch |err| {
-//         log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
-//     };
-// }
-
-export fn setExternFunc(vm_ptr: usize, name_ptr: [*:0]const u8, value_ptr: usize, arity: u8) void {
+export fn setExternFunc(vm_ptr: usize, name_ptr: [*:0]const u8, value_ptr: usize, arity: u8) callconv(.C) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
-    const name = std.mem.sliceTo(name_ptr,0);
+    const name = std.mem.sliceTo(name_ptr, 0);
     log("Setting extern function \"{s}\"", .{name}, .info);
     const wrapper = alloc.create(ExportFunction) catch |err| {
         log("Could not allocate ExportFunction '{s}': {s}", .{ name, @errorName(err) }, .err);
@@ -318,7 +251,10 @@ pub const ExportFunction = struct {
     pub const Delegate = *const fn (vm_ptr: usize, args: [*c]ExportValue, args_len: u8) callconv(.C) ExportValue;
 
     pub fn create(vm: *Vm, func: Delegate) ExportFunction {
-        return .{ .func = func, .vm = vm, };
+        return .{
+            .func = func,
+            .vm = vm,
+        };
     }
 
     pub fn call(context_ptr: usize, args: []Value) Value {
@@ -352,7 +288,7 @@ fn exportValueChangedCallback(vm: *Vm, name: []const u8, value: Value) void {
     }
 }
 
-export fn subscribe(vm_ptr: usize, name_ptr: [*:0]const u8) bool {
+export fn subscribe(vm_ptr: usize, name_ptr: [*:0]const u8) callconv(.C) bool {
     var vm: *Vm = @ptrFromInt(vm_ptr);
 
     const name = std.mem.sliceTo(name_ptr, 0);
@@ -362,13 +298,13 @@ export fn subscribe(vm_ptr: usize, name_ptr: [*:0]const u8) bool {
     };
 }
 
-export fn unsubscribe(vm_ptr: usize, name_ptr: [*:0]const u8) bool {
+export fn unsubscribe(vm_ptr: usize, name_ptr: [*:0]const u8) callconv(.C) bool {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const name = std.mem.sliceTo(name_ptr, 0);
     return vm.unusbscribeToValueChange(name);
 }
 
-export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_ptr: usize, on_choice_ptr: usize, on_value_changed_ptr: usize) usize {
+export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_ptr: usize, on_choice_ptr: usize, on_value_changed_ptr: usize) callconv(.C) usize {
     const on_dialogue: OnExportLine = @ptrFromInt(on_dialogue_ptr);
     const on_choices: OnExportChoices = @ptrFromInt(on_choice_ptr);
     const on_value_changed: OnExportValueChanged = @ptrFromInt(on_value_changed_ptr);
@@ -466,9 +402,13 @@ const ExportRunner = struct {
             self.tags[i] = dialogue.tags[i].ptr;
         }
 
+        const content = dialogue.content;
+        const speaker = dialogue.speaker;
         self.dialogue = .{
-            .content = @ptrCast(dialogue.content),
-            .speaker = if (dialogue.speaker) |s| @ptrCast(s) else "",
+            .content = content.ptr,
+            .content_len = content.len,
+            .speaker = if (speaker) |s| s.ptr else "",
+            .speaker_len = if (speaker) |s| s.len else 0,
             .tags = &self.tags,
             .tags_length = @intCast(dialogue.tags.len),
         };
@@ -488,13 +428,16 @@ const ExportRunner = struct {
             var t: usize = 0;
             const t_start = t_count;
             while (t < choices[i].tags.len) : (t += 1) {
-                self.tags[t_count + t] = choices[i].tags[t][0..:0];
+                const tag = choices[i].tags[t];
+                self.tags[t_count + t] = tag.ptr;
             }
             t_count += t;
 
             log("Choice: {s}", .{choices[i].content}, .debug);
+            const content = choices[i].content;
             result[i] = .{
-                .content = choices[i].content[0..:0],
+                .content = content.ptr,
+                .content_len = content.len,
                 .tags = self.tags[t_start..t_count].ptr,
                 .tags_length = @intCast(choices[i].tags.len),
                 .visit_count = @intCast(choices[i].visit_count),
@@ -510,28 +453,29 @@ const ExportRunner = struct {
         var self: *ExportRunner = @fieldParentPtr("runner", runner);
         const exp_value = ExportValue.fromValue(value, vm.allocator);
         defer exp_value.deinit(vm.allocator);
-        self.on_export_value_changed(@intFromPtr(vm), name[0..:0], exp_value);
+        self.on_export_value_changed(@intFromPtr(vm), name.ptr, name.len, exp_value);
     }
 };
 
 const TestRunner = struct {
-    pub fn onLine(vm_ptr: usize, dialogue: *ExportLine) void {
+    pub fn onLine(vm_ptr: usize, dialogue: *ExportLine) callconv(.C) void {
         _ = dialogue;
         selectContinue(vm_ptr);
     }
 
-    pub fn onChoices(vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) void {
+    pub fn onChoices(vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) callconv(.C) void {
         _ = choices;
         _ = choices_len;
         selectChoice(vm_ptr, 0);
     }
 
-    pub fn onValueChanged(_: usize, name: [*:0]const u8, value: ExportValue) void {
-        std.debug.print("onValueChanged: {s}\n", .{name});
+    pub fn onValueChanged(_: usize, name_ptr: [*c]const u8, name_len: usize, value: ExportValue) callconv(.C) void {
+        std.debug.print("onValueChanged: {s} = ", .{name_ptr[0..name_len]});
         value.print(std.debug);
+        std.debug.print("\n", .{});
     }
 
-    pub fn log(msg: [*:0]const u8, severity: Severity) void {
+    pub fn log(msg: [*:0]const u8, severity: Severity) callconv(.C) void {
         std.debug.print("[{s}] {s}\n", .{ @tagName(severity), msg });
     }
 };
@@ -539,9 +483,9 @@ const TestRunner = struct {
 test "Create and Destroy Vm" {
     const text =
         \\ extern var value = "test 123"
-        \\ extern var list = List{1,2,3,4}
-        \\ extern var set = Set{"some", "string", "values"}
-        \\ extern var map = Map{0: 0.0001, 1: 1.1111, 2: 2.222 }
+        \\ extern var list = List{}
+        \\ extern var set = Set{}
+        \\ extern var map = Map{}
         \\ === START {
         \\     :: "A person approaches." #starting
         \\     :Stranger: "Hey there."
@@ -549,6 +493,7 @@ test "Create and Destroy Vm" {
         \\     print(list)
         \\     print(set)
         \\     print(map)
+        \\     list.add(3)
         \\     fork^ {
         \\         ~ "Greet them." #lots #of #tags #here {
         \\             :Drew: "Oh, uh, nice to meet you. My name is Drew."
@@ -577,21 +522,28 @@ test "Create and Destroy Vm" {
     defer std.testing.allocator.free(buf);
     const dir_path = try std.fs.cwd().realpathAlloc(std.testing.allocator, ".");
     defer std.testing.allocator.free(dir_path);
-    const path = try std.fs.path.resolve(std.testing.allocator, &.{ dir_path, "tmp.topi" });
+    const path = try std.fs.path.resolve(std.testing.allocator, &.{ dir_path, "tmp.topi" ++ "\x00" });
     defer std.testing.allocator.free(path);
-
-    const compile_size = calculateCompileSize(@ptrCast(path));
-    try std.testing.expectEqual(compile(@ptrCast(path), buf.ptr, buf.len), compile_size);
+    const path_ptr: [*:0]const u8 = path[0 .. path.len - 1 :0];
+    const calc_size = calculateCompileSize(path_ptr);
+    const compile_size = compile(path_ptr, buf.ptr, buf.len);
+    try std.testing.expectEqual(compile_size, calc_size);
 
     const on_dialogue: OnExportLine = TestRunner.onLine;
     const on_choices: OnExportChoices = TestRunner.onChoices;
     const on_value_changed: OnExportValueChanged = TestRunner.onValueChanged;
 
-    const vm_ptr = createVm(buf.ptr, buf.len, @intFromPtr(on_dialogue), @intFromPtr(on_choices), @intFromPtr(on_value_changed));
+    const vm_ptr = createVm(
+        buf.ptr,
+        buf.len,
+        @intFromPtr(on_dialogue),
+        @intFromPtr(on_choices),
+        @intFromPtr(on_value_changed),
+    );
     const vm: *Vm = @ptrFromInt(vm_ptr);
 
     defer destroyVm(vm_ptr);
-    defer vm.bytecode.free(std.testing.allocator);
+    // defer vm.bytecode.free(std.testing.allocator);
 
     var list_value = [2]ExportValue{
         .{ .tag = .number, .data = .{ .number = 1 } },
@@ -607,17 +559,23 @@ test "Create and Destroy Vm" {
         .{ .tag = .string, .data = .{ .string = "some".ptr } },
         .{ .tag = .string, .data = .{ .string = "value".ptr } },
     };
-    const set = ExportValue{ .tag = .set, .data = .{ .list = .{ .items = &set_value, .count = 2 } } };
+    const set = ExportValue{
+        .tag = .set,
+        .data = .{ .list = .{ .items = &set_value, .count = 2 } },
+    };
     var map_value = [4]ExportValue{
         .{ .tag = .number, .data = .{ .number = 0 } },
         .{ .tag = .number, .data = .{ .number = 0.0001 } },
         .{ .tag = .number, .data = .{ .number = 1 } },
         .{ .tag = .number, .data = .{ .number = 1.1111 } },
     };
-    const map = ExportValue{ .tag = .map, .data = .{ .list = .{ .items = &map_value, .count = 4 } } };
-    setExtern(vm_ptr,"list", list);
-    setExtern(vm_ptr,"set", set);
-    setExtern(vm_ptr,"map", map);
+    const map = ExportValue{
+        .tag = .map,
+        .data = .{ .list = .{ .items = &map_value, .count = 4 } },
+    };
+    setExtern(vm_ptr, "list", list);
+    setExtern(vm_ptr, "set", set);
+    setExtern(vm_ptr, "map", map);
 
     const list_name = "list";
     _ = subscribe(vm_ptr, list_name);
