@@ -56,7 +56,6 @@ pub const Vm = struct {
     err: RuntimeErr,
     gc: Gc,
     globals: []Value,
-    value_subscriber_callback: ?values.OnValueChanged = null,
     value_subscribers: std.StringHashMap(void),
 
     stack: Stack(Value),
@@ -247,6 +246,7 @@ pub const Vm = struct {
 
     pub fn setExtern(self: *Vm, name: []const u8, value: Value) !void {
         const index = try self.getExternIndex(name);
+        if (value == .obj) value.obj.index = @intCast(index);
         self.globals[index] = value;
     }
 
@@ -270,6 +270,12 @@ pub const Vm = struct {
 
     pub fn unusbscribeToValueChange(self: *Vm, name: []const u8) bool {
         return self.value_subscribers.remove(name);
+    }
+
+    pub fn notifyValueChange(self: *Vm, name: []const u8, value: Value) void {
+        if (self.value_subscribers.contains(name)) {
+            self.runner.onValueChanged(self, name, value);
+        }
     }
 
     pub fn interpret(self: *Vm) !void {
@@ -446,6 +452,7 @@ pub const Vm = struct {
                     if (self.globals[index] != .void) {
                         continue;
                     }
+                    if (value == .obj) value.obj.index = @intCast(index);
                     self.globals[index] = value;
                 },
                 .set_global => {
@@ -458,13 +465,10 @@ pub const Vm = struct {
                     if (current == .enum_value and value == .enum_value and current.enum_value.base == value.enum_value.base and current.enum_value.base.data.@"enum".is_seq) {
                         if (current.enum_value.index > value.enum_value.index) value = current;
                     }
+                    if (value == .obj) value.obj.index = @intCast(index);
                     self.globals[index] = value;
                     const name = self.bytecode.global_symbols[index].name;
-                    if (self.value_subscribers.contains(name)) {
-                        if (self.value_subscriber_callback) |cb| {
-                            cb(name, value);
-                        }
-                    }
+                    self.notifyValueChange(name, value);
                 },
                 .get_global => {
                     const index = self.readInt(OpCode.Size(.get_global));
@@ -888,7 +892,7 @@ pub const Vm = struct {
                                     "Builtin Function expected {} arguments, but found {}",
                                     .{ b.arity, arg_count },
                                 );
-                            const result = b.backing(&self.gc, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
+                            const result = b.backing(self, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
                             if (self.break_on_assert and std.mem.eql(u8, b.name, "assert") and result != .void) {
                                 return self.fail("Assertion Failed: {s}", .{result.obj.data.string});
                             }

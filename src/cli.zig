@@ -1,5 +1,6 @@
 const std = @import("std");
 const Vm = @import("vm.zig").Vm;
+const Value = @import("values.zig").Value;
 const Scope = @import("scope.zig").Scope;
 const Compiler = @import("compiler.zig").Compiler;
 const Errors = @import("compiler-error.zig").CompilerErrors;
@@ -278,8 +279,9 @@ const CliRunner = struct {
         return .{
             .is_auto = is_auto,
             .runner = .{
-                .onLineFn = onLine,
-                .onChoicesFn = onChoices,
+                .on_line = onLine,
+                .on_choices = onChoices,
+                .on_value_changed = onValueChanged,
             },
         };
     }
@@ -335,6 +337,8 @@ const CliRunner = struct {
         }
         vm.selectChoice(index.?) catch |err| self.print("Error: {}", .{err});
     }
+
+    pub fn onValueChanged(_: *Runner, _: *Vm, _:[]const u8, _: Value) void {}
 };
 
 const AutoTestRunner = struct {
@@ -345,8 +349,9 @@ const AutoTestRunner = struct {
         return .{
             .rnd = std.rand.DefaultPrng.init(std.crypto.random.int(u64)),
             .runner = .{
-                .onLineFn = AutoTestRunner.onLine,
-                .onChoicesFn = AutoTestRunner.onChoices,
+                .on_line = onLine,
+                .on_choices = onChoices,
+                .on_value_changed = onValueChanged,
             },
         };
     }
@@ -362,4 +367,6 @@ const AutoTestRunner = struct {
             std.debug.print("Error: {}", .{err});
         };
     }
+
+    pub fn onValueChanged(_: *Runner, _: *Vm, _:[]const u8, _: Value) void {}
 };

@@ -24,8 +24,9 @@ pub const TestRunner = struct {
     pub fn init() TestRunner {
         return .{
             .runner = .{
-                .onLineFn = TestRunner.onLine,
-                .onChoicesFn = TestRunner.onChoices,
+                .on_line = TestRunner.onLine,
+                .on_choices = TestRunner.onChoices,
+                .on_value_changed = TestRunner.onValueChanged,
             },
         };
     }
@@ -54,6 +55,11 @@ pub const TestRunner = struct {
         vm.selectChoice(index) catch |err| {
             std.debug.print("Error: {}", .{err});
         };
+    }
+
+    pub fn onValueChanged(_: *Runner, vm: *Vm, name: []const u8, value: Value) void {
+        std.debug.print("Value Changed Callback: {s}\n", .{name});
+        value.print(std.debug, vm.bytecode.constants);
     }
 };
 
@@ -1520,17 +1526,8 @@ test "Externs and Subscribers" {
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
-        const Listener = struct {
-            pub fn onChange(name: []const u8, value: Value) void {
-                std.debug.print("\nListener \"{s}\"::{}\n", .{ name, value });
-                testing.expectEqual(case.value, value.number) catch {
-                    std.debug.print("Unexpected listener value", .{});
-                };
-            }
-        };
         try vm.setExtern("value", .{ .number = 2 });
         _ = try vm.subscribeToValueChange("value");
-        vm.value_subscriber_callback = &Listener.onChange;
         try vm.interpret();
         _ = vm.unusbscribeToValueChange("value");
         try testing.expect(case.value == vm.stack.previous().number);

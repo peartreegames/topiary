@@ -1,10 +1,10 @@
 const std = @import("std");
-const values = @import("./values.zig");
-const Gc = @import("./gc.zig").Gc;
-const OpCode = @import("./opcode.zig").OpCode;
+const values = @import("values.zig");
+const Vm = @import("vm.zig").Vm;
+const OpCode = @import("opcode.zig").OpCode;
 
 const Value = values.Value;
-pub const Builtin = *const fn (gc: *Gc, args: []Value) Value;
+pub const Builtin = *const fn (vm: *Vm, args: []Value) Value;
 
 pub const Rnd = struct {
     const Self = @This();
@@ -17,7 +17,7 @@ pub const Rnd = struct {
             .builtin = .{ .backing = Self.builtin, .arity = 2, .is_method = false, .name = "rnd" },
         },
     };
-    fn builtin(_: *Gc, args: []Value) Value {
+    fn builtin(_: *Vm, args: []Value) Value {
         if (r == null) r = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
         const start = @as(i32, @intFromFloat(args[0].number));
         const end = @as(i32, @intFromFloat(args[1].number));
@@ -41,7 +41,7 @@ const Rnd01 = struct {
             },
         },
     };
-    fn builtin(_: *Gc, args: []Value) Value {
+    fn builtin(_: *Vm, args: []Value) Value {
         if (r == null) r = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
         _ = args;
         return .{ .number = r.?.random().float(f32) };
@@ -64,7 +64,7 @@ const Round = struct {
             },
         },
     };
-    fn builtin(_: *Gc, args: []Value) Value {
+    fn builtin(_: *Vm, args: []Value) Value {
         return .{ .number = @floatFromInt(@as(i64, @intFromFloat(args[0].number))) };
     }
 };
@@ -84,7 +84,7 @@ const Print = struct {
             },
         },
     };
-    fn builtin(_: *Gc, args: []Value) Value {
+    fn builtin(_: *Vm, args: []Value) Value {
         const writer = std.debug;
         args[0].print(writer, null);
         writer.print("\n", .{});
@@ -107,7 +107,7 @@ pub const Assert = struct {
             },
         },
     };
-    fn builtin(_: *Gc, args: []Value) Value {
+    fn builtin(_: *Vm, args: []Value) Value {
         const expr = args[0];
         const msg = args[1];
         if (!expr.eql(values.True)) return msg;
@@ -147,7 +147,7 @@ pub const Count = struct {
             .builtin = .{ .backing = Self.builtin, .arity = 1, .is_method = true, .name = "count" },
         },
     };
-    fn builtin(_: *Gc, args: []Value) Value {
+    fn builtin(_: *Vm, args: []Value) Value {
         const data = args[0].obj.data;
         const count = switch (data) {
             .list => |l| l.items.len,
@@ -169,13 +169,14 @@ pub const Add = struct {
             .builtin = .{ .backing = Self.builtin, .arity = 2, .is_method = true, .name = "add" },
         },
     };
-    fn builtin(_: *Gc, args: []Value) Value {
+    fn builtin(vm: *Vm, args: []Value) Value {
         const item = args[1];
         switch (args[0].obj.data) {
             .list => args[0].obj.data.list.append(item) catch {},
             .set => args[0].obj.data.set.put(item, {}) catch {},
             else => unreachable,
         }
+        vm.notifyValueChange(vm.bytecode.global_symbols[args[0].obj.index.?].name, args[0]);
         return values.Void;
     }
 };
@@ -190,13 +191,14 @@ pub const AddMap = struct {
             .builtin = .{ .backing = Self.builtin, .arity = 3, .is_method = true, .name = "addMap" },
         },
     };
-    fn builtin(_: *Gc, args: []Value) Value {
+    fn builtin(vm: *Vm, args: []Value) Value {
         const key = args[1];
         const item = args[2];
         switch (args[0].obj.data) {
             .map => args[0].obj.data.map.put(key, item) catch {},
             else => unreachable,
         }
+        vm.notifyValueChange(vm.bytecode.global_symbols[args[0].obj.index.?].name, args[0]);
         return values.Void;
     }
 };
@@ -210,7 +212,7 @@ pub const Remove = struct {
             .builtin = .{ .backing = Self.builtin, .arity = 2, .is_method = true, .name = "remove" },
         },
     };
-    fn builtin(_: *Gc, args: []Value) Value {
+    fn builtin(vm: *Vm, args: []Value) Value {
         const item = args[1];
         switch (args[0].obj.data) {
             .list => {
@@ -224,6 +226,7 @@ pub const Remove = struct {
             .map => _ = args[0].obj.data.map.orderedRemove(item),
             else => unreachable,
         }
+        vm.notifyValueChange(vm.bytecode.global_symbols[args[0].obj.index.?].name, args[0]);
         return values.Void;
     }
 };
@@ -238,7 +241,7 @@ pub const Has = struct {
             .builtin = .{ .backing = Self.builtin, .arity = 2, .is_method = true, .name = "has" },
         },
     };
-    fn builtin(_: *Gc, args: []Value) Value {
+    fn builtin(_: *Vm, args: []Value) Value {
         const item = args[1];
         const result = switch (args[0].obj.data) {
             .list => blk: {
@@ -272,14 +275,15 @@ pub const Clear = struct {
             .builtin = .{ .backing = Self.builtin, .arity = 1, .is_method = true, .name = "clear" },
         },
     };
-    fn builtin(_: *Gc, args: []Value) Value {
+    fn builtin(vm: *Vm, args: []Value) Value {
         var data = args[0].obj.data;
         switch (data) {
             .list => data.list.clearAndFree(),
             .map => data.map.clearAndFree(),
             .set => data.set.clearAndFree(),
-            else => {},
+            else => unreachable,
         }
+        vm.notifyValueChange(vm.bytecode.global_symbols[args[0].obj.index.?].name, args[0]);
         return values.Void;
     }
 };

@@ -452,6 +452,7 @@ const fib = |n| {
 }
 ```
 
+<<<<<<< Updated upstream
 #### Return Void
 
 If you want to return out of a function early you have to specify `return void` and not just `return` like most langauges.
@@ -462,6 +463,8 @@ const early = || {
 }
 ```
 
+=======
+>>>>>>> Stashed changes
 ### Enums
 
 Enums are pretty standard
@@ -478,13 +481,13 @@ var direction = Cardinal.North
 ```
 
 Under the hood they are just index integers, which cannot be changed.
-This does mean you can use comparitive operators with enums.
+This does mean you can use comparative operators with enums.
 
 ```topi
 var north = Cardinal.North
 var south = Cardinal.South
 
-if (north < south) print(true) // true
+print(north < south) // true
 ```
 
 #### Sequences
@@ -574,6 +577,16 @@ changeField(john, "age", 28)
 print(john.fullName()) // "Johnny Doe"
 ```
 
+### Return Void
+
+If you want to return out of a function early you have to specify `return void` and not just `return` like most langauges.
+
+```topi
+const early = || {
+    if (true) return void
+}
+```
+
 ## Multiple Files
 
 Multiple files can be joined together to create a single story using `include "[PATH]"`.
@@ -602,7 +615,7 @@ include "./main.topi"
 
 ## Code Execution and Jumps
 
-When making nested jumps be aware that preceeding code will be execuded to ensure any declarations are created.
+When making nested jumps be aware that preceding code will be executed to ensure any declarations are created.
 
 Consider the following
 
