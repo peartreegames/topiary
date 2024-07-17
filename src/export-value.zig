@@ -1,6 +1,8 @@
 const std = @import("std");
 const values = @import("./values.zig");
 const Vm = @import("vm.zig").Vm;
+const ExportFree = @import("export-runner.zig").ExportFree;
+const ExportString = @import("export-runner.zig").ExportString;
 const Value = values.Value;
 
 const Tag = enum(u8) {
@@ -11,7 +13,7 @@ const Tag = enum(u8) {
     list,
     set,
     map,
-    enum_value,
+    @"enum",
 };
 
 pub const ExportValue = extern struct {
@@ -20,14 +22,14 @@ pub const ExportValue = extern struct {
         nil: void,
         bool: bool,
         number: f32,
-        string: [*:0]const u8,
+        string: ExportString,
         list: extern struct {
             items: [*c]ExportValue,
             count: u16,
         },
-        enum_value: extern struct {
-            name: [*:0]const u8,
-            value: [*:0]const u8,
+        @"enum": extern struct {
+            name: ExportString,
+            value: ExportString,
         },
     },
 
@@ -39,12 +41,12 @@ pub const ExportValue = extern struct {
         return switch (value) {
             .bool => |b| if (b) True else False,
             .number => |n| .{ .tag = Tag.number, .data = .{ .number = n } },
-            .enum_value => |e| .{ .tag = Tag.enum_value, .data = .{ .enum_value = .{
-                .name = e.base.data.@"enum".name[0.. :0],
-                .value = e.base.data.@"enum".values[e.index][0.. :0],
+            .enum_value => |e| .{ .tag = Tag.@"enum", .data = .{ .@"enum" = .{
+                .name = .{ .ptr = e.base.data.@"enum".name.ptr, .len = e.base.data.@"enum".name.len },
+                .value = .{ .ptr = e.base.data.@"enum".values[e.index].ptr, .len = e.base.data.@"enum".values[e.index].len },
             } } },
             .obj => |o| switch (o.data) {
-                .string => |s| .{ .tag = Tag.string, .data = .{ .string = s[0.. :0] } },
+                .string => |s| .{ .tag = Tag.string, .data = .{ .string = .{ .ptr = s.ptr, .len = s.len } } },
                 .list => |l| blk: {
                     var list = allocator.alloc(ExportValue, l.items.len) catch @panic("Could not allocate list items");
                     var i: usize = 0;
@@ -78,21 +80,45 @@ pub const ExportValue = extern struct {
         };
     }
 
-    pub fn toValue(self: *const ExportValue, vm: *Vm) !Value {
+    pub fn toValue(self: *const ExportValue, vm: *Vm, free: ExportFree) !Value {
         return switch (self.tag) {
             .nil => values.Nil,
             .bool => if (self.data.bool) values.True else values.False,
             .number => .{ .number = self.data.number },
+            .@"enum" => {
+                const e = self.data.@"enum";
+                const name = try vm.allocator.dupe(u8, e.name.ptr[0..e.name.len]);
+                free(@intFromPtr(e.name.ptr));
+                errdefer vm.allocator.free(name);
+                const value = try vm.allocator.dupe(u8, e.value.ptr[0..e.value.len]);
+                free(@intFromPtr(e.value.ptr));
+                errdefer vm.allocator.free(value);
+
+                for (vm.bytecode.constants) |c| {
+                    if (c == .obj and c.obj.data == .@"enum" and std.mem.eql(u8, name, c.obj.data.@"enum".name)) {
+                        const base = c.obj.data.@"enum";
+                        for (base.values, 0..) |v, i| {
+                            if (std.mem.eql(u8, v, value)) {
+                                return .{ .enum_value = .{ .base = c.obj, .index = @intCast(i) } };
+                            }
+                        }
+                        return error.ValueNotFound;
+                    }
+                }
+                return error.EnumNotFound;
+            },
             .string => {
-                const str = try vm.allocator.dupe(u8, std.mem.sliceTo(self.data.string, 0));
+                const str = try vm.allocator.dupe(u8, self.data.string.ptr[0..self.data.string.len]);
+                free(@intFromPtr(self.data.string.ptr));
                 return vm.gc.create(vm, .{ .string = str });
             },
             .list => {
                 var list = std.ArrayList(Value).init(vm.allocator);
                 for (0..self.data.list.count) |i| {
                     const item: *ExportValue = @ptrCast(&self.data.list.items[i]);
-                    try list.append(try item.toValue(vm));
+                    try list.append(try item.toValue(vm, free));
                 }
+                free(@intFromPtr(self.data.list.items));
                 return vm.gc.create(vm, .{ .list = list });
             },
             .set => {
@@ -101,8 +127,9 @@ pub const ExportValue = extern struct {
                 var i: usize = 0;
                 while (i < length) : (i += 1) {
                     const item: *ExportValue = @ptrCast(&self.data.list.items[i]);
-                    try set.put(try item.toValue(vm), {});
+                    try set.put(try item.toValue(vm, free), {});
                 }
+                free(@intFromPtr(self.data.list.items));
                 return vm.gc.create(vm, .{ .set = set });
             },
             .map => {
@@ -112,11 +139,11 @@ pub const ExportValue = extern struct {
                 while (i < length) : (i += 2) {
                     const key: *ExportValue = @ptrCast(&self.data.list.items[i]);
                     const value: *ExportValue = @ptrCast(&self.data.list.items[i + 1]);
-                    try map.put(try key.toValue(vm), try value.toValue(vm));
+                    try map.put(try key.toValue(vm, free), try value.toValue(vm, free));
                 }
+                free(@intFromPtr(self.data.list.items));
                 return vm.gc.create(vm, .{ .map = map });
             },
-            else => unreachable,
         };
     }
     pub fn print(self: ExportValue, writer: anytype) void {
@@ -124,12 +151,13 @@ pub const ExportValue = extern struct {
             .nil => writer.print("nil", .{}),
             .bool => writer.print("{}", .{self.data.bool}),
             .number => writer.print("{d:.5}", .{self.data.number}),
-            .enum_value => writer.print("{s}.{s}", .{ self.data.enum_value.name, self.data.enum_value.value }),
-            .string => writer.print("{s}", .{self.data.string}),
+            .@"enum" => writer.print("{s}.{s}", .{ self.data.@"enum".name.ptr[0..self.data.@"enum".name.len], self.data.@"enum".value.ptr[0..self.data.@"enum".value.len] }),
+            .string => writer.print("{s}", .{self.data.string.ptr[0..self.data.string.len]}),
             .list => {
                 writer.print("List{{", .{});
                 for (0..self.data.list.count) |i| {
                     self.data.list.items[i].print(writer);
+                    if (i < self.data.list.count - 1) writer.print(", ", .{});
                 }
                 writer.print("}}", .{});
             },
@@ -137,6 +165,7 @@ pub const ExportValue = extern struct {
                 writer.print("Set{{", .{});
                 for (0..self.data.list.count) |i| {
                     self.data.list.items[i].print(writer);
+                    if (i < self.data.list.count - 1) writer.print(", ", .{});
                 }
                 writer.print("}}", .{});
             },
@@ -147,7 +176,7 @@ pub const ExportValue = extern struct {
                     self.data.list.items[i].print(writer);
                     writer.print(":", .{});
                     self.data.list.items[i + 1].print(writer);
-                    writer.print(",", .{});
+                    if (i < self.data.list.count - 2) writer.print(", ", .{});
                 }
                 writer.print("}}", .{});
             },
