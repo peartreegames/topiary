@@ -8,7 +8,8 @@ const Builtin = @import("builtins.zig").Builtin;
 const OpCode = @import("opcode.zig").OpCode;
 const Enum = @import("enum.zig").Enum;
 const Class = @import("class.zig").Class;
-const ExportFunction = @import("export.zig").ExportFunction;
+const DebugInfo = @import("./utils/debug.zig").DebugInfo;
+const ExportFunction = @import("export-runner.zig").ExportFunction;
 
 const ID = UUID.ID;
 const Allocator = std.mem.Allocator;
@@ -91,9 +92,9 @@ pub const Value = union(Type) {
             function: struct {
                 arity: u8,
                 instructions: []const u8,
-                lines: []const u32,
                 locals_count: usize,
                 is_method: bool = false,
+                debug_info: []DebugInfo,
             },
             ext_function: struct {
                 arity: u8,
@@ -130,7 +131,8 @@ pub const Value = union(Type) {
                 .set => obj.data.set.deinit(),
                 .function => |f| {
                     allocator.free(f.instructions);
-                    allocator.free(f.lines);
+                    for (f.debug_info) |d| d.deinit(allocator);
+                    allocator.free(f.debug_info);
                 },
                 .ext_function => |e| {
                     const func: *ExportFunction = @ptrFromInt(e.context_ptr);
@@ -237,6 +239,7 @@ pub const Value = union(Type) {
         };
     }
 
+    // used for constant values only
     pub fn serialize(self: Value, writer: anytype) !void {
         try writer.writeByte(@intFromEnum(@as(Type, self)));
         switch (self) {
@@ -245,25 +248,8 @@ pub const Value = union(Type) {
                 try writer.print("{d:.5}", .{n});
                 try writer.writeByte(0);
             },
-            .range => |r| {
-                try writer.writeInt(i32, r.start, .little);
-                try writer.writeInt(i32, r.end, .little);
-            },
-            .map_pair => |mp| {
-                try serialize(mp.key.*, writer);
-                try serialize(mp.value.*, writer);
-            },
             .visit => |v| {
                 try writer.writeInt(u32, v, .little);
-            },
-            .enum_value => |e| {
-                try writer.writeByte(e.index);
-                const n = e.base.data.@"enum".name;
-                try writer.writeByte(@intCast(n.len));
-                try writer.writeAll(n);
-            },
-            .ref => |r| {
-                try writer.writeAll(&r);
             },
             .obj => |o| {
                 try writer.writeByte(@intFromEnum(@as(Obj.DataType, o.data)));
@@ -273,31 +259,14 @@ pub const Value = union(Type) {
                         try writer.writeInt(u16, @as(u16, @intCast(s.len)), .little);
                         try writer.writeAll(s);
                     },
-                    .list => |l| {
-                        try writer.writeInt(u16, @as(u16, @intCast(l.items.len)), .little);
-                        for (l.items) |i| try serialize(i, writer);
-                    },
-                    .map => |m| {
-                        try writer.writeInt(u16, @as(u16, @intCast(m.count())), .little);
-                        for (m.keys()) |k| {
-                            try serialize(k, writer);
-                            try serialize(m.get(k) orelse Nil, writer);
-                        }
-                    },
-                    .set => |s| {
-                        try writer.writeInt(u16, @as(u16, @intCast(s.count())), .little);
-                        for (s.keys()) |k| {
-                            try serialize(k, writer);
-                        }
-                    },
                     .function => |f| {
                         try writer.writeByte(f.arity);
                         try writer.writeByte(if (f.is_method) 1 else 0);
                         try writer.writeInt(u16, @as(u16, @intCast(f.locals_count)), .little);
                         try writer.writeInt(u16, @as(u16, @intCast(f.instructions.len)), .little);
                         try writer.writeAll(f.instructions);
-                        try writer.writeInt(u16, @as(u16, @intCast(f.lines.len)), .little);
-                        for (f.lines) |l| try writer.writeInt(u32, l, .little);
+                        try writer.writeInt(u32, @intCast(f.debug_info.len), .little);
+                        for (f.debug_info) |d| try d.serialize(writer);
                     },
                     .@"enum" => |e| {
                         try writer.writeByte(@intCast(e.name.len));
@@ -309,30 +278,15 @@ pub const Value = union(Type) {
                             try writer.writeAll(value);
                         }
                     },
-                    .class => |c| {
-                        try writer.writeByte(@intCast(c.name.len));
-                        try writer.writeAll(c.name);
-                        try writer.writeByte(@intCast(c.fields.len));
-                        for (c.fields) |d| {
-                            try writer.writeByte(@intCast(d.name.len));
-                            try writer.writeAll(d.name);
-                            try serialize(d.value, writer);
-                        }
-                    },
-                    .instance => |i| {
-                        try writer.writeAll(&i.base.id);
-                        try writer.writeByte(@intCast(i.fields.len));
-                        for (i.fields) |v| {
-                            try serialize(v, writer);
-                        }
-                    },
-                    else => {},
+                    else => return error.InvalidConstant,
                 }
             },
             .nil, .void => {},
+            else => return error.InvalidConstant,
         }
     }
 
+    // used for constant values only
     pub fn deserialize(reader: anytype, allocator: std.mem.Allocator) !Value {
         const value_type: Type = @enumFromInt(try reader.readByte());
         return switch (value_type) {
@@ -345,10 +299,6 @@ pub const Value = union(Type) {
             },
             .visit => {
                 return .{ .visit = try reader.readInt(u32, .little) };
-            },
-            .enum_value => {
-                const index = try reader.readByte();
-                return .{ .enum_value = .{ .index = index, .base = undefined } };
             },
             .obj => {
                 const data_type: Obj.DataType = @enumFromInt(try reader.readByte());
@@ -363,42 +313,6 @@ pub const Value = union(Type) {
                         obj.* = .{ .id = id, .data = .{ .string = buf } };
                         return .{ .obj = obj };
                     },
-                    .list => {
-                        const length = try reader.readInt(u16, .little);
-                        var list = try std.ArrayList(Value).initCapacity(allocator, length);
-                        var i: usize = 0;
-                        while (i < length) : (i += 1) {
-                            try list.append(try Value.deserialize(reader, allocator));
-                        }
-                        const obj = try allocator.create(Value.Obj);
-                        obj.* = .{ .id = id, .data = .{ .list = list } };
-                        return .{ .obj = obj };
-                    },
-                    .map => {
-                        const length = try reader.readInt(u16, .little);
-                        var map = Value.Obj.MapType.initContext(allocator, adapter);
-                        var i: usize = 0;
-                        while (i < length) : (i += 1) {
-                            const key = try Value.deserialize(reader, allocator);
-                            const value = try Value.deserialize(reader, allocator);
-                            try map.put(key, value);
-                        }
-                        const obj = try allocator.create(Value.Obj);
-                        obj.* = .{ .id = id, .data = .{ .map = map } };
-                        return .{ .obj = obj };
-                    },
-                    .set => {
-                        const length = try reader.readInt(u16, .little);
-                        var set = Value.Obj.SetType.initContext(allocator, adapter);
-                        var i: usize = 0;
-                        while (i < length) : (i += 1) {
-                            const key = try Value.deserialize(reader, allocator);
-                            try set.put(key, {});
-                        }
-                        const obj = try allocator.create(Value.Obj);
-                        obj.* = .{ .id = id, .data = .{ .set = set } };
-                        return .{ .obj = obj };
-                    },
                     .function => {
                         const arity = try reader.readByte();
                         const is_method = if ((try reader.readByte()) == 1) true else false;
@@ -406,10 +320,10 @@ pub const Value = union(Type) {
                         const instructions_count = try reader.readInt(u16, .little);
                         const buf = try allocator.alloc(u8, instructions_count);
                         try reader.readNoEof(buf);
-                        const lines_count = try reader.readInt(u16, .little);
-                        var lines = try allocator.alloc(u32, lines_count);
-                        for (0..lines_count) |i| {
-                            lines[i] = try reader.readInt(u32, .little);
+                        const debug_info_count = try reader.readInt(u32, .little);
+                        var debug_info = try allocator.alloc(DebugInfo, debug_info_count);
+                        for (0..debug_info_count) |i| {
+                            debug_info[i] = try DebugInfo.deserialize(reader, allocator);
                         }
                         const obj = try allocator.create(Value.Obj);
                         obj.* = .{ .id = id, .data = .{
@@ -418,7 +332,7 @@ pub const Value = union(Type) {
                                 .is_method = is_method,
                                 .locals_count = locals_count,
                                 .instructions = buf,
-                                .lines = lines,
+                                .debug_info = debug_info,
                             },
                         } };
                         return .{ .obj = obj };
@@ -439,42 +353,10 @@ pub const Value = union(Type) {
                         }
                         return .{ .obj = obj };
                     },
-                    .class => {
-                        const name_length = try reader.readByte();
-                        const name_buf = try allocator.alloc(u8, name_length);
-                        try reader.readNoEof(name_buf);
-                        const default_length = try reader.readByte();
-                        const obj = try allocator.create(Value.Obj);
-                        obj.* = .{ .data = .{ .class = .{ .allocator = allocator, .name = name_buf, .fields = try allocator.alloc(Class.Field, default_length) } } };
-                        for (0..default_length) |i| {
-                            const value_name_length = try reader.readByte();
-                            const value_name_buf = try allocator.alloc(u8, value_name_length);
-                            try reader.readNoEof(value_name_buf);
-                            obj.data.class.fields[i].name = value_name_buf;
-                            obj.data.class.fields[i].value = try deserialize(reader, allocator);
-                        }
-                        return .{ .obj = obj };
-                    },
-                    .instance => {
-                        var class_id: ID = undefined;
-                        try reader.readNoEof(class_id[0..]);
-                        const obj = try allocator.create(Value.Obj);
-                        const field_length = try reader.readByte();
-                        var fields = try allocator.alloc(Class.Field, field_length);
-                        for (0..field_length) |i| {
-                            const value_name_length = try reader.readByte();
-                            const value_name_buf = try allocator.alloc(u8, value_name_length);
-                            try reader.readNoEof(value_name_buf);
-                            fields[i].name = value_name_buf;
-                            fields[i].value = try deserialize(reader, allocator);
-                        }
-                        // obj.* = .{ .data = .{ .instance = try class.createInstance(fields) } };
-                        return .{ .obj = obj };
-                    },
-                    else => return error.Unknown,
+                    else => return error.InvalidConstant,
                 }
             },
-            else => return error.Unknown,
+            else => return error.InvalidConstant,
         };
     }
 

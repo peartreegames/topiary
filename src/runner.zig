@@ -25,14 +25,14 @@ pub const Runner = struct {
 
     pub const OnLine = *const fn (runner: *Runner, vm: *Vm, dialogue: Line) void;
     pub const OnChoices = *const fn (runner: *Runner, vm: *Vm, choices: []Choice) void;
-    pub const OnValueChanged = *const fn(runner: *Runner, vm: *Vm, name: []const u8, value: Value) void;
+    pub const OnValueChanged = *const fn (runner: *Runner, vm: *Vm, name: []const u8, value: Value) void;
 
     pub fn onLine(runner: *Runner, vm: *Vm, dialogue: Line) void {
-        runner.on_line( runner, vm, dialogue);
+        runner.on_line(runner, vm, dialogue);
     }
 
     pub fn onChoices(runner: *Runner, vm: *Vm, choices: []Choice) void {
-        runner.on_choices( runner, vm, choices);
+        runner.on_choices(runner, vm, choices);
     }
 
     pub fn onValueChanged(runner: *Runner, vm: *Vm, name: []const u8, value: Value) void {

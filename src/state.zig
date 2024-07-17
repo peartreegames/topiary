@@ -6,6 +6,7 @@ const Vm = @import("vm.zig").Vm;
 const Enum = @import("enum.zig").Enum;
 const Class = @import("class.zig").Class;
 const UUID = @import("utils/uuid.zig").UUID;
+const DebugInfo = @import("./utils/debug.zig").DebugInfo;
 
 const testing = std.testing;
 const Nil = values.Nil;
@@ -32,19 +33,22 @@ pub const State = struct {
 
             const value = vm.globals[s.index];
             if (value == .void) continue;
-            if ((value == .obj and switch (value.obj.data) {
-                // should never be here, but just in case
-                .builtin, .ext_function => true,
-                else => false,
-            })) continue;
-
-            // we don't need to save 'const' values, strings or functions
-            if (!s.is_mutable and value != .visit and (value != .obj or switch (value.obj.data) {
-                .closure, .function, .string => true,
-                else => false,
-            })) continue;
-            // or empty visits
             if (value == .visit and value.visit == 0) continue;
+
+            var is_func = false;
+            var is_str = false;
+            const is_mut = s.is_mutable;
+            const is_obj = value == .obj;
+            if (is_obj) {
+                const is_builtin = value.obj.data == .builtin or value.obj.data == .ext_function;
+                if (is_builtin) continue;
+                is_func = value.obj.data == .closure or value.obj.data == .function;
+                is_str = value.obj.data == .string;
+            }
+            // we don't need to save 'const' values
+            if (!is_mut and !is_obj) continue;
+            // or 'const' strings and functions;
+            if (!is_mut and (is_func or is_str)) continue;
 
             try stream.objectField(s.name);
             try serializeValue(value, &stream, &references);
@@ -104,9 +108,22 @@ pub const State = struct {
                 const buf = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(f.instructions.len));
                 defer allocator.free(buf);
                 try stream.write(std.base64.standard.Encoder.encode(buf, f.instructions));
-                try stream.objectField("lines");
+                try stream.objectField("debug");
                 try stream.beginArray();
-                for (f.lines) |l| try stream.write(l);
+                for (f.debug_info) |d| {
+                    try stream.beginObject();
+                    try stream.objectField("file");
+                    try stream.write(d.file);
+                    try stream.objectField("ranges");
+                    try stream.beginArray();
+                    for (d.ranges.items) |r| {
+                        try stream.write(r.start);
+                        try stream.write(r.end);
+                        try stream.write(r.line);
+                    }
+                    try stream.endArray();
+                    try stream.endObject();
+                }
                 try stream.endArray();
                 try stream.objectField("locals_count");
                 try stream.write(f.locals_count);
@@ -289,18 +306,33 @@ pub const State = struct {
         if (entry.object.get("function")) |v| {
             const arity = v.object.get("arity").?.integer;
             const inst = v.object.get("inst").?.string;
-            const lines_items = v.object.get("lines").?.array.items;
-            var lines = try vm.allocator.alloc(u32, lines_items.len);
-            for (lines_items, 0..) |t, i| lines[i] = @intCast(t.integer);
             const locals = v.object.get("locals_count").?.integer;
             const is_method = v.object.get("is_method").?.bool;
             const inst_alloc = try vm.allocator.alloc(u8, try std.base64.standard.Decoder.calcSizeForSlice(inst));
             try std.base64.standard.Decoder.decode(inst_alloc, inst);
+
+            const debug_items = v.object.get("debug").?.array.items;
+            const debug_info = try vm.allocator.alloc(DebugInfo, debug_items.len);
+            for (debug_items, 0..) |d, i| {
+                const file = d.object.get("file").?.string;
+                const range_items = d.object.get("ranges").?.array.items;
+                const ranges = try std.ArrayList(DebugInfo.Range).initCapacity(vm.allocator, range_items.len);
+                for (range_items, 0..) |r, ri| ranges.items[ri] = .{
+                    .start = @intCast(r.array.items[0].integer),
+                    .end = @intCast(r.array.items[1].integer),
+                    .line = @intCast(r.array.items[2].integer),
+                };
+                debug_info[i] = .{
+                    .file = file,
+                    .ranges = ranges,
+                };
+            }
+
             var result = try vm.gc.create(vm, .{ .function = .{
                 .arity = @intCast(arity),
                 .instructions = inst_alloc,
-                .lines = try vm.allocator.dupe(u32, lines),
                 .locals_count = @intCast(locals),
+                .debug_info = debug_info,
                 .is_method = is_method,
             } });
             result.obj.id = id.?;

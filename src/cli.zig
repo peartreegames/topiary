@@ -338,7 +338,7 @@ const CliRunner = struct {
         vm.selectChoice(index.?) catch |err| self.print("Error: {}", .{err});
     }
 
-    pub fn onValueChanged(_: *Runner, _: *Vm, _:[]const u8, _: Value) void {}
+    pub fn onValueChanged(_: *Runner, _: *Vm, _: []const u8, _: Value) void {}
 };
 
 const AutoTestRunner = struct {
@@ -368,5 +368,5 @@ const AutoTestRunner = struct {
         };
     }
 
-    pub fn onValueChanged(_: *Runner, _: *Vm, _:[]const u8, _: Value) void {}
+    pub fn onValueChanged(_: *Runner, _: *Vm, _: []const u8, _: Value) void {}
 };

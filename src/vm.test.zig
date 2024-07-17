@@ -1,5 +1,6 @@
 const std = @import("std");
 const Vm = @import("vm.zig").Vm;
+const RuntimeErr = @import("vm.zig").RuntimeErr;
 const testing = std.testing;
 const parser = @import("parser.zig");
 const Scope = @import("scope.zig").Scope;
@@ -69,6 +70,7 @@ pub fn initTestVm(source: []const u8, mod: *Module, debug: bool) !Vm {
     errdefer bytecode.free(allocator);
     if (debug) {
         bytecode.print(std.debug);
+        std.debug.print("{s}", .{source});
     }
     return Vm.init(allocator, bytecode, &test_runner.runner);
 }
@@ -761,7 +763,10 @@ test "Class Runtime Error" {
         var vm = try initTestVm(input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
-        const err = vm.interpret();
+        const err = vm.interpret() catch |err| blk: {
+             vm.err.print(std.io.getStdErr().writer());
+            break :blk err;
+        };
         try std.testing.expectError(error.RuntimeError, err);
     }
 }
@@ -1555,7 +1560,7 @@ test "Save and Load State" {
 
     var mod = try Module.initEmpty(allocator);
     defer mod.deinit();
-    var vm = try initTestVm(test_case, mod, false);
+    var vm = try initTestVm(test_case, mod, true);
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
     try vm.interpret();
@@ -1563,6 +1568,7 @@ test "Save and Load State" {
     var data = std.ArrayList(u8).init(alloc);
     defer data.deinit();
     try State.serialize(&vm, data.writer());
+    std.debug.print("{s}\n", .{data.items});
 
     const second_case =
         \\ var value = 10
