@@ -16,6 +16,7 @@ const VisitTree = @import("structures/visit-tree.zig").VisitTree;
 const Enum = @import("enum.zig").Enum;
 const Module = @import("module.zig").Module;
 const UUID = @import("utils/uuid.zig").UUID;
+const DebugInfo = @import("./utils/debug.zig").DebugInfo;
 
 const testing = std.testing;
 const BREAK_HOLDER = 9000;
@@ -63,24 +64,73 @@ pub const Compiler = struct {
 
     pub const Chunk = struct {
         instructions: std.ArrayList(u8),
-        token_lines: std.ArrayList(u32),
+        debug_markers: std.ArrayList(Marker),
         parent: ?*Chunk,
+        module: *Module,
         allocator: std.mem.Allocator,
 
-        pub fn create(allocator: std.mem.Allocator, parent: ?*Chunk) !*Chunk {
+        const Marker = struct {
+            file_index: u32,
+            line: u32,
+        };
+
+        pub fn init(allocator: std.mem.Allocator, parent: ?*Chunk, module: *Module) !*Chunk {
             const chunk = try allocator.create(Chunk);
             chunk.* = .{
                 .instructions = std.ArrayList(u8).init(allocator),
-                .token_lines = std.ArrayList(u32).init(allocator),
+                .debug_markers = std.ArrayList(Marker).init(allocator),
+                .module = module,
                 .parent = parent,
                 .allocator = allocator,
             };
             return chunk;
         }
 
-        pub fn destroy(self: *Chunk) void {
+        pub fn debugInfo(self: *Chunk, allocator: std.mem.Allocator) ![]DebugInfo {
+            var infos = std.ArrayList(DebugInfo).init(allocator);
+            if (self.debug_markers.items.len == 0) return infos.toOwnedSlice();
+            var file_index = self.debug_markers.items[0].file_index;
+            var line = self.debug_markers.items[0].line;
+            var start: u32 = 0;
+            var file_name = try allocator.dupe(u8, std.fs.path.basename(self.module.includes.keys()[file_index]));
+
+            try infos.append(DebugInfo.init(allocator, file_name));
+            var info: *DebugInfo = &(infos.items[0]);
+            for (self.debug_markers.items, 0..) |d, ip| {
+                const end: u32 = @intCast(ip);
+                // file changed make a new debug info or find an existing one
+                if (file_index != d.file_index) {
+                    try info.ranges.append(.{ .start = start, .end = end, .line = line });
+                    line = d.line;
+                    start = end;
+
+                    file_index = d.file_index;
+                    const name = std.fs.path.basename(self.module.includes.keys()[file_index]);
+                    info = for (infos.items, 0..) |item, i| {
+                        if (!std.mem.eql(u8, name, item.file)) continue;
+                        break &(infos.items[i]);
+                    } else blk: {
+                        file_name = try allocator.dupe(u8, file_name);
+                        const new_info = DebugInfo.init(allocator, file_name);
+                        try infos.append(new_info);
+                        break :blk &(infos.items[infos.items.len - 1]);
+                    };
+                    continue;
+                }
+                // line changed, add new range to debug info
+                if (d.line != line) {
+                    try info.ranges.append(.{ .start = start, .end = end, .line = line });
+                    line = d.line;
+                    start = end;
+                }
+            }
+            try info.ranges.append(.{ .start = start, .end = @intCast(self.debug_markers.items.len), .line = line });
+            return try infos.toOwnedSlice();
+        }
+
+        pub fn deinit(self: *Chunk) void {
             self.instructions.deinit();
-            self.token_lines.deinit();
+            self.debug_markers.deinit();
             self.allocator.destroy(self);
         }
     };
@@ -96,8 +146,9 @@ pub const Compiler = struct {
         NotYetImplemented,
     } || parser.Parser.Error;
 
-    pub fn init(allocator: std.mem.Allocator) !Compiler {
-        const root_chunk = try Compiler.Chunk.create(allocator, null);
+    pub fn init(allocator: std.mem.Allocator, module: *Module) !Compiler {
+        if (!module.entry.tree_loaded) return error.CompilerError;
+        const root_chunk = try Compiler.Chunk.init(allocator, null, module);
         const root_scope = try Scope.create(allocator, null, .global);
         const root_builtins = try Scope.create(allocator, null, .builtin);
         return .{
@@ -113,13 +164,13 @@ pub const Compiler = struct {
             .visit_tree = try VisitTree.init(allocator),
             .divert_log = std.ArrayList(JumpTree.Entry).init(allocator),
             .types = std.StringHashMap(ast.Statement).init(allocator),
-            .err = undefined,
-            .module = undefined,
+            .err = &module.entry.errors,
+            .module = module,
         };
     }
 
     pub fn deinit(self: *Compiler) void {
-        self.chunk.destroy();
+        self.chunk.deinit();
         self.root_scope.destroy();
         self.jump_tree.deinit();
         self.visit_tree.deinit();
@@ -196,7 +247,7 @@ pub const Compiler = struct {
         return .{
             .instructions = try self.chunk.instructions.toOwnedSlice(),
             .boughs = try boughs.toOwnedSlice(),
-            .token_lines = try self.chunk.token_lines.toOwnedSlice(),
+            .debug_info = try self.chunk.debugInfo(self.allocator),
             .constants = try self.constants.toOwnedSlice(),
             .global_symbols = global_symbols,
             .locals_count = self.locals_count,
@@ -205,11 +256,8 @@ pub const Compiler = struct {
         };
     }
 
-    pub fn compile(self: *Compiler, module: *Module) Error!void {
-        if (!module.entry.tree_loaded) return error.CompilerError;
-        self.module = module;
-        self.err = &module.entry.errors;
-        const tree = module.entry.tree;
+    pub fn compile(self: *Compiler) Error!void {
+        const tree = self.module.entry.tree;
         inline for (builtins) |builtin| {
             _ = try self.builtins.define(builtin.name, false, false);
         }
@@ -232,21 +280,22 @@ pub const Compiler = struct {
 
         try self.replaceDiverts();
         // Add one final fin at the end of file to grab the initial jump_request
-        if (self.chunk.token_lines.items.len > 0) {
-            try self.chunk.token_lines.append(self.chunk.token_lines.items[self.chunk.instructions.items.len - 1]);
+        if (self.chunk.debug_markers.items.len > 0) {
+            const dupe = self.chunk.debug_markers.items[self.chunk.debug_markers.items.len - 1];
+            try self.chunk.debug_markers.append(dupe);
             try self.chunk.instructions.append(@intFromEnum(OpCode.fin));
         }
     }
 
     fn enterChunk(self: *Compiler) !void {
-        self.chunk = try Chunk.create(self.allocator, self.chunk);
+        self.chunk = try Chunk.init(self.allocator, self.chunk, self.module);
     }
 
-    fn exitChunk(self: *Compiler) !struct { []u8, []u32 } {
+    // Caller owns memory and must deinit returned chunk
+    fn exitChunk(self: *Compiler) !*Chunk {
         const old_chunk = self.chunk;
-        defer old_chunk.destroy();
         self.chunk = old_chunk.parent orelse return Error.OutOfScope;
-        return .{ try old_chunk.instructions.toOwnedSlice(), try old_chunk.token_lines.toOwnedSlice() };
+        return old_chunk;
     }
 
     fn enterScope(self: *Compiler, tag: Scope.Tag) !void {
@@ -999,6 +1048,7 @@ pub const Compiler = struct {
                 }
 
                 const chunk = try self.exitChunk();
+                defer chunk.deinit();
                 const count = self.scope.count;
                 const free_symbols = self.scope.free_symbols.items;
                 for (free_symbols) |s| {
@@ -1012,8 +1062,8 @@ pub const Compiler = struct {
                     .data = .{
                         .function = .{
                             .is_method = f.is_method,
-                            .instructions = chunk[0],
-                            .lines = chunk[1],
+                            .instructions = try chunk.instructions.toOwnedSlice(),
+                            .debug_info = try chunk.debugInfo(self.allocator),
                             .locals_count = count,
                             .arity = @as(u8, @intCast(length)),
                         },
@@ -1124,13 +1174,13 @@ pub const Compiler = struct {
 
     fn writeOp(self: *Compiler, op: OpCode, token: Token) !void {
         var chunk = self.chunk;
-        try chunk.token_lines.append(@intCast(token.line));
+        try chunk.debug_markers.append(.{ .file_index = @intCast(token.file_index), .line = @intCast(token.line) });
         try chunk.instructions.append(@intFromEnum(op));
     }
 
     fn writeValue(self: *Compiler, buf: []const u8, token: Token) !void {
         var chunk = self.chunk;
-        try chunk.token_lines.appendNTimes(@intCast(token.line), buf.len);
+        try chunk.debug_markers.appendNTimes(.{ .file_index = @intCast(token.file_index), .line = @intCast(token.line) }, buf.len);
         try chunk.instructions.writer().writeAll(buf);
     }
 

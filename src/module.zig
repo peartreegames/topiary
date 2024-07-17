@@ -15,7 +15,7 @@ pub const Module = struct {
     allocator: std.mem.Allocator,
     entry: *File,
     use_loc: bool = false,
-    includes: std.StringHashMap(*File),
+    includes: std.StringArrayHashMap(*File),
     allow_includes: bool = true,
 
     pub fn init(allocator: std.mem.Allocator, entry_path: []const u8) !*Module {
@@ -33,7 +33,7 @@ pub const Module = struct {
             .entry = undefined,
             .includes = undefined,
         };
-        mod.includes = std.StringHashMap(*File).init(mod.arena.allocator());
+        mod.includes = std.StringArrayHashMap(*File).init(mod.arena.allocator());
         return mod;
     }
 
@@ -50,11 +50,11 @@ pub const Module = struct {
             return err;
         };
 
-        var compiler = try Compiler.init(allocator);
+        var compiler = try Compiler.init(allocator, self);
         compiler.use_loc = self.use_loc;
         defer compiler.deinit();
 
-        compiler.compile(self) catch |e| {
+        compiler.compile() catch |e| {
             try self.writeErrors(std.io.getStdErr().writer());
             return e;
         };
@@ -156,13 +156,15 @@ pub const File = struct {
         if (!self.source_loaded) return error.ParserError;
         var lexer = Lexer.init(self.source, 0);
         const alloc = self.module.arena.allocator();
+        const file_index = self.module.includes.getIndex(self.path) orelse 0;
 
         var parser = Parser{
-            .current_token = lexer.next(),
-            .peek_token = lexer.next(),
+            .current_token = lexer.next(file_index),
+            .peek_token = lexer.next(file_index),
             .allocator = alloc,
             .lexer = &lexer,
             .file = self,
+            .file_index = file_index,
         };
 
         var nodes = std.ArrayList(Statement).init(alloc);

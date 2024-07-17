@@ -55,6 +55,7 @@ pub const Parser = struct {
     allocator: Allocator,
     lexer: *Lexer,
     file: *File,
+    file_index: usize = 0,
     depth: usize = 0,
     mode: Mode = .standard,
 
@@ -91,7 +92,7 @@ pub const Parser = struct {
 
     pub fn next(self: *Parser) void {
         self.current_token = self.peek_token;
-        self.peek_token = self.lexer.next();
+        self.peek_token = self.lexer.next(self.file_index);
     }
 
     fn consumeIdentifier(self: *Parser) ![]const u8 {
@@ -578,11 +579,12 @@ pub const Parser = struct {
     fn parseInterpolatedExpression(self: *Parser, source: []const u8, exprs: *std.ArrayList(Expression), offset: usize) !void {
         var lexer = Lexer.init(source, offset);
         var parser = Parser{
-            .current_token = lexer.next(),
-            .peek_token = lexer.next(),
+            .current_token = lexer.next(self.file_index),
+            .peek_token = lexer.next(self.file_index),
             .allocator = self.allocator,
             .lexer = &lexer,
             .file = self.file,
+            .file_index = self.file_index,
         };
 
         while (!parser.currentIs(.eof)) : (parser.next()) {

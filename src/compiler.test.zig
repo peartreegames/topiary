@@ -1647,7 +1647,7 @@ test "Global Jump Error" {
     var mod = try Module.initEmpty(allocator);
     defer mod.deinit();
     const err = compileSource(input, mod);
-    try testing.expect(Compiler.Error.CompilerError == err);
+    try testing.expectError(Compiler.Error.CompilerError, err);
 }
 
 test "Serialize" {
@@ -1671,6 +1671,7 @@ test "Serialize" {
     const file = try std.fs.cwd().createFile("tmp.topi.byte", .{ .read = true });
     defer std.fs.cwd().deleteFile("tmp.topi.byte") catch {};
     defer file.close();
+    bytecode.print(std.debug);
     try bytecode.serialize(file.writer());
 
     try file.seekTo(0);

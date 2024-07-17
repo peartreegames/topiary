@@ -40,11 +40,10 @@ const InterpretResult = union(enum) {
 
 pub const RuntimeErr = struct {
     line: u32 = 0,
+    file: ?[]const u8 = null,
     msg: ?[]const u8 = null,
     pub fn print(self: @This(), writer: anytype) void {
-        if (self.msg) |m| {
-            writer.print("Error at line {}: {s}\n", .{ self.line, m }) catch {};
-        }
+        writer.print("Error at \"{?s}\" line {}: {?s}\n", .{ self.file, self.line, self.msg }) catch {};
     }
 };
 
@@ -111,7 +110,7 @@ pub const Vm = struct {
         root_frame.* = .{
             .function = .{
                 .instructions = bytecode.instructions,
-                .lines = bytecode.token_lines,
+                .debug_info = bytecode.debug_info,
                 .locals_count = 0,
                 .arity = 0,
             },
@@ -272,7 +271,7 @@ pub const Vm = struct {
         return self.value_subscribers.remove(name);
     }
 
-    pub fn notifyValueChange(self: *Vm, index: OpCode.Size(.get_global), value: Value) void {
+    pub fn notifyValueChange(self: *Vm, index: usize, value: Value) void {
         const name = self.bytecode.global_symbols[index].name;
         if (self.value_subscribers.contains(name)) {
             self.runner.onValueChanged(self, name, value);
@@ -322,7 +321,16 @@ pub const Vm = struct {
 
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {
         self.err.msg = try std.fmt.allocPrint(self.allocator, msg, args);
-        self.err.line = self.currentFrame().cl.data.closure.data.function.lines[self.currentFrame().ip];
+        const ip = self.currentFrame().ip;
+        cont: for (self.currentFrame().cl.data.closure.data.function.debug_info) |d| {
+            for (d.ranges.items) |r| {
+                if (ip >= r.start and ip <= r.end) {
+                    self.err.line = r.line;
+                    self.err.file = d.file;
+                    break :cont;
+                }
+            }
+        }
         self.can_continue = false;
         return Error.RuntimeError;
     }
@@ -377,7 +385,7 @@ pub const Vm = struct {
                         .number => try self.push(.{ .number = right.number + left.number }),
                         .obj => |o| {
                             switch (o.data) {
-                                .string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.allocator, u8, &.{ left.obj.data.string, s }) }),
+                                .string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.allocator, u8, &.{ std.mem.trimRight(u8, left.obj.data.string, &[_]u8{0}), s }) }),
                                 else => return self.fail("Cannot add types {s} and {s}", .{ left.typeName(), right.typeName() }),
                             }
                         },
@@ -572,7 +580,8 @@ pub const Vm = struct {
                                 .enum_value => |e| try writer.writeAll(e.base.data.@"enum".values[e.index]),
                                 .obj => |o| {
                                     switch (o.data) {
-                                        .string => try writer.writeAll(o.data.string),
+                                        // remove final 0
+                                        .string => try writer.writeAll(std.mem.trimRight(u8, o.data.string, &[_]u8{0})),
                                         else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), str }),
                                     }
                                 },

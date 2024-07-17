@@ -2,6 +2,7 @@ const std = @import("std");
 const Value = @import("./values.zig").Value;
 const OpCode = @import("./opcode.zig").OpCode;
 const UUID = @import("./utils/uuid.zig").UUID;
+const DebugInfo = @import("./utils/debug.zig").DebugInfo;
 
 pub const Bytecode = struct {
     instructions: []u8,
@@ -9,7 +10,7 @@ pub const Bytecode = struct {
     global_symbols: []GlobalSymbol,
     uuids: []UUID.ID,
     locals_count: usize,
-    token_lines: []u32,
+    debug_info: []DebugInfo,
     boughs: []BoughJump,
     loc: []const u8,
 
@@ -24,7 +25,8 @@ pub const Bytecode = struct {
 
     pub fn free(self: *const Bytecode, allocator: std.mem.Allocator) void {
         allocator.free(self.instructions);
-        allocator.free(self.token_lines);
+        for (self.debug_info) |debug| debug.deinit(allocator);
+        allocator.free(self.debug_info);
         for (self.constants) |item| {
             if (item == .obj) {
                 Value.Obj.destroy(allocator, item.obj);
@@ -59,12 +61,16 @@ pub const Bytecode = struct {
 
         try writer.writeInt(u64, @as(u64, @intCast(self.instructions.len)), .little);
         try writer.writeAll(self.instructions);
-        try writer.writeInt(u64, @as(u64, @intCast(self.token_lines.len)), .little);
-        for (self.token_lines) |line| try writer.writeInt(u32, line, .little);
+
+        try writer.writeInt(u16, @as(u16, @intCast(self.debug_info.len)), .little);
+        for (self.debug_info) |debug| try debug.serialize(writer);
+
         try writer.writeInt(u64, @as(u64, @intCast(self.constants.len)), .little);
         for (self.constants) |constant| try constant.serialize(writer);
+
         try writer.writeInt(u64, @as(u64, @intCast(self.uuids.len)), .little);
         for (self.uuids) |uuid| try writer.writeAll(&uuid);
+
         try writer.writeInt(u128, @as(u128, @intCast(self.loc.len)), .little);
         try writer.writeAll(self.loc);
     }
@@ -76,6 +82,7 @@ pub const Bytecode = struct {
         while (count < globals_count) : (count += 1) {
             const length = try reader.readInt(u8, .little);
             const buf = try allocator.alloc(u8, length);
+            errdefer allocator.free(buf);
             try reader.readNoEof(buf);
             const index = try reader.readInt(OpCode.Size(.get_global), .little);
             const is_extern = if (try reader.readByte() == 1) true else false;
@@ -90,10 +97,12 @@ pub const Bytecode = struct {
 
         const bough_count = try reader.readInt(u64, .little);
         var boughs = try allocator.alloc(BoughJump, bough_count);
+        errdefer allocator.free(boughs);
         count = 0;
         while (count < bough_count) : (count += 1) {
             const length = try reader.readInt(u16, .little);
             const buf = try allocator.alloc(u8, length);
+            errdefer allocator.free(buf);
             try reader.readNoEof(buf);
             boughs[count] = BoughJump{
                 .name = buf,
@@ -103,14 +112,19 @@ pub const Bytecode = struct {
 
         const instruction_count = try reader.readInt(u64, .little);
         const instructions = try allocator.alloc(u8, instruction_count);
+        errdefer allocator.free(instructions);
         try reader.readNoEof(instructions);
-        const token_count = try reader.readInt(u64, .little);
-        var token_lines = try allocator.alloc(u32, token_count);
-        for (0..token_count) |i| {
-            token_lines[i] = try reader.readInt(u32, .little);
+
+        const debug_info_count = try reader.readInt(u16, .little);
+        var debug_info = try allocator.alloc(DebugInfo, debug_info_count);
+        errdefer allocator.free(debug_info);
+        for (0..debug_info_count) |i| {
+            debug_info[i] = try DebugInfo.deserialize(reader, allocator);
         }
+
         const constant_count = try reader.readInt(u64, .little);
         var constants = try allocator.alloc(Value, constant_count);
+        errdefer allocator.free(constants);
         for (0..constant_count) |i| {
             constants[i] = try Value.deserialize(reader, allocator);
         }
@@ -126,7 +140,7 @@ pub const Bytecode = struct {
         try reader.readNoEof(loc);
         return .{
             .instructions = instructions,
-            .token_lines = token_lines,
+            .debug_info = debug_info,
             .boughs = boughs,
             .constants = constants,
             .global_symbols = global_symbols,
@@ -139,6 +153,17 @@ pub const Bytecode = struct {
     pub fn print(code: *Bytecode, writer: anytype) void {
         writer.print("\n==BYTECODE==\n", .{});
         printInstructions(writer, code.instructions, code.constants);
+        writer.print("\n==DEBUG==\n", .{});
+        printDebugInfo(writer, code.debug_info);
+    }
+
+    pub fn printDebugInfo(writer: anytype, debug: []DebugInfo) void {
+        for (debug) |info| {
+            writer.print("{s}\n", .{info.file});
+            for (info.ranges.items) |r| {
+                writer.print("    start: {}, end: {}, line: {}\n", .{ r.start, r.end, r.line });
+            }
+        }
     }
 
     pub fn printInstructions(writer: anytype, instructions: []const u8, constants: ?[]Value) void {
