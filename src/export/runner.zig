@@ -1,12 +1,16 @@
 const std = @import("std");
-const Vm = @import("vm.zig").Vm;
-const values = @import("values.zig");
-const ExportValue = @import("export-value.zig").ExportValue;
-const run = @import("runner.zig");
-const Runner = run.Runner;
-const Line = run.Line;
-const Choice = run.Choice;
-const Value = values.Value;
+
+const topi = @import("topi");
+const Vm = topi.runtime.Vm;
+const Runner = topi.runtime.Runner;
+const Line = topi.runtime.Line;
+const Choice = topi.runtime.Choice;
+
+const Value = topi.types.Value;
+const Nil = topi.types.Nil;
+
+const ExportValue = @import("value.zig").ExportValue;
+pub const ExportFunctionDelegate = *const fn (args: []Value) Value;
 
 pub const ExportString = extern struct {
     ptr: [*c]const u8,
@@ -27,8 +31,6 @@ pub const ExportChoice = extern struct {
     visit_count: u32,
     ip: u32,
 };
-
-pub const ExportFree = *const fn (ptr: usize) callconv(.C) void;
 
 pub const ExportLogger = struct {
     on_log: OnLog,
@@ -57,12 +59,13 @@ pub const ExportLogger = struct {
 
 pub const ExportFunction = struct {
     func: Delegate,
-    free: ExportFree,
+    free: Free,
     vm: *Vm,
 
+    pub const Free = *const fn (ptr: usize) callconv(.C) void;
     pub const Delegate = *const fn (vm_ptr: usize, args: [*c]ExportValue, args_len: u8) callconv(.C) ExportValue;
 
-    pub fn create(vm: *Vm, func: Delegate, free: ExportFree) ExportFunction {
+    pub fn create(vm: *Vm, func: Delegate, free: Free) ExportFunction {
         return .{
             .func = func,
             .free = free,
@@ -79,7 +82,7 @@ pub const ExportFunction = struct {
         const logger = runner.logger;
         var exp_args = arenaAlloc.alloc(ExportValue, args.len) catch |err| {
             logger.log("Could not allocate args: {s}", .{@errorName(err)}, .err);
-            return values.Nil;
+            return Nil;
         };
         var i: usize = 0;
         while (i < args.len) : (i += 1) {
@@ -89,7 +92,7 @@ pub const ExportFunction = struct {
         var v = self.func(@intFromPtr(self.vm), exp_args.ptr, @intCast(exp_args.len));
         return v.toValue(self.vm, self.free) catch |err| {
             logger.log("Could not return value of extern function, returning null: {s}", .{@errorName(err)}, .err);
-            return values.Nil;
+            return Nil;
         };
     }
 };

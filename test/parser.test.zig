@@ -1,11 +1,13 @@
 const std = @import("std");
-const Errors = @import("compiler-error.zig").CompilerErrors;
-const Parser = @import("parser.zig").Parser;
-const Tree = @import("ast.zig").Tree;
-const module = @import("module.zig");
+const topi = @import("topi");
+const Errors = topi.backend.CompilerErrors;
 
-const Module = module.Module;
-const File = module.File;
+const Parser = topi.frontend.Parser;
+const Tree = topi.frontend.Tree;
+
+const Module = topi.module.Module;
+const File = topi.module.File;
+
 const testing = std.testing;
 const allocator = testing.allocator;
 
@@ -141,8 +143,8 @@ test "Parse Iterable Types" {
     const test_cases = .{
         .{ .input = "const stringList = List{\"item\"}", .id = "stringList", .item_value = [_][]const u8{"item"}, .mutable = false, .type = .list },
         .{ .input = "const stringList = List{\"item1\", \"item2\"}", .id = "stringList", .item_value = [_][]const u8{ "item1", "item2" }, .mutable = false, .type = .list },
-        .{ .input = "var floatSet = Set{2.0}", .id = "floatSet", .item_value = [_]f32{2.0}, .mutable = true, .type = .set },
-        .{ .input = "var floatSet = Set{2.0, 3.4, 5.6}", .id = "floatSet", .item_value = [_]f32{ 2.0, 3.4, 5.6 }, .mutable = true, .type = .set },
+        .{ .input = "var floatSet = Set{2.0}", .id = "floatSet", .item_value = [_]f64{2.0}, .mutable = true, .type = .set },
+        .{ .input = "var floatSet = Set{2.0, 3.4, 5.6}", .id = "floatSet", .item_value = [_]f64{ 2.0, 3.4, 5.6 }, .mutable = true, .type = .set },
         .{ .input = "var stringBoolMap = Map{\"key\":true}", .id = "stringBoolMap", .item_value = [_]bool{true}, .mutable = true, .type = .map },
         .{ .input = "var stringBoolMap = Map{\"key1\":true, \"key2\": false, \"key3\": true}", .id = "stringBoolMap", .item_value = [_]bool{ true, false, true }, .mutable = true, .type = .map },
     };

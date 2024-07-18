@@ -1,17 +1,16 @@
 const std = @import("std");
-const ArrayList = std.ArrayList;
-const Allocator = std.mem.Allocator;
-const testing = std.testing;
+
 const Lexer = @import("lexer.zig").Lexer;
 const tok = @import("token.zig");
 const ast = @import("ast.zig");
-const File = @import("module.zig").File;
-const Errors = @import("compiler-error.zig").CompilerErrors;
-const UUID = @import("utils/uuid.zig").UUID;
 const Statement = ast.Statement;
 const Expression = ast.Expression;
 const TokenType = tok.TokenType;
 const Token = tok.Token;
+
+const File = @import("../module.zig").File;
+const Errors = @import("../backend/index.zig").CompilerErrors;
+const UUID = @import("../utils/index.zig").UUID;
 
 const Precedence = enum(u4) {
     lowest,
@@ -52,7 +51,7 @@ fn findPrecedence(token_type: TokenType) Precedence {
 pub const Parser = struct {
     current_token: Token,
     peek_token: Token,
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
     lexer: *Lexer,
     file: *File,
     file_index: usize = 0,
@@ -366,7 +365,7 @@ pub const Parser = struct {
             .identifier => try self.identifierExpression(),
             .number => blk: {
                 const string_number = self.file.source[self.current_token.start..self.current_token.end];
-                const value = try std.fmt.parseFloat(f32, string_number);
+                const value = try std.fmt.parseFloat(f64, string_number);
                 break :blk .{
                     .token = start,
                     .type = .{
@@ -462,7 +461,7 @@ pub const Parser = struct {
 
     fn functionExpression(self: *Parser) Error!Expression {
         const start = self.current_token;
-        var list = ArrayList([]const u8).init(self.allocator);
+        var list = std.ArrayList([]const u8).init(self.allocator);
         errdefer list.deinit();
         self.next();
         while (!self.currentIs(.pipe)) {
@@ -885,7 +884,7 @@ pub const Parser = struct {
     }
 
     fn arguments(self: *Parser) Error![]Expression {
-        var list = ArrayList(Expression).init(self.allocator);
+        var list = std.ArrayList(Expression).init(self.allocator);
         errdefer list.deinit();
 
         // no arguments
@@ -1088,7 +1087,7 @@ pub const Parser = struct {
     fn expectCurrent(self: *Parser, comptime token_type: TokenType) !void {
         if (self.currentIs(token_type)) return;
         return self.fail(
-            "Expected current token to be '" ++ tok.toString(token_type) ++ "', found {}",
+            "Expected current token to be '" ++ Token.toString(token_type) ++ "', found {}",
             self.current_token,
             .{self.current_token.token_type},
         );
@@ -1101,7 +1100,7 @@ pub const Parser = struct {
         }
 
         return self.fail(
-            "Expected next token to be '" ++ tok.toString(token_type) ++ "', found {}",
+            "Expected next token to be '" ++ Token.toString(token_type) ++ "', found {}",
             self.peek_token,
             .{self.peek_token.token_type},
         );

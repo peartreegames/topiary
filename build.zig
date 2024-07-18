@@ -11,16 +11,17 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", version);
 
-     _ = b.addModule("topi", .{
-         .root_source_file = b.path("src/topi.zig"),
-     });
+    const topi = b.addModule("topi", .{
+        .root_source_file = b.path("src/topi.zig"),
+    });
 
     const topilib = b.addSharedLibrary(.{
         .name = "topi",
-        .root_source_file = b.path("src/export.zig"),
+        .root_source_file = b.path("src/export/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    topilib.root_module.addImport("topi", topi);
 
     const art = b.addInstallArtifact(topilib, .{ .dest_dir = .{ .override = .lib } });
     b.getInstallStep().dependOn(&art.step);
@@ -44,14 +45,29 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
+    const filter = b.option([]const u8, "filter", "Filter strings for tests");
     const tests = b.addTest(.{
-        .root_source_file = b.path("src/vm.zig"),
+        .root_source_file = b.path("test/index.zig"),
         .target = target,
         .optimize = optimize,
+        .filter = filter,
     });
 
+    tests.root_module.addImport("topi", topi);
+    const run_tests = b.addRunArtifact(tests);
+
+    const export_tests = b.addTest(.{
+        .root_source_file = b.path("src/export/main.test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .filter = filter,
+    });
+    export_tests.root_module.addImport("topi", topi);
+    const run_export_tests = b.addRunArtifact(export_tests);
+
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&tests.step);
+    test_step.dependOn(&run_tests.step);
+    test_step.dependOn(&run_export_tests.step);
 }
 
 fn getVersion(b: *std.Build) ![]const u8 {

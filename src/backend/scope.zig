@@ -1,10 +1,11 @@
 const std = @import("std");
-const ast = @import("./ast.zig");
-const values = @import("./values.zig");
-const OpCode = @import("./opcode.zig").OpCode;
+
+const types = @import("../types/index.zig");
+const Value = types.values.Value;
+const C = @import("../utils/index.zig").C;
 
 pub const Symbol = struct {
-    index: OpCode.Size(.get_global),
+    index: C.GLOBAL,
     name: []const u8,
     tag: Scope.Tag,
     is_mutable: bool,

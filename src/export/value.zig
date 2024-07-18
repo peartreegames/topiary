@@ -1,9 +1,15 @@
 const std = @import("std");
-const values = @import("./values.zig");
-const Vm = @import("vm.zig").Vm;
-const ExportFree = @import("export-runner.zig").ExportFree;
-const ExportString = @import("export-runner.zig").ExportString;
-const Value = values.Value;
+
+const topi = @import("topi");
+const Value = topi.types.Value;
+const TrueValue = topi.types.True;
+const FalseValue = topi.types.False;
+const NilValue = topi.types.Nil;
+const Vm = topi.runtime.Vm;
+
+const runner = @import("runner.zig");
+const ExportFunction = runner.ExportFunction;
+const ExportString = runner.ExportString;
 
 const Tag = enum(u8) {
     nil,
@@ -21,7 +27,7 @@ pub const ExportValue = extern struct {
     data: extern union {
         nil: void,
         bool: bool,
-        number: f32,
+        number: f64,
         string: ExportString,
         list: extern struct {
             items: [*c]ExportValue,
@@ -80,10 +86,10 @@ pub const ExportValue = extern struct {
         };
     }
 
-    pub fn toValue(self: *const ExportValue, vm: *Vm, free: ExportFree) !Value {
+    pub fn toValue(self: *const ExportValue, vm: *Vm, free: ExportFunction.Free) !Value {
         return switch (self.tag) {
-            .nil => values.Nil,
-            .bool => if (self.data.bool) values.True else values.False,
+            .nil => NilValue,
+            .bool => if (self.data.bool) TrueValue else FalseValue,
             .number => .{ .number = self.data.number },
             .@"enum" => {
                 const e = self.data.@"enum";
@@ -122,7 +128,7 @@ pub const ExportValue = extern struct {
                 return vm.gc.create(vm, .{ .list = list });
             },
             .set => {
-                var set = Value.Obj.SetType.initContext(vm.allocator, values.adapter);
+                var set = Value.Obj.SetType.initContext(vm.allocator, Value.adapter);
                 const length = self.data.list.count;
                 var i: usize = 0;
                 while (i < length) : (i += 1) {
@@ -133,7 +139,7 @@ pub const ExportValue = extern struct {
                 return vm.gc.create(vm, .{ .set = set });
             },
             .map => {
-                var map = Value.Obj.MapType.initContext(vm.allocator, values.adapter);
+                var map = Value.Obj.MapType.initContext(vm.allocator, Value.adapter);
                 const length = self.data.list.count;
                 var i: usize = 0;
                 while (i < length) : (i += 2) {

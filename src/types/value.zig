@@ -1,17 +1,20 @@
 const std = @import("std");
-const ast = @import("ast.zig");
-const Gc = @import("gc.zig").Gc;
-const Vm = @import("vm.zig").Vm;
-const UUID = @import("utils/uuid.zig").UUID;
-const Bytecode = @import("bytecode.zig").Bytecode;
-const Builtin = @import("builtins.zig").Builtin;
-const OpCode = @import("opcode.zig").OpCode;
+
+const runtime = @import("../runtime/index.zig");
+const Gc = runtime.Gc;
+const Vm = runtime.Vm;
+const Builtin = runtime.Builtin;
+
+const utils = @import("../utils/index.zig");
+const UUID = utils.UUID;
+const C = utils.C;
+
+const backend = @import("../backend/index.zig");
+const Bytecode = backend.Bytecode;
+const DebugInfo = backend.DebugInfo;
+
 const Enum = @import("enum.zig").Enum;
 const Class = @import("class.zig").Class;
-const DebugInfo = @import("./utils/debug.zig").DebugInfo;
-const ExportFunction = @import("export-runner.zig").ExportFunction;
-
-const ID = UUID.ID;
 const Allocator = std.mem.Allocator;
 
 pub const True = Value{ .bool = true };
@@ -38,15 +41,11 @@ pub const Iterator = struct {
     index: usize,
 };
 
-pub const ExportFunctionDelegate = *const fn (args: []Value) Value;
-
-pub const adapter = Value.Adapter{};
-
 pub const Value = union(Type) {
     void: void,
     nil: void,
     bool: bool,
-    number: f32,
+    number: f64,
     range: struct {
         start: i32,
         end: i32,
@@ -58,15 +57,17 @@ pub const Value = union(Type) {
     },
     visit: u32,
     enum_value: Enum.Val,
-    ref: ID,
+    ref: UUID.ID,
+
+    pub const adapter = Value.Adapter{};
 
     /// Allocated Value
     pub const Obj = struct {
         is_marked: bool = false,
         next: ?*Obj = null,
         // used for serializing references
-        id: ID = UUID.Empty,
-        index: ?OpCode.Size(.get_global) = null,
+        id: UUID.ID = UUID.Empty,
+        index: ?C.GLOBAL = null,
         data: Data,
 
         pub const DataType = enum(u8) {
@@ -135,8 +136,10 @@ pub const Value = union(Type) {
                     allocator.free(f.debug_info);
                 },
                 .ext_function => |e| {
-                    const func: *ExportFunction = @ptrFromInt(e.context_ptr);
-                    allocator.destroy(func);
+                    // since we don't have the ExportFunction type here we're just freeing the memory manually
+                    const size = @sizeOf(usize) * 3;
+                    const non_const_ptr = @as([*]u8, @ptrFromInt(e.context_ptr));
+                    allocator.rawFree(non_const_ptr[0..size], @log2(8.0), @returnAddress());
                 },
                 .builtin => {},
                 .closure => |c| allocator.free(c.free_values),
@@ -204,7 +207,7 @@ pub const Value = union(Type) {
 
     pub fn getAtIndex(self: Value, index: usize) Value {
         return switch (self) {
-            .range => |r| .{ .number = @as(f32, @floatFromInt(r.start + @as(i32, @intCast(index)))) },
+            .range => |r| .{ .number = @as(f64, @floatFromInt(r.start + @as(i64, @intCast(index)))) },
             .obj => |o| switch (o.data) {
                 .list => |l| l.items[index],
                 .map => |m| .{
@@ -224,7 +227,7 @@ pub const Value = union(Type) {
         return switch (T) {
             bool => if (value) True else False,
             @TypeOf(null) => Nil,
-            f32 => .{ .number = value },
+            f64 => .{ .number = value },
             else => unreachable,
         };
     }
@@ -295,14 +298,14 @@ pub const Value = union(Type) {
             .number => {
                 const val = try reader.readUntilDelimiterAlloc(allocator, 0, 128);
                 defer allocator.free(val);
-                return .{ .number = try std.fmt.parseFloat(f32, val) };
+                return .{ .number = try std.fmt.parseFloat(f64, val) };
             },
             .visit => {
                 return .{ .visit = try reader.readInt(u32, .little) };
             },
             .obj => {
                 const data_type: Obj.DataType = @enumFromInt(try reader.readByte());
-                var id: ID = undefined;
+                var id: UUID.ID = undefined;
                 try reader.readNoEof(id[0..]);
                 switch (data_type) {
                     .string => {

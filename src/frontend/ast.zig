@@ -1,8 +1,7 @@
 const std = @import("std");
-const token = @import("token.zig");
-const UUID = @import("utils/uuid.zig").UUID;
-const Token = token.Token;
-const Allocator = std.mem.Allocator;
+const Token = @import("token.zig").Token;
+const utils = @import("../utils/index.zig");
+const UUID = utils.UUID;
 
 pub const Tree = struct {
     root: []const Statement,
@@ -33,7 +32,7 @@ pub const Expression = struct {
         },
         @"extern": void,
         boolean: bool,
-        number: f32,
+        number: f64,
         string: struct {
             raw: []const u8,
             value: []const u8,

@@ -1,9 +1,12 @@
 const std = @import("std");
-const values = @import("values.zig");
-const Vm = @import("vm.zig").Vm;
-const OpCode = @import("opcode.zig").OpCode;
 
-const Value = values.Value;
+const types = @import("../types/index.zig");
+const Value = types.Value;
+const Void = types.Void;
+const True = types.True;
+const False = types.False;
+
+const Vm = @import("vm.zig").Vm;
 pub const Builtin = *const fn (vm: *Vm, args: []Value) Value;
 
 pub const Rnd = struct {
@@ -19,9 +22,9 @@ pub const Rnd = struct {
     };
     fn builtin(_: *Vm, args: []Value) Value {
         if (r == null) r = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
-        const start = @as(i32, @intFromFloat(args[0].number));
-        const end = @as(i32, @intFromFloat(args[1].number));
-        return .{ .number = @as(f32, @floatFromInt(r.?.random().intRangeAtMost(i32, start, end))) };
+        const start = @as(i64, @intFromFloat(args[0].number));
+        const end = @as(i64, @intFromFloat(args[1].number));
+        return .{ .number = @as(f64, @floatFromInt(r.?.random().intRangeAtMost(i64, start, end))) };
     }
 };
 
@@ -44,7 +47,7 @@ const Rnd01 = struct {
     fn builtin(_: *Vm, args: []Value) Value {
         if (r == null) r = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
         _ = args;
-        return .{ .number = r.?.random().float(f32) };
+        return .{ .number = r.?.random().float(f64) };
     }
 };
 
@@ -88,7 +91,43 @@ const Print = struct {
         const writer = std.debug;
         args[0].print(writer, null);
         writer.print("\n", .{});
-        return values.Void;
+        return Void;
+    }
+};
+
+pub const Time = struct {
+    const Self = @This();
+    var mstime: Value = .{
+        .obj = &Self.mstime_obj,
+    };
+    var mstime_obj: Value.Obj = .{
+        .data = .{
+            .builtin = .{
+                .backing = Self.msbuiltin,
+                .arity = 0,
+                .is_method = false,
+                .name = "mstime",
+            },
+        },
+    };
+    var nstime: Value = .{ .obj = &Self.nstime_obj };
+    var nstime_obj: Value.Obj = .{
+        .data = .{
+            .builtin = .{
+                .backing = Self.nsbuiltin,
+                .arity = 0,
+                .is_method = false,
+                .name = "nstime",
+            },
+        },
+    };
+    fn msbuiltin(_: *Vm, _: []Value) Value {
+        std.debug.print("MS: {}\n", .{std.time.milliTimestamp()});
+        return .{ .number = @floatFromInt(std.time.milliTimestamp()) };
+    }
+    fn nsbuiltin(_: *Vm, _: []Value) Value {
+        std.debug.print("NS: {}\n", .{std.time.nanoTimestamp()});
+        return .{ .number = @floatFromInt(std.time.nanoTimestamp()) };
     }
 };
 
@@ -110,8 +149,8 @@ pub const Assert = struct {
     fn builtin(_: *Vm, args: []Value) Value {
         const expr = args[0];
         const msg = args[1];
-        if (!expr.eql(values.True)) return msg;
-        return values.Void;
+        if (!expr.eql(True)) return msg;
+        return Void;
     }
 };
 
@@ -120,7 +159,7 @@ const Definition = struct {
     value: *Value,
 };
 
-pub const builtins = [_]Definition{ .{
+pub const definitions = [_]Definition{ .{
     .name = "rnd",
     .value = &Rnd.value,
 }, .{
@@ -135,6 +174,12 @@ pub const builtins = [_]Definition{ .{
 }, .{
     .name = "assert",
     .value = &Assert.value,
+}, .{
+    .name = "mstime",
+    .value = &Time.mstime,
+}, .{
+    .name = "nstime",
+    .value = &Time.nstime,
 } };
 
 pub const Count = struct {
@@ -155,7 +200,7 @@ pub const Count = struct {
             .set => |s| s.count(),
             else => 0,
         };
-        return .{ .number = @as(f32, @floatFromInt(count)) };
+        return .{ .number = @as(f64, @floatFromInt(count)) };
     }
 };
 
@@ -179,7 +224,7 @@ pub const Add = struct {
         if (args[0].obj.index) |i| {
             vm.notifyValueChange(i, args[0]);
         }
-        return values.Void;
+        return Void;
     }
 };
 
@@ -203,7 +248,7 @@ pub const AddMap = struct {
         if (args[0].obj.index) |i| {
             vm.notifyValueChange(i, args[0]);
         }
-        return values.Void;
+        return Void;
     }
 };
 pub const Remove = struct {
@@ -233,7 +278,7 @@ pub const Remove = struct {
         if (args[0].obj.index) |i| {
             vm.notifyValueChange(i, args[0]);
         }
-        return values.Void;
+        return Void;
     }
 };
 
@@ -267,8 +312,8 @@ pub const Has = struct {
             },
             else => false,
         };
-        if (result) return values.True;
-        return values.False;
+        if (result) return True;
+        return False;
     }
 };
 pub const Clear = struct {
@@ -292,6 +337,6 @@ pub const Clear = struct {
         if (args[0].obj.index) |i| {
             vm.notifyValueChange(i, args[0]);
         }
-        return values.Void;
+        return Void;
     }
 };
