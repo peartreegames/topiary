@@ -1,7 +1,6 @@
 const Vm = @import("./vm.zig").Vm;
-const UUID = @import("./utils/uuid.zig").UUID;
-const Value = @import("values.zig").Value;
-const ID = UUID.ID;
+const ID = @import("../utils/index.zig").UUID.ID;
+const Value = @import("../types/index.zig").Value;
 
 pub const Line = struct {
     speaker: ?[]const u8,

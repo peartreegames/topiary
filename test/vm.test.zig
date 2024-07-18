@@ -1,22 +1,24 @@
 const std = @import("std");
-const Vm = @import("vm.zig").Vm;
-const RuntimeErr = @import("vm.zig").RuntimeErr;
 const testing = std.testing;
-const parser = @import("parser.zig");
-const Scope = @import("scope.zig").Scope;
-const compiler = @import("compiler.zig");
-const Value = @import("values.zig").Value;
-const Errors = @import("compiler-error.zig").CompilerErrors;
-const compileSource = @import("compiler.test.zig").compileSource;
-const State = @import("state.zig").State;
-const runners = @import("runner.zig");
-const module = @import("module.zig");
-const Runner = runners.Runner;
-const Line = runners.Line;
-const Choice = runners.Choice;
 
-const Compiler = compiler.Compiler;
-const Module = module.Module;
+const topi = @import("topi");
+const Vm = topi.runtime.Vm;
+const RuntimeErr = topi.runtime.RuntimeErr;
+const Runner = topi.runtime.Runner;
+const Line = topi.runtime.Line;
+const Choice = topi.runtime.Choice;
+const State = topi.runtime.State;
+
+const Parser = topi.frontend.Parser;
+
+const Compiler = topi.backend.Compiler;
+const Errors = topi.backend.CompilerErrors;
+
+const Value = topi.types.Value;
+
+const Module = topi.module.Module;
+
+const compileSource = @import("compiler.test.zig").compileSource;
 const allocator = std.testing.allocator;
 
 pub const TestRunner = struct {
@@ -70,22 +72,21 @@ pub fn initTestVm(source: []const u8, mod: *Module, debug: bool) !Vm {
     errdefer bytecode.free(allocator);
     if (debug) {
         bytecode.print(std.debug);
-        std.debug.print("{s}", .{source});
     }
     return Vm.init(allocator, bytecode, &test_runner.runner);
 }
 
 test "Basics" {
     const test_cases = .{
-        .{ .input = "1", .value = 1.0, .type = f32 },
-        .{ .input = "2", .value = 2.0, .type = f32 },
-        .{ .input = "1 + 2", .value = 3.0, .type = f32 },
-        .{ .input = "-12", .value = -12.0, .type = f32 },
-        .{ .input = "111 + 222", .value = 333.0, .type = f32 },
-        .{ .input = "5 - 2", .value = 3.0, .type = f32 },
-        .{ .input = "5 * 2", .value = 10.0, .type = f32 },
-        .{ .input = "6 / 2", .value = 3.0, .type = f32 },
-        .{ .input = "6 % 5", .value = 1.0, .type = f32 },
+        .{ .input = "1", .value = 1.0, .type = f64 },
+        .{ .input = "2", .value = 2.0, .type = f64 },
+        .{ .input = "1 + 2", .value = 3.0, .type = f64 },
+        .{ .input = "-12", .value = -12.0, .type = f64 },
+        .{ .input = "111 + 222", .value = 333.0, .type = f64 },
+        .{ .input = "5 - 2", .value = 3.0, .type = f64 },
+        .{ .input = "5 * 2", .value = 10.0, .type = f64 },
+        .{ .input = "6 / 2", .value = 3.0, .type = f64 },
+        .{ .input = "6 % 5", .value = 1.0, .type = f64 },
         .{ .input = "1 == 1", .value = true, .type = bool },
         .{ .input = "1 != 1", .value = false, .type = bool },
         .{ .input = "1 > 5", .value = false, .type = bool },
@@ -104,7 +105,7 @@ test "Basics" {
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
         switch (case.type) {
-            f32 => try testing.expect(case.value == vm.stack.previous().number),
+            f64 => try testing.expect(case.value == vm.stack.previous().number),
             bool => try testing.expect(case.value == vm.stack.previous().bool),
             else => continue,
         }
@@ -211,13 +212,13 @@ test "Strings" {
 
 test "Lists" {
     const test_cases = .{
-        .{ .input = "List{}", .value = [_]f32{} },
-        .{ .input = "List{1,2,3}", .value = [_]f32{ 1, 2, 3 } },
-        .{ .input = "List{1 + 2, 3 * 4, 5 + 6}", .value = [_]f32{ 3, 12, 11 } },
-        .{ .input = "var l = List{} l.add(1) l", .value = [_]f32{1} },
-        .{ .input = "var l = List{} l.add(1) l.add(2) l", .value = [_]f32{ 1, 2 } },
-        .{ .input = "var l = List{} l.add(1) l.add(2) l.remove(1) l", .value = [_]f32{2} },
-        .{ .input = "var l = List{1,2,3,4,5} l.remove(3) l", .value = [_]f32{ 1, 2, 4, 5 } },
+        .{ .input = "List{}", .value = [_]f64{} },
+        .{ .input = "List{1,2,3}", .value = [_]f64{ 1, 2, 3 } },
+        .{ .input = "List{1 + 2, 3 * 4, 5 + 6}", .value = [_]f64{ 3, 12, 11 } },
+        .{ .input = "var l = List{} l.add(1) l", .value = [_]f64{1} },
+        .{ .input = "var l = List{} l.add(1) l.add(2) l", .value = [_]f64{ 1, 2 } },
+        .{ .input = "var l = List{} l.add(1) l.add(2) l.remove(1) l", .value = [_]f64{2} },
+        .{ .input = "var l = List{1,2,3,4,5} l.remove(3) l", .value = [_]f64{ 1, 2, 4, 5 } },
     };
 
     inline for (test_cases) |case| {
@@ -236,11 +237,11 @@ test "Lists" {
 
 test "Maps" {
     const test_cases = .{
-        .{ .input = "Map{}", .keys = [_]f32{}, .values = [_]f32{} },
-        .{ .input = "Map{1:2, 3: 4}", .keys = [_]f32{ 1, 3 }, .values = [_]f32{ 2, 4 } },
-        .{ .input = "Map{1 + 1: 2 * 2, 3 + 3: 4 * 4}", .keys = [_]f32{ 2, 6 }, .values = [_]f32{ 4, 16 } },
-        .{ .input = "var m = Map{1:2} m.add(3, 4) m", .keys = [_]f32{ 1, 3 }, .values = [_]f32{ 2, 4 } },
-        .{ .input = "var m = Map{1:2} m.add(3, 4) m.remove(1) m", .keys = [_]f32{3}, .values = [_]f32{4} },
+        .{ .input = "Map{}", .keys = [_]f64{}, .values = [_]f64{} },
+        .{ .input = "Map{1:2, 3: 4}", .keys = [_]f64{ 1, 3 }, .values = [_]f64{ 2, 4 } },
+        .{ .input = "Map{1 + 1: 2 * 2, 3 + 3: 4 * 4}", .keys = [_]f64{ 2, 6 }, .values = [_]f64{ 4, 16 } },
+        .{ .input = "var m = Map{1:2} m.add(3, 4) m", .keys = [_]f64{ 1, 3 }, .values = [_]f64{ 2, 4 } },
+        .{ .input = "var m = Map{1:2} m.add(3, 4) m.remove(1) m", .keys = [_]f64{3}, .values = [_]f64{4} },
     };
 
     inline for (test_cases) |case| {
@@ -264,11 +265,11 @@ test "Maps" {
 
 test "Sets" {
     const test_cases = .{
-        .{ .input = "Set{}", .values = [_]f32{} },
-        .{ .input = "Set{1, 2}", .values = [_]f32{ 1, 2 } },
-        .{ .input = "Set{1 + 1, 3 + 3}", .values = [_]f32{ 2, 6 } },
-        .{ .input = "var s = Set{1} s.add(2) s.add(1) s", .values = [_]f32{ 1, 2 } },
-        .{ .input = "var s = Set{1} s.add(2) s.remove(1) s", .values = [_]f32{2} },
+        .{ .input = "Set{}", .values = [_]f64{} },
+        .{ .input = "Set{1, 2}", .values = [_]f64{ 1, 2 } },
+        .{ .input = "Set{1 + 1, 3 + 3}", .values = [_]f64{ 2, 6 } },
+        .{ .input = "var s = Set{1} s.add(2) s.add(1) s", .values = [_]f64{ 1, 2 } },
+        .{ .input = "var s = Set{1} s.add(2) s.remove(1) s", .values = [_]f64{2} },
     };
 
     inline for (test_cases) |case| {
@@ -395,6 +396,17 @@ test "Functions" {
         \\ const curry = || return one
         \\ curry()()
         , .value = 1.0 },
+        .{ .input = 
+        \\ const fib = |n| {
+        \\   if (n < 2) return n
+        \\   return fib(n - 1) + fib(n - 2)
+        \\ }
+        \\ const s = mstime()
+        \\ const v = fib(15)
+        \\ const e = mstime()
+        \\ print("Start: {s}, End: {e}, Duration: {e - s}ms")
+        \\ v
+        , .value = 610.0 },
     };
 
     inline for (test_cases) |case| {
@@ -405,6 +417,7 @@ test "Functions" {
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
         const value = vm.stack.previous();
+        errdefer std.log.err("Err case: {s}\n{} != {}\n", .{ case.input, if (value == .nil) 0 else value.number, case.value });
         switch (@TypeOf(case.value)) {
             comptime_float => try testing.expect(case.value == value.number),
             else => try testing.expect(value == .void),
@@ -550,11 +563,11 @@ test "Builtin Functions" {
     const test_cases = .{
         .{
             .input = "rnd(1, 10)",
-            .type = f32,
+            .type = f64,
         },
         .{
             .input = "rnd01()",
-            .type = f32,
+            .type = f64,
         },
     };
     inline for (test_cases) |case| {
@@ -764,7 +777,7 @@ test "Class Runtime Error" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         const err = vm.interpret() catch |err| blk: {
-             vm.err.print(std.io.getStdErr().writer());
+            vm.err.print(std.io.getStdErr().writer());
             break :blk err;
         };
         try std.testing.expectError(error.RuntimeError, err);
@@ -1560,7 +1573,7 @@ test "Save and Load State" {
 
     var mod = try Module.initEmpty(allocator);
     defer mod.deinit();
-    var vm = try initTestVm(test_case, mod, true);
+    var vm = try initTestVm(test_case, mod, false);
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
     try vm.interpret();

@@ -1,30 +1,29 @@
 const std = @import("std");
-const Value = @import("values.zig").Value;
-const OpCode = @import("opcode.zig").OpCode;
-const Errors = @import("compiler-error.zig").CompilerErrors;
-const ValueType = @import("values.zig").Type;
-const String = @import("values.zig").String;
-const Scope = @import("scope.zig").Scope;
-const Symbol = @import("scope.zig").Symbol;
-const builtins = @import("builtins.zig").builtins;
-const Bytecode = @import("bytecode.zig").Bytecode;
-const JumpTree = @import("structures/jump-tree.zig").JumpTree;
-const VisitTree = @import("structures/visit-tree.zig").VisitTree;
-const Enum = @import("enum.zig").Enum;
-const UUID = @import("utils/uuid.zig").UUID;
-const compiler = @import("compiler.zig");
-const module = @import("module.zig");
+
+const topi = @import("topi");
+const Value = topi.types.Value;
+const ValueType = topi.types.Type;
+const String = topi.types.String;
+
+const Errors = topi.backend.CompilerErrors;
+const Bytecode = topi.backend.Bytecode;
+const Compiler = topi.backend.Compiler;
+const OpCode = topi.backend.OpCode;
+const Scope = topi.backend.Scope;
+const Symbol = topi.backend.Symbol;
+const initial_constants = topi.backend.initial_constants;
+
 const parseSource = @import("parser.test.zig").parseSource;
-const initial_constants = compiler.initial_constants;
+
+const Module = topi.module.Module;
+const File = topi.module.File;
 
 const testing = std.testing;
 const allocator = testing.allocator;
 const cl = initial_constants.len;
-const Module = module.Module;
-const Compiler = compiler.Compiler;
 
 pub fn compileSource(source: []const u8, mod: *Module) !Bytecode {
-    const file = try mod.arena.allocator().create(module.File);
+    const file = try mod.arena.allocator().create(File);
     file.* = .{
         .path = "",
         .name = "",
@@ -1671,7 +1670,7 @@ test "Serialize" {
     const file = try std.fs.cwd().createFile("tmp.topi.byte", .{ .read = true });
     defer std.fs.cwd().deleteFile("tmp.topi.byte") catch {};
     defer file.close();
-    bytecode.print(std.debug);
+    // bytecode.print(std.debug);
     try bytecode.serialize(file.writer());
 
     try file.seekTo(0);

@@ -1,6 +1,5 @@
 const std = @import("std");
-const tok = @import("token.zig");
-const Token = tok.Token;
+const Token = @import("../frontend/index.zig").Token;
 
 pub const CompilerErr = struct {
     fmt: []const u8,
@@ -61,7 +60,7 @@ pub const CompilerErrors = struct {
             start = @min(start, source.len - 1);
             end = @min(end, source.len);
 
-            try writer.print("file: {s}\ntype: {s}, line: {}, column_start: {}, column_end: {}, source_start: {}, source_end: {}\n", .{ file_path, tok.toString(err.token.token_type), line, column, column + end - start, start, end });
+            try writer.print("file: {s}\ntype: {s}, line: {}, column_start: {}, column_end: {}, source_start: {}, source_end: {}\n", .{ file_path, Token.toString(err.token.token_type), line, column, column + end - start, start, end });
 
             var lines = std.mem.splitSequence(u8, source, "\n");
             var lineNumber: usize = 1;

@@ -1,17 +1,22 @@
 const std = @import("std");
-const values = @import("values.zig");
-const adapter = @import("values.zig").adapter;
-const Bytecode = @import("bytecode.zig").Bytecode;
-const Vm = @import("vm.zig").Vm;
-const Enum = @import("enum.zig").Enum;
-const Class = @import("class.zig").Class;
-const UUID = @import("utils/uuid.zig").UUID;
-const DebugInfo = @import("./utils/debug.zig").DebugInfo;
 
-const testing = std.testing;
-const Nil = values.Nil;
-const Void = values.Void;
-const Value = values.Value;
+const types = @import("../types/index.zig");
+const Nil = types.Nil;
+const Void = types.Void;
+const True = types.True;
+const False = types.False;
+const Value = types.Value;
+const Enum = types.Enum;
+const Class = types.Class;
+
+const backend = @import("../backend/index.zig");
+const Bytecode = backend.Bytecode;
+const DebugInfo = backend.DebugInfo;
+
+const runtime = @import("../runtime/index.zig");
+const Vm = runtime.Vm;
+
+const UUID = @import("../utils/index.zig").UUID;
 
 pub const State = struct {
     pub fn calculateSize(vm: *Vm) !usize {
@@ -232,7 +237,7 @@ pub const State = struct {
         if (entry.object.get("number")) |v| return .{ .number = @floatCast(v.float) };
         if (entry.object.get("string")) |v| return try vm.gc.create(vm, .{ .string = try vm.allocator.dupe(u8, v.string) });
         if (entry.object.get("nil") != null) return Nil;
-        if (entry.object.get("boolean")) |v| return if (v.bool) values.True else values.False;
+        if (entry.object.get("boolean")) |v| return if (v.bool) True else False;
         if (entry.object.get("visit")) |v| return .{ .visit = @intCast(v.integer) };
         if (entry.object.get("ref")) |v| {
             if (refs.get(UUID.fromString(v.string))) |ref| return ref;

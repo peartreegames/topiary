@@ -1,18 +1,25 @@
 const std = @import("std");
-const Vm = @import("vm.zig").Vm;
-const Value = @import("values.zig").Value;
-const Scope = @import("scope.zig").Scope;
-const Compiler = @import("compiler.zig").Compiler;
-const Errors = @import("compiler-error.zig").CompilerErrors;
-const module = @import("module.zig");
-const runners = @import("runner.zig");
-const Locale = @import("locale.zig").Locale;
+
+const runtime = @import("runtime/index.zig");
+const Vm = runtime.Vm;
+const Runner = runtime.Runner;
+const Line = runtime.Line;
+const Choice = runtime.Choice;
+
+const types = @import("types/index.zig");
+const Value = types.Value;
+
+const backend = @import("backend/index.zig");
+const Scope = backend.Scope;
+const Compiler = backend.Compiler;
+const Errors = backend.CompilerErrors;
+
+const locale = @import("locale.zig");
+const Locale = locale.Locale;
+
 const version = @import("build").version;
 
-const Runner = runners.Runner;
-const Line = runners.Line;
-const Choice = runners.Choice;
-
+const module = @import("module.zig");
 const File = module.File;
 const Module = module.Module;
 

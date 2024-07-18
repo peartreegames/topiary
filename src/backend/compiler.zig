@@ -1,24 +1,34 @@
 const std = @import("std");
-const ast = @import("ast.zig");
-const parser = @import("parser.zig");
-const Token = @import("token.zig").Token;
-const OpCode = @import("opcode.zig").OpCode;
-const CompilerErrors = @import("compiler-error.zig").CompilerErrors;
-const Value = @import("values.zig").Value;
-const ValueType = @import("values.zig").Type;
-const String = @import("values.zig").String;
+
+const frontend = @import("../frontend/index.zig");
+const Statement = frontend.Statement;
+const Expression = frontend.Expression;
+const Parser = frontend.Parser;
+const Token = frontend.Token;
+
+const utils = @import("../utils/index.zig");
+const UUID = utils.UUID;
+const C = utils.C;
+
+const DebugInfo = @import("debug.zig").DebugInfo;
+const builtins = @import("../runtime/index.zig").builtin_definitions;
+
+const Module = @import("../module.zig").Module;
+
+const types = @import("../types/index.zig");
+const Value = types.Value;
+const ValueType = types.Type;
+const String = types.String;
+const Enum = types.Enum;
+
 const Scope = @import("scope.zig").Scope;
 const Symbol = @import("scope.zig").Symbol;
-const builtins = @import("builtins.zig").builtins;
+const CompilerErrors = @import("error.zig").CompilerErrors;
 const Bytecode = @import("bytecode.zig").Bytecode;
-const JumpTree = @import("structures/jump-tree.zig").JumpTree;
-const VisitTree = @import("structures/visit-tree.zig").VisitTree;
-const Enum = @import("enum.zig").Enum;
-const Module = @import("module.zig").Module;
-const UUID = @import("utils/uuid.zig").UUID;
-const DebugInfo = @import("./utils/debug.zig").DebugInfo;
+const JumpTree = @import("jump-tree.zig").JumpTree;
+const VisitTree = @import("visit-tree.zig").VisitTree;
+const OpCode = @import("opcode.zig").OpCode;
 
-const testing = std.testing;
 const BREAK_HOLDER = 9000;
 const CONTINUE_HOLDER = 9001;
 const CHOICE_HOLDER = 9002;
@@ -50,7 +60,7 @@ pub const Compiler = struct {
     err: *CompilerErrors,
     scope: *Scope,
     root_scope: *Scope,
-    identifier_cache: std.StringHashMap(OpCode.Size(.constant)),
+    identifier_cache: std.StringHashMap(C.CONSTANT),
     chunk: *Chunk,
     locals_count: usize = 0,
     use_loc: bool = false,
@@ -60,7 +70,7 @@ pub const Compiler = struct {
     divert_log: std.ArrayList(JumpTree.Entry),
     visit_tree: VisitTree,
 
-    types: std.StringHashMap(ast.Statement),
+    types: std.StringHashMap(Statement),
 
     pub const Chunk = struct {
         instructions: std.ArrayList(u8),
@@ -144,7 +154,7 @@ pub const Compiler = struct {
         SymbolAlreadyDeclared,
         ExternError,
         NotYetImplemented,
-    } || parser.Parser.Error;
+    } || Parser.Error;
 
     pub fn init(allocator: std.mem.Allocator, module: *Module) !Compiler {
         if (!module.entry.tree_loaded) return error.CompilerError;
@@ -156,14 +166,14 @@ pub const Compiler = struct {
             .builtins = root_builtins,
             .constants = std.ArrayList(Value).init(allocator),
             .uuids = std.ArrayList(UUID.ID).init(allocator),
-            .identifier_cache = std.StringHashMap(OpCode.Size(.constant)).init(allocator),
+            .identifier_cache = std.StringHashMap(C.CONSTANT).init(allocator),
             .chunk = root_chunk,
             .scope = root_scope,
             .root_scope = root_scope,
             .jump_tree = try JumpTree.init(allocator),
             .visit_tree = try VisitTree.init(allocator),
             .divert_log = std.ArrayList(JumpTree.Entry).init(allocator),
-            .types = std.StringHashMap(ast.Statement).init(allocator),
+            .types = std.StringHashMap(Statement).init(allocator),
             .err = &module.entry.errors,
             .module = module,
         };
@@ -309,7 +319,7 @@ pub const Compiler = struct {
         old_scope.destroy();
     }
 
-    pub fn precompileJumps(self: *Compiler, stmt: ast.Statement, node: *JumpTree.Node) Error!void {
+    pub fn precompileJumps(self: *Compiler, stmt: Statement, node: *JumpTree.Node) Error!void {
         switch (stmt.type) {
             .include => |i| {
                 const tmp = self.err;
@@ -372,7 +382,7 @@ pub const Compiler = struct {
         }
     }
 
-    pub fn compileStatement(self: *Compiler, stmt: ast.Statement) Error!void {
+    pub fn compileStatement(self: *Compiler, stmt: Statement) Error!void {
         const token = stmt.token;
         switch (stmt.type) {
             .include => |i| {
@@ -388,21 +398,21 @@ pub const Compiler = struct {
             .@"if" => |i| {
                 try self.compileExpression(i.condition);
                 try self.writeOp(.jump_if_false, token);
-                const falsePos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
+                const falsePos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
                 try self.compileBlock(i.then_branch);
 
                 try self.writeOp(.jump, token);
-                const jumpPos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
-                try self.replaceValue(falsePos, OpCode.Size(.jump), self.instructionPos());
+                const jumpPos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
+                try self.replaceValue(falsePos, C.JUMP, self.instructionPos());
 
                 if (i.else_branch == null) {
                     try self.writeOp(.nil, token);
                     try self.writeOp(.pop, token);
-                    try self.replaceValue(jumpPos, OpCode.Size(.jump), self.instructionPos());
+                    try self.replaceValue(jumpPos, C.JUMP, self.instructionPos());
                     return;
                 }
                 try self.compileBlock(i.else_branch.?);
-                try self.replaceValue(jumpPos, OpCode.Size(.jump), self.instructionPos());
+                try self.replaceValue(jumpPos, C.JUMP, self.instructionPos());
             },
             .@"switch" => |s| {
                 const start = self.instructionPos();
@@ -422,14 +432,14 @@ pub const Compiler = struct {
                         has_else = true;
                     }
                     try self.writeOp(.prong, prong_stmt.token);
-                    const prong_jump = try self.writeInt(OpCode.Size(.jump), PRONG_HOLDER, prong_stmt.token);
+                    const prong_jump = try self.writeInt(C.JUMP, PRONG_HOLDER, prong_stmt.token);
                     _ = try self.writeInt(u8, @as(u8, @intCast(if (prong.values) |p| p.len else 0)), prong_stmt.token);
                     prong_jumps[i] = prong_jump;
                 }
                 // add an empty else if none found
                 if (!has_else) {
                     try self.writeOp(.prong, token);
-                    const prong_jump = try self.writeInt(OpCode.Size(.jump), PRONG_HOLDER, token);
+                    const prong_jump = try self.writeInt(C.JUMP, PRONG_HOLDER, token);
                     _ = try self.writeInt(u8, 0, token);
                     inferred_else_jump = prong_jump;
                 }
@@ -437,20 +447,20 @@ pub const Compiler = struct {
                 // replace jumps and compile body
                 for (s.prongs, 0..) |prong_stmt, i| {
                     const prong = prong_stmt.type.switch_prong;
-                    try self.replaceValue(prong_jumps[i], OpCode.Size(.jump), self.instructionPos());
+                    try self.replaceValue(prong_jumps[i], C.JUMP, self.instructionPos());
                     try self.enterScope(.local);
                     try self.compileBlock(prong.body);
                     try self.writeOp(.jump, prong_stmt.token);
-                    _ = try self.writeInt(OpCode.Size(.jump), SWITCH_END_HOLDER, prong_stmt.token);
+                    _ = try self.writeInt(C.JUMP, SWITCH_END_HOLDER, prong_stmt.token);
                     try self.exitScope();
                 }
 
                 if (inferred_else_jump) |jump| {
-                    try self.replaceValue(jump, OpCode.Size(.jump), self.instructionPos());
+                    try self.replaceValue(jump, C.JUMP, self.instructionPos());
                     try self.enterScope(.local);
-                    try self.compileBlock(&[_]ast.Statement{});
+                    try self.compileBlock(&[_]Statement{});
                     try self.writeOp(.jump, token);
-                    _ = try self.writeInt(OpCode.Size(.jump), SWITCH_END_HOLDER, token);
+                    _ = try self.writeInt(C.JUMP, SWITCH_END_HOLDER, token);
                     try self.exitScope();
                 }
 
@@ -464,11 +474,11 @@ pub const Compiler = struct {
             },
             .@"break" => {
                 try self.writeOp(.jump, token);
-                _ = try self.writeInt(OpCode.Size(.jump), BREAK_HOLDER, token);
+                _ = try self.writeInt(C.JUMP, BREAK_HOLDER, token);
             },
             .@"continue" => {
                 try self.writeOp(.jump, token);
-                _ = try self.writeInt(OpCode.Size(.jump), CONTINUE_HOLDER, token);
+                _ = try self.writeInt(C.JUMP, CONTINUE_HOLDER, token);
             },
             .@"while" => |w| {
                 try self.enterScope(.local);
@@ -476,14 +486,14 @@ pub const Compiler = struct {
                 const start = self.instructionPos();
                 try self.compileExpression(&w.condition);
                 try self.writeOp(.jump_if_false, token);
-                const temp_start = try self.writeInt(OpCode.Size(.jump_if_false), JUMP_HOLDER, token);
+                const temp_start = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
 
                 try self.compileBlock(w.body);
                 try self.writeOp(.jump, token);
-                _ = try self.writeInt(OpCode.Size(.jump), start, token);
+                _ = try self.writeInt(C.JUMP, start, token);
 
                 const end = self.instructionPos();
-                try self.replaceValue(temp_start, OpCode.Size(.jump), end);
+                try self.replaceValue(temp_start, C.JUMP, end);
 
                 try replaceJumps(self.chunk.instructions.items[start..], BREAK_HOLDER, end);
                 try replaceJumps(self.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
@@ -496,19 +506,19 @@ pub const Compiler = struct {
 
                 try self.writeOp(.iter_next, token);
                 try self.writeOp(.jump_if_false, token);
-                const jump_end = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
+                const jump_end = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
 
                 try self.enterScope(.local);
                 try self.writeOp(.set_local, token);
-                _ = try self.writeInt(OpCode.Size(.set_local), 0, token);
+                _ = try self.writeInt(C.LOCAL, 0, token);
                 _ = try self.scope.define(f.capture, false, false);
 
                 try self.compileBlock(f.body);
                 try self.writeOp(.jump, token);
-                _ = try self.writeInt(OpCode.Size(.jump), start, token);
+                _ = try self.writeInt(C.JUMP, start, token);
 
                 const end = self.instructionPos();
-                try self.replaceValue(jump_end, OpCode.Size(.jump), end);
+                try self.replaceValue(jump_end, C.JUMP, end);
                 try replaceJumps(self.chunk.instructions.items[start..], BREAK_HOLDER, end);
                 try replaceJumps(self.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
 
@@ -541,7 +551,7 @@ pub const Compiler = struct {
 
                 try self.getOrSetIdentifierConstant(c.name, token);
                 try self.writeOp(.class, token);
-                _ = try self.writeInt(OpCode.Size(.class), @as(OpCode.Size(.class), @intCast(c.fields.len)), token);
+                _ = try self.writeInt(C.FIELDS, @as(C.FIELDS, @intCast(c.fields.len)), token);
                 const symbol = self.scope.define(c.name, false, false) catch {
                     return self.fail("'{s}' is already declared", token, .{c.name});
                 };
@@ -568,7 +578,7 @@ pub const Compiler = struct {
                 };
                 const i = try self.addConstant(.{ .obj = obj });
                 try self.writeOp(.constant, token);
-                _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                _ = try self.writeInt(C.CONSTANT, i, token);
 
                 const symbol = try self.scope.define(e.name, false, false);
                 try self.setSymbol(symbol, token, true);
@@ -608,12 +618,12 @@ pub const Compiler = struct {
                 var backup_pos: usize = 0;
                 if (f.is_backup) {
                     try self.writeOp(.backup, token);
-                    backup_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
+                    backup_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
                 }
                 try self.writeOp(.fork, token);
                 const end_pos = self.instructionPos();
                 if (f.is_backup) {
-                    try self.replaceValue(backup_pos, OpCode.Size(.jump), end_pos);
+                    try self.replaceValue(backup_pos, C.JUMP, end_pos);
                 }
             },
             .choice => |c| {
@@ -645,15 +655,15 @@ pub const Compiler = struct {
                 } else try self.compileExpression(&c.content);
 
                 try self.writeOp(.choice, token);
-                const start_pos = try self.writeInt(OpCode.Size(.jump), CHOICE_HOLDER, token);
+                const start_pos = try self.writeInt(C.JUMP, CHOICE_HOLDER, token);
                 _ = try self.writeInt(u8, if (c.is_unique) 1 else 0, token);
                 try self.writeId(c.id, token);
-                _ = try self.writeInt(OpCode.Size(.get_global), visit_symbol.?.index, token);
+                _ = try self.writeInt(C.GLOBAL, visit_symbol.?.index, token);
                 _ = try self.writeInt(u8, @as(u8, @intCast(c.tags.len)), token);
 
                 try self.writeOp(.jump, token);
-                const jump_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
-                try self.replaceValue(start_pos, OpCode.Size(.jump), self.instructionPos());
+                const jump_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
+                try self.replaceValue(start_pos, C.JUMP, self.instructionPos());
 
                 try self.enterScope(.local);
 
@@ -661,7 +671,7 @@ pub const Compiler = struct {
                 try self.compileBlock(c.body);
                 try self.writeOp(.fin, token);
                 try self.exitScope();
-                try self.replaceValue(jump_pos, OpCode.Size(.jump), self.instructionPos());
+                try self.replaceValue(jump_pos, C.JUMP, self.instructionPos());
             },
             .bough => |b| {
                 try self.visit_tree.list.append(b.name);
@@ -671,7 +681,7 @@ pub const Compiler = struct {
 
                 // skip over bough when running through instructions
                 try self.writeOp(.jump, token);
-                const start_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
+                const start_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
 
                 self.jump_tree.current = try self.jump_tree.current.getChild(b.name);
                 self.jump_tree.current.*.dest_ip = self.instructionPos();
@@ -691,7 +701,7 @@ pub const Compiler = struct {
                 try self.exitScope();
 
                 const end = self.instructionPos();
-                try self.replaceValue(start_pos, OpCode.Size(.jump), end);
+                try self.replaceValue(start_pos, C.JUMP, end);
             },
             .dialogue => |d| {
                 for (d.tags) |tag| {
@@ -726,7 +736,7 @@ pub const Compiler = struct {
                 var backup_pos: usize = 0;
                 if (d.is_backup) {
                     try self.writeOp(.backup, token);
-                    backup_pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
+                    backup_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
                 }
                 try self.writeOp(.divert, token);
                 _ = try self.writeInt(u8, @as(u8, @intCast(d.path.len)), token);
@@ -734,11 +744,11 @@ pub const Compiler = struct {
                 while (i > 0) : (i -= 1) {
                     const node = try self.getDivertNode(d.path[0..i], token);
                     try self.divert_log.append(.{ .node = node, .jump_ip = self.instructionPos() });
-                    _ = try self.writeInt(OpCode.Size(.divert), DIVERT_HOLDER, token);
+                    _ = try self.writeInt(C.JUMP, DIVERT_HOLDER, token);
                 }
                 const end_pos = self.instructionPos();
                 if (d.is_backup) {
-                    try self.replaceValue(backup_pos, OpCode.Size(.jump), end_pos);
+                    try self.replaceValue(backup_pos, C.JUMP, end_pos);
                 }
             },
             .return_expression => |r| {
@@ -778,7 +788,7 @@ pub const Compiler = struct {
     fn replaceDiverts(self: *Compiler) !void {
         for (self.divert_log.items) |entry| {
             const dest = entry.node.dest_ip;
-            try self.replaceValue(entry.jump_ip, OpCode.Size(.jump), dest);
+            try self.replaceValue(entry.jump_ip, C.JUMP, dest);
         }
     }
 
@@ -796,7 +806,7 @@ pub const Compiler = struct {
         }
     }
 
-    pub fn compileBlock(self: *Compiler, stmts: []const ast.Statement) Error!void {
+    pub fn compileBlock(self: *Compiler, stmts: []const Statement) Error!void {
         for (stmts) |stmt| {
             try self.compileStatement(stmt);
         }
@@ -811,7 +821,7 @@ pub const Compiler = struct {
             return self.fail("Visit '{s}' is already declared", token, .{path});
         };
         try self.writeOp(.constant, token);
-        _ = try self.writeInt(OpCode.Size(.constant), 4, token);
+        _ = try self.writeInt(C.CONSTANT, 4, token);
         try self.setSymbol(symbol, token, true);
         try self.visit_tree.push(name, symbol.index);
     }
@@ -819,11 +829,11 @@ pub const Compiler = struct {
     fn compileVisit(self: *Compiler, symbol: ?*Symbol, name: []const u8, token: Token) Error!void {
         if (symbol) |sym| {
             try self.writeOp(.visit, token);
-            _ = try self.writeInt(OpCode.Size(.get_global), sym.index, token);
+            _ = try self.writeInt(C.GLOBAL, sym.index, token);
         } else return self.failError("Unknown symbol '{s}'", token, .{name}, Error.SymbolNotFound);
     }
 
-    pub fn compileExpression(self: *Compiler, expr: *const ast.Expression) Error!void {
+    pub fn compileExpression(self: *Compiler, expr: *const Expression) Error!void {
         const token = expr.token;
         switch (expr.type) {
             .binary => |bin| {
@@ -916,7 +926,7 @@ pub const Compiler = struct {
             .number => |n| {
                 const i = try self.addConstant(.{ .number = n });
                 try self.writeOp(.constant, token);
-                _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                _ = try self.writeInt(C.CONSTANT, i, token);
             },
             .boolean => |b| try self.writeOp(if (b) .true else .false, token),
             .string => |s| {
@@ -935,7 +945,7 @@ pub const Compiler = struct {
                 obj.* = .{ .data = .{ .string = try value.toOwnedSlice() } };
                 const index = try self.addConstant(.{ .obj = obj });
                 try self.writeOp(.string, token);
-                _ = try self.writeInt(OpCode.Size(.constant), index, token);
+                _ = try self.writeInt(C.CONSTANT, index, token);
                 _ = try self.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
             },
             .list => |l| {
@@ -943,7 +953,7 @@ pub const Compiler = struct {
                     try self.compileExpression(item);
                 }
                 try self.writeOp(.list, token);
-                const size = OpCode.Size(.list);
+                const size = C.COLLECTION;
                 const length = @as(size, @intCast(l.len));
                 _ = try self.writeInt(size, length, token);
             },
@@ -951,7 +961,7 @@ pub const Compiler = struct {
                 for (m) |*mp| {
                     try self.compileExpression(mp);
                 }
-                const size = OpCode.Size(.map);
+                const size = C.COLLECTION;
                 try self.writeOp(.map, token);
                 const length = @as(size, @intCast(m.len));
                 _ = try self.writeInt(size, length, token);
@@ -960,7 +970,7 @@ pub const Compiler = struct {
                 for (s) |*item| {
                     try self.compileExpression(item);
                 }
-                const size = OpCode.Size(.set);
+                const size = C.COLLECTION;
                 try self.writeOp(.set, token);
                 const length = @as(size, @intCast(s.len));
                 _ = try self.writeInt(size, length, token);
@@ -1013,15 +1023,15 @@ pub const Compiler = struct {
                 try self.compileExpression(i.condition);
                 try self.writeOp(.jump_if_false, token);
                 // temp garbage value
-                const pos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
+                const pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
                 try self.compileExpression(i.then_value);
 
                 try self.writeOp(.jump, token);
-                const nextPos = try self.writeInt(OpCode.Size(.jump), JUMP_HOLDER, token);
-                try self.replaceValue(pos, OpCode.Size(.jump), self.instructionPos());
+                const nextPos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
+                try self.replaceValue(pos, C.JUMP, self.instructionPos());
 
                 try self.compileExpression(i.else_value);
-                try self.replaceValue(nextPos, OpCode.Size(.jump), self.instructionPos());
+                try self.replaceValue(nextPos, C.JUMP, self.instructionPos());
             },
             .function => |f| {
                 try self.enterScope(.closure);
@@ -1072,11 +1082,11 @@ pub const Compiler = struct {
                 const i = try self.addConstant(.{ .obj = obj });
 
                 try self.writeOp(.closure, token);
-                _ = try self.writeInt(OpCode.Size(.constant), i, token);
+                _ = try self.writeInt(C.CONSTANT, i, token);
                 _ = try self.writeInt(u8, @as(u8, @intCast(free_symbols.len)), token);
             },
             .instance => |ins| {
-                const cls: ?ast.Statement = self.types.get(ins.name);
+                const cls: ?Statement = self.types.get(ins.name);
                 if (cls == null or cls.?.type != .class) return self.fail("Unknown class '{s}'", token, .{ins.name});
                 for (ins.fields, 0..) |field, i| {
                     if (!arrayOfTypeContains(u8, cls.?.type.class.field_names, ins.field_names[i]))
@@ -1087,7 +1097,7 @@ pub const Compiler = struct {
                 const symbol = try self.scope.resolve(ins.name);
                 try self.loadSymbol(symbol, ins.name, token);
                 try self.writeOp(.instance, token);
-                _ = try self.writeInt(OpCode.Size(.instance), @as(OpCode.Size(.instance), @intCast(ins.fields.len)), token);
+                _ = try self.writeInt(C.FIELDS, @as(C.FIELDS, @intCast(ins.fields.len)), token);
             },
             .call => |c| {
                 try self.compileExpression(c.target);
@@ -1095,7 +1105,7 @@ pub const Compiler = struct {
                     try self.compileExpression(arg);
                 }
                 try self.writeOp(.call, token);
-                const size = OpCode.Size(.call);
+                const size = C.ARGS;
                 std.debug.assert(c.arguments.len < std.math.maxInt(size));
                 var length = c.arguments.len;
                 if (c.target.type == .indexer) length += 1;
@@ -1116,19 +1126,16 @@ pub const Compiler = struct {
             switch (ptr.tag) {
                 .global => {
                     try self.writeOp(if (is_decl) .decl_global else .set_global, token);
-                    const size = OpCode.Size(.set_global);
-                    _ = try self.writeInt(size, @as(size, @intCast(ptr.index)), token);
+                    _ = try self.writeInt(C.GLOBAL, @as(C.GLOBAL, @intCast(ptr.index)), token);
                 },
                 .free => {
                     try self.writeOp(.set_free, token);
-                    const size = OpCode.Size(.set_free);
-                    _ = try self.writeInt(size, @as(size, @intCast(ptr.index)), token);
+                    _ = try self.writeInt(C.FREE, @as(C.FREE, @intCast(ptr.index)), token);
                 },
                 .builtin, .function => return self.failError("Cannot set '{s}'", token, .{ptr.name}, Error.IllegalOperation),
                 else => {
                     try self.writeOp(.set_local, token);
-                    const size = OpCode.Size(.set_local);
-                    _ = try self.writeInt(size, @as(size, @intCast(ptr.index)), token);
+                    _ = try self.writeInt(C.LOCAL, @as(C.LOCAL, @intCast(ptr.index)), token);
                 },
             }
         } else return self.failError("Unknown symbol", token, .{}, Error.SymbolNotFound);
@@ -1139,25 +1146,22 @@ pub const Compiler = struct {
             switch (ptr.tag) {
                 .global => {
                     try self.writeOp(.get_global, token);
-                    _ = try self.writeInt(OpCode.Size(.get_global), ptr.index, token);
+                    _ = try self.writeInt(C.GLOBAL, ptr.index, token);
                 },
                 .builtin => {
                     try self.writeOp(.get_builtin, token);
-                    const size = OpCode.Size(.get_builtin);
-                    _ = try self.writeInt(size, @as(size, @intCast(ptr.index)), token);
+                    _ = try self.writeInt(C.BUILTIN, @as(C.BUILTIN, @intCast(ptr.index)), token);
                 },
                 .free => {
                     try self.writeOp(.get_free, token);
-                    const size = OpCode.Size(.get_free);
-                    _ = try self.writeInt(size, @as(size, @intCast(ptr.index)), token);
+                    _ = try self.writeInt(C.FREE, @as(C.FREE, @intCast(ptr.index)), token);
                 },
                 .function => {
                     try self.writeOp(.current_closure, token);
                 },
                 else => {
                     try self.writeOp(.get_local, token);
-                    const size = OpCode.Size(.get_local);
-                    _ = try self.writeInt(size, @as(size, @intCast(ptr.index)), token);
+                    _ = try self.writeInt(C.LOCAL, @as(C.LOCAL, @intCast(ptr.index)), token);
                 },
             }
         } else return self.failError("Unknown symbol '{s}'", token, .{name}, Error.SymbolNotFound);
@@ -1165,11 +1169,11 @@ pub const Compiler = struct {
 
     fn loadVisit(self: *Compiler, node: *VisitTree.Node, token: Token) !void {
         try self.writeOp(.get_global, token);
-        _ = try self.writeInt(OpCode.Size(.get_global), node.index, token);
+        _ = try self.writeInt(C.GLOBAL, node.index, token);
     }
 
-    fn instructionPos(self: *Compiler) OpCode.Size(.jump) {
-        return @as(OpCode.Size(.jump), @intCast(self.chunk.instructions.items.len));
+    fn instructionPos(self: *Compiler) C.JUMP {
+        return @as(C.JUMP, @intCast(self.chunk.instructions.items.len));
     }
 
     fn writeOp(self: *Compiler, op: OpCode, token: Token) !void {
@@ -1195,7 +1199,7 @@ pub const Compiler = struct {
 
     pub fn writeId(self: *Compiler, id: UUID.ID, token: Token) !void {
         try self.uuids.append(id);
-        _ = try self.writeInt(OpCode.Size(.constant), @as(OpCode.Size(.constant), @intCast(self.uuids.items.len - 1)), token);
+        _ = try self.writeInt(C.CONSTANT, @as(C.CONSTANT, @intCast(self.uuids.items.len - 1)), token);
     }
 
     pub fn replaceValue(self: *Compiler, pos: usize, comptime T: type, value: T) !void {
@@ -1207,13 +1211,13 @@ pub const Compiler = struct {
         }
     }
 
-    pub fn replaceJumps(instructions: []u8, old_pos: OpCode.Size(.jump), new_pos: OpCode.Size(.jump)) !void {
+    pub fn replaceJumps(instructions: []u8, old_pos: C.JUMP, new_pos: C.JUMP) !void {
         var i: usize = 0;
         const jump = @intFromEnum(OpCode.jump);
         while (i < instructions.len) : (i += 1) {
-            if (instructions[i] == jump and std.mem.readVarInt(OpCode.Size(.jump), instructions[(i + 1)..(i + @sizeOf(OpCode.Size(.jump)))], .little) == old_pos) {
-                var buf: [@sizeOf(OpCode.Size(.jump))]u8 = undefined;
-                std.mem.writeInt(OpCode.Size(.jump), buf[0..], new_pos, .little);
+            if (instructions[i] == jump and std.mem.readVarInt(C.JUMP, instructions[(i + 1)..(i + @sizeOf(C.JUMP))], .little) == old_pos) {
+                var buf: [@sizeOf(C.JUMP)]u8 = undefined;
+                std.mem.writeInt(C.JUMP, buf[0..], new_pos, .little);
                 for (buf, 0..) |v, index| {
                     instructions[i + index + 1] = v;
                 }
@@ -1221,7 +1225,7 @@ pub const Compiler = struct {
         }
     }
 
-    pub fn isVisitExpression(self: *Compiler, index: *const ast.Expression, token: Token) !bool {
+    pub fn isVisitExpression(self: *Compiler, index: *const Expression, token: Token) !bool {
         var idx = index.type.indexer;
         if (idx.index.type != .identifier) return false;
         if (idx.target.type != .indexer and idx.target.type != .identifier) return false;
@@ -1252,9 +1256,9 @@ pub const Compiler = struct {
         } else return false;
     }
 
-    pub fn addConstant(self: *Compiler, value: Value) !OpCode.Size(.constant) {
+    pub fn addConstant(self: *Compiler, value: Value) !C.CONSTANT {
         try self.constants.append(value);
-        return @as(OpCode.Size(.constant), @intCast(self.constants.items.len - 1));
+        return @as(C.CONSTANT, @intCast(self.constants.items.len - 1));
     }
 
     fn initializeConstants(self: *Compiler) !void {
@@ -1266,7 +1270,7 @@ pub const Compiler = struct {
     fn getOrSetIdentifierConstant(self: *Compiler, name: []const u8, token: Token) !void {
         if (self.identifier_cache.get(name)) |position| {
             try self.writeOp(.constant, token);
-            _ = try self.writeInt(OpCode.Size(.constant), position, token);
+            _ = try self.writeInt(C.CONSTANT, position, token);
             return;
         }
         const obj = try self.allocator.create(Value.Obj);
@@ -1275,6 +1279,6 @@ pub const Compiler = struct {
         try self.identifier_cache.putNoClobber(name, i);
 
         try self.writeOp(.constant, token);
-        _ = try self.writeInt(OpCode.Size(.constant), i, token);
+        _ = try self.writeInt(C.CONSTANT, i, token);
     }
 };

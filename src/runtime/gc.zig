@@ -1,7 +1,7 @@
 const std = @import("std");
-const Vm = @import("./vm.zig").Vm;
-const Value = @import("./values.zig").Value;
-const UUID = @import("./utils/uuid.zig").UUID;
+const Vm = @import("vm.zig").Vm;
+const Value = @import("../types/index.zig").Value;
+const UUID = @import("../utils/index.zig").UUID;
 
 const Obj = Value.Obj;
 

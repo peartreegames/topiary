@@ -1,5 +1,4 @@
 const std = @import("std");
-const testing = std.testing;
 
 pub const Token = struct {
     token_type: TokenType,
@@ -14,6 +13,88 @@ pub const Token = struct {
             self.start == other.start and
             self.end == other.end and
             self.file_index == other.file_index;
+    }
+
+    pub fn toString(token_type: TokenType) []const u8 {
+        return switch (token_type) {
+            .left_paren => "(",
+            .right_paren => ")",
+            .left_brace => "{{",
+            .right_brace => "}}",
+            .left_bracket => "[",
+            .right_bracket => "]",
+
+            .at => "@",
+            .caret => "^",
+            .colon => ":",
+            .comma => ",",
+            .dot => ".",
+            .dot_dot => "..",
+            .hash => "#",
+            .minus => "-",
+            .percent => "%",
+            .plus => "+",
+            .pipe => "|",
+            .semi_colon => ":",
+            .slash => "/",
+            .star => "*",
+            .tilde => "~",
+            .minus_equal => "-=",
+            .percent_equal => "%=",
+            .plus_equal => "+=",
+            .slash_equal => "/=",
+            .star_equal => "*=",
+
+            .bang => "!",
+            .bang_equal => "!=",
+            .equal => "=",
+            .equal_equal => "==",
+            .greater => ">",
+            .greater_equal => ">=",
+            .less => "<",
+            .less_equal => "<=",
+
+            .identifier => "[identifier]",
+            .number => "[number]",
+            .string => "[string]",
+
+            .@"and" => "and",
+            .@"break" => "break",
+            .@"const" => "const",
+            .@"continue" => "continue",
+            .@"else" => "else",
+            .@"enum" => "enum",
+            .enumseq => "enumseq",
+            .@"extern" => "extern",
+            .false => "false",
+            .@"for" => "for",
+            .@"if" => "if",
+            .include => "include",
+            .list => "List",
+            .map => "Map",
+            .new => "new",
+            .nil => "nil",
+            .@"or" => "or",
+            .@"return" => "return",
+            .self => "self",
+            .seq => "seq",
+            .set => "Set",
+            .class => "class",
+            .@"switch" => "switch",
+            .true => "true",
+            .@"var" => "var",
+            .void => "void",
+            .@"while" => "while",
+
+            .bough => "bough",
+            .divert => "=>",
+            .fork => "fork",
+            .fin => "fin",
+
+            .comment => "[comment]",
+            .eof => "[eof]",
+            .illegal => "[illegal]",
+        };
     }
 };
 
@@ -128,88 +209,6 @@ pub const Keywords = std.StaticStringMap(TokenType).initComptime(.{
     .{ "while", .@"while" },
 });
 
-pub fn toString(token_type: TokenType) []const u8 {
-    return switch (token_type) {
-        .left_paren => "(",
-        .right_paren => ")",
-        .left_brace => "{{",
-        .right_brace => "}}",
-        .left_bracket => "[",
-        .right_bracket => "]",
-
-        .at => "@",
-        .caret => "^",
-        .colon => ":",
-        .comma => ",",
-        .dot => ".",
-        .dot_dot => "..",
-        .hash => "#",
-        .minus => "-",
-        .percent => "%",
-        .plus => "+",
-        .pipe => "|",
-        .semi_colon => ":",
-        .slash => "/",
-        .star => "*",
-        .tilde => "~",
-        .minus_equal => "-=",
-        .percent_equal => "%=",
-        .plus_equal => "+=",
-        .slash_equal => "/=",
-        .star_equal => "*=",
-
-        .bang => "!",
-        .bang_equal => "!=",
-        .equal => "=",
-        .equal_equal => "==",
-        .greater => ">",
-        .greater_equal => ">=",
-        .less => "<",
-        .less_equal => "<=",
-
-        .identifier => "[identifier]",
-        .number => "[number]",
-        .string => "[string]",
-
-        .@"and" => "and",
-        .@"break" => "break",
-        .@"const" => "const",
-        .@"continue" => "continue",
-        .@"else" => "else",
-        .@"enum" => "enum",
-        .enumseq => "enumseq",
-        .@"extern" => "extern",
-        .false => "false",
-        .@"for" => "for",
-        .@"if" => "if",
-        .include => "include",
-        .list => "List",
-        .map => "Map",
-        .new => "new",
-        .nil => "nil",
-        .@"or" => "or",
-        .@"return" => "return",
-        .self => "self",
-        .seq => "seq",
-        .set => "Set",
-        .class => "class",
-        .@"switch" => "switch",
-        .true => "true",
-        .@"var" => "var",
-        .void => "void",
-        .@"while" => "while",
-
-        .bough => "bough",
-        .divert => "=>",
-        .fork => "fork",
-        .fin => "fin",
-
-        .comment => "[comment]",
-        .eof => "[eof]",
-        .illegal => "[illegal]",
-    };
-}
-
 pub fn findType(identifier: []const u8) TokenType {
     return Keywords.get(identifier) orelse .identifier;
 }
@@ -221,6 +220,6 @@ test "Identifiers" {
         "word",
     };
     for (idents) |ident| {
-        try testing.expect(findType(ident) == .identifier);
+        try std.testing.expect(findType(ident) == .identifier);
     }
 }

@@ -1,8 +1,13 @@
 const std = @import("std");
-const Value = @import("./values.zig").Value;
-const OpCode = @import("./opcode.zig").OpCode;
-const UUID = @import("./utils/uuid.zig").UUID;
-const DebugInfo = @import("./utils/debug.zig").DebugInfo;
+const types = @import("../types/index.zig");
+const Value = types.Value;
+
+const utils = @import("../utils/index.zig");
+const UUID = utils.UUID;
+const C = utils.C;
+
+const DebugInfo = @import("debug.zig").DebugInfo;
+const OpCode = @import("opcode.zig").OpCode;
 
 pub const Bytecode = struct {
     instructions: []u8,
@@ -14,11 +19,11 @@ pub const Bytecode = struct {
     boughs: []BoughJump,
     loc: []const u8,
 
-    pub const BoughJump = struct { name: []const u8, ip: OpCode.Size(.jump) };
+    pub const BoughJump = struct { name: []const u8, ip: C.JUMP };
 
     pub const GlobalSymbol = struct {
         name: []const u8,
-        index: OpCode.Size(.get_global),
+        index: C.GLOBAL,
         is_extern: bool,
         is_mutable: bool,
     };
@@ -47,7 +52,7 @@ pub const Bytecode = struct {
         for (self.global_symbols) |sym| {
             try writer.writeInt(u8, @as(u8, @intCast(sym.name.len)), .little);
             try writer.writeAll(sym.name);
-            try writer.writeInt(OpCode.Size(.get_global), @as(OpCode.Size(.get_global), @intCast(sym.index)), .little);
+            try writer.writeInt(C.GLOBAL, @as(C.GLOBAL, @intCast(sym.index)), .little);
             try writer.writeByte(if (sym.is_extern) 1 else 0);
             try writer.writeByte(if (sym.is_mutable) 1 else 0);
         }
@@ -56,7 +61,7 @@ pub const Bytecode = struct {
         for (self.boughs) |bough| {
             try writer.writeInt(u16, @as(u16, @intCast(bough.name.len)), .little);
             try writer.writeAll(bough.name);
-            try writer.writeInt(OpCode.Size(.jump), bough.ip, .little);
+            try writer.writeInt(C.JUMP, bough.ip, .little);
         }
 
         try writer.writeInt(u64, @as(u64, @intCast(self.instructions.len)), .little);
@@ -84,7 +89,7 @@ pub const Bytecode = struct {
             const buf = try allocator.alloc(u8, length);
             errdefer allocator.free(buf);
             try reader.readNoEof(buf);
-            const index = try reader.readInt(OpCode.Size(.get_global), .little);
+            const index = try reader.readInt(C.GLOBAL, .little);
             const is_extern = if (try reader.readByte() == 1) true else false;
             const is_mutable = if (try reader.readByte() == 1) true else false;
             global_symbols[count] = GlobalSymbol{
@@ -106,7 +111,7 @@ pub const Bytecode = struct {
             try reader.readNoEof(buf);
             boughs[count] = BoughJump{
                 .name = buf,
-                .ip = try reader.readInt(OpCode.Size(.jump), .little),
+                .ip = try reader.readInt(C.JUMP, .little),
             };
         }
 

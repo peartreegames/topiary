@@ -1,50 +1,43 @@
 const std = @import("std");
-const Compiler = @import("compiler.zig").Compiler;
-const Bytecode = @import("bytecode.zig").Bytecode;
-const parser = @import("parser.zig");
-const OpCode = @import("opcode.zig").OpCode;
-const values = @import("values.zig");
-const Stack = @import("structures/stack.zig").Stack;
+
+const backend = @import("../backend/index.zig");
+const Compiler = backend.Compiler;
+const Bytecode = backend.Bytecode;
+const OpCode = backend.OpCode;
+
+const types = @import("../types/index.zig");
+const Class = types.Class;
+const Value = types.Value;
+const Nil = types.Nil;
+const True = types.True;
+const False = types.False;
+const Void = types.Void;
+const Iterator = types.Iterator;
+
+const utils = @import("../utils/index.zig");
+const UUID = utils.UUID;
+const C = utils.C;
+
+const Stack = @import("stack.zig").Stack;
 const Gc = @import("gc.zig").Gc;
-const Token = @import("token.zig").Token;
 const Frame = @import("frame.zig").Frame;
-const Class = @import("class.zig").Class;
-const builtins = @import("builtins.zig");
-const Rnd = @import("builtins.zig").Rnd;
 const StateMap = @import("state.zig").StateMap;
+const builtins = @import("builtins.zig");
+
 const runners = @import("runner.zig");
 const Runner = runners.Runner;
 const Line = runners.Line;
 const Choice = runners.Choice;
-const UUID = @import("utils/uuid.zig").UUID;
-
-test {
-    _ = @import("vm.test.zig");
-    std.testing.refAllDeclsRecursive(@This());
-}
+const RuntimeErr = @import("error.zig").RuntimeErr;
 
 const stack_size = 4096;
 const frame_size = 255;
 const iterator_size = 255;
 const globals_size = 65535;
-const Value = values.Value;
-const Iterator = values.Iterator;
-const adapter = values.adapter;
-
-const input_buf: [2]u8 = undefined;
 
 const InterpretResult = union(enum) {
     Completed,
     Paused,
-};
-
-pub const RuntimeErr = struct {
-    line: u32 = 0,
-    file: ?[]const u8 = null,
-    msg: ?[]const u8 = null,
-    pub fn print(self: @This(), writer: anytype) void {
-        writer.print("Error at \"{?s}\" line {}: {?s}\n", .{ self.file, self.line, self.msg }) catch {};
-    }
 };
 
 /// Virtual Machine
@@ -61,9 +54,9 @@ pub const Vm = struct {
     /// Current iterators to allow easy nesting
     iterators: Stack(Iterator),
     /// List of positions to jump back to using `^`
-    jump_backups: std.ArrayList(OpCode.Size(.jump)),
+    jump_backups: std.ArrayList(C.JUMP),
     /// Used to ensure preceeding code is executed before arriving at Bough
-    jump_requests: std.ArrayList(OpCode.Size(.jump)),
+    jump_requests: std.ArrayList(C.JUMP),
 
     bytecode: Bytecode,
     /// Current instruction position
@@ -134,8 +127,8 @@ pub const Vm = struct {
             .gc = Gc.init(allocator),
             .stack = try Stack(Value).init(allocator, stack_size),
             .iterators = try Stack(Iterator).init(allocator, iterator_size),
-            .jump_backups = std.ArrayList(OpCode.Size(.jump)).init(allocator),
-            .jump_requests = std.ArrayList(OpCode.Size(.jump)).init(allocator),
+            .jump_backups = std.ArrayList(C.JUMP).init(allocator),
+            .jump_requests = std.ArrayList(C.JUMP).init(allocator),
             .choices_list = std.ArrayList(Choice).init(allocator),
             .value_subscribers = std.StringHashMap(void).init(allocator),
             .loc_map = std.AutoHashMap(UUID.ID, []const u8).init(allocator),
@@ -252,7 +245,7 @@ pub const Vm = struct {
     pub fn getExtern(self: *Vm, name: []const u8) !Value {
         const index = self.getExternIndex(name) catch |err| {
             if (err == Error.IllegalOperation) return err;
-            return values.Nil;
+            return Nil;
         };
         return self.globals[index];
     }
@@ -316,7 +309,7 @@ pub const Vm = struct {
                 }
             }
         }
-        std.mem.reverse(OpCode.Size(.jump), self.jump_requests.items);
+        std.mem.reverse(C.JUMP, self.jump_requests.items);
     }
 
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {
@@ -370,7 +363,7 @@ pub const Vm = struct {
 
             switch (op) {
                 .constant => {
-                    const index = self.readInt(OpCode.Size(.constant));
+                    const index = self.readInt(C.CONSTANT);
                     const value = self.bytecode.constants[index];
                     try self.push(value);
                 },
@@ -394,17 +387,17 @@ pub const Vm = struct {
                 },
                 .subtract, .multiply, .divide, .modulus => try self.binaryNumberOp(op),
                 .equal, .not_equal, .greater_than, .greater_than_equal => try self.comparisonOp(op),
-                .true => try self.push(values.True),
-                .false => try self.push(values.False),
-                .nil => try self.push(values.Nil),
+                .true => try self.push(True),
+                .false => try self.push(False),
+                .nil => try self.push(Nil),
                 .negate => try self.push(.{ .number = -self.pop().number }),
                 .not => {
                     const value = self.pop();
                     switch (value) {
-                        .bool => |b| try self.push(if (b) values.False else values.True),
-                        .nil => try self.push(values.True),
-                        .number => |n| try self.push(if (@abs(n) < 0.00001) values.False else values.True),
-                        else => try self.push(values.False),
+                        .bool => |b| try self.push(if (b) False else True),
+                        .nil => try self.push(True),
+                        .number => |n| try self.push(if (@abs(n) < 0.00001) False else True),
+                        else => try self.push(False),
                     }
                 },
                 .@"or" => {
@@ -424,19 +417,19 @@ pub const Vm = struct {
                     try self.push(.{ .bool = right.bool and left.bool });
                 },
                 .jump => {
-                    const dest = self.readInt(OpCode.Size(.jump));
+                    const dest = self.readInt(C.JUMP);
                     if (dest > self.currentFrame().instructions().len) break;
                     self.currentFrame().ip = dest;
                 },
                 .jump_if_false => {
-                    const dest = self.readInt(OpCode.Size(.jump_if_false));
+                    const dest = self.readInt(C.JUMP);
                     var condition = self.pop();
                     if (!try condition.isTruthy()) {
                         self.currentFrame().ip = dest;
                     }
                 },
                 .prong => {
-                    const dest = self.readInt(OpCode.Size(.jump));
+                    const dest = self.readInt(C.JUMP);
                     const values_count = self.readInt(u8);
                     const capture = self.stack.items[self.stack.count - values_count - 1];
                     var i: usize = 0;
@@ -454,7 +447,7 @@ pub const Vm = struct {
                     }
                 },
                 .decl_global => {
-                    const index = self.readInt(OpCode.Size(.get_global));
+                    const index = self.readInt(C.GLOBAL);
                     if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{index});
                     const value = self.pop();
                     // global already set from loaded state
@@ -465,7 +458,7 @@ pub const Vm = struct {
                     self.globals[index] = value;
                 },
                 .set_global => {
-                    const index = self.readInt(OpCode.Size(.set_global));
+                    const index = self.readInt(C.GLOBAL);
                     if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{index});
 
                     if (index >= self.globals.len) return self.fail("Globals index {} is out of bounds of current size {}", .{ index, self.globals.len });
@@ -479,12 +472,12 @@ pub const Vm = struct {
                     self.notifyValueChange(index, value);
                 },
                 .get_global => {
-                    const index = self.readInt(OpCode.Size(.get_global));
+                    const index = self.readInt(C.GLOBAL);
                     const value = self.globals[index];
                     try self.push(value);
                 },
                 .set_local => {
-                    const index = self.readInt(OpCode.Size(.set_local));
+                    const index = self.readInt(C.LOCAL);
                     const frame = self.currentFrame();
                     var value = self.pop();
                     const current = self.stack.items[frame.bp + index];
@@ -494,7 +487,7 @@ pub const Vm = struct {
                     self.stack.items[frame.bp + index] = value;
                 },
                 .get_local => {
-                    const index = self.readInt(OpCode.Size(.get_local));
+                    const index = self.readInt(C.LOCAL);
                     const frame = self.currentFrame();
                     const value = self.stack.items[frame.bp + index];
                     try self.push(value);
@@ -528,22 +521,22 @@ pub const Vm = struct {
                     }
                 },
                 .get_builtin => {
-                    const index = self.readInt(OpCode.Size(.get_builtin));
-                    const value = builtins.builtins[index].value;
+                    const index = self.readInt(C.BUILTIN);
+                    const value = builtins.definitions[index].value;
                     try self.push(value.*);
                 },
                 .get_free => {
-                    const index = self.readInt(OpCode.Size(.get_free));
+                    const index = self.readInt(C.FREE);
                     const obj = self.currentFrame().cl;
                     try self.push(obj.data.closure.free_values[index]);
                 },
                 .set_free => {
-                    const index = self.readInt(OpCode.Size(.get_free));
+                    const index = self.readInt(C.FREE);
                     var obj = self.currentFrame().cl;
                     obj.data.closure.free_values[index] = self.pop();
                 },
                 .string, .loc => {
-                    const index = self.readInt(OpCode.Size(.constant));
+                    const index = self.readInt(C.CONSTANT);
                     const str = if (op == .string) self.bytecode.constants[index].obj.*.data.string else self.loc_map.get(self.bytecode.uuids[index]) orelse return self.fail("Could not find localization id {s}", .{self.bytecode.uuids[index]});
                     var count = self.readInt(u8);
                     var args = try self.allocator.alloc(Value, count);
@@ -595,7 +588,7 @@ pub const Vm = struct {
                     try self.pushAlloc(.{ .string = try list.toOwnedSlice() });
                 },
                 .list => {
-                    var count = self.readInt(OpCode.Size(.list));
+                    var count = self.readInt(C.COLLECTION);
                     var list = try std.ArrayList(Value).initCapacity(self.allocator, count);
                     while (count > 0) : (count -= 1) {
                         try list.append(self.pop());
@@ -604,23 +597,23 @@ pub const Vm = struct {
                     try self.pushAlloc(.{ .list = list });
                 },
                 .map => {
-                    var count = self.readInt(OpCode.Size(.map));
-                    var map = Value.Obj.MapType.initContext(self.allocator, adapter);
+                    var count = self.readInt(C.COLLECTION);
+                    var map = Value.Obj.MapType.initContext(self.allocator, Value.adapter);
                     while (count > 0) : (count -= 1) {
                         const value = self.pop();
                         const key = self.pop();
                         try map.put(key, value);
                     }
-                    map.sort(adapter);
+                    map.sort(Value.adapter);
                     try self.pushAlloc(.{ .map = map });
                 },
                 .set => {
-                    var count = self.readInt(OpCode.Size(.set));
-                    var set = Value.Obj.SetType.initContext(self.allocator, adapter);
+                    var count = self.readInt(C.COLLECTION);
+                    var set = Value.Obj.SetType.initContext(self.allocator, Value.adapter);
                     while (count > 0) : (count -= 1) {
                         try set.put(self.pop(), {});
                     }
-                    set.sort(adapter);
+                    set.sort(Value.adapter);
                     try self.pushAlloc(.{ .set = set });
                 },
                 .iter_start => {
@@ -635,11 +628,11 @@ pub const Vm = struct {
                     const iter = self.iterators.peek().*;
                     var value = iter.value;
                     if (iter.index >= value.len()) {
-                        try self.push(values.Nil);
-                        try self.push(values.False);
+                        try self.push(Nil);
+                        try self.push(False);
                     } else {
                         try self.push(value.getAtIndex(iter.index));
-                        try self.push(values.True);
+                        try self.push(True);
                     }
                     self.iterators.peek().index += 1;
                 },
@@ -648,7 +641,7 @@ pub const Vm = struct {
                 },
                 .class => {
                     const value = self.pop();
-                    var count = self.readInt(OpCode.Size(.class));
+                    var count = self.readInt(C.FIELDS);
                     var fields = std.ArrayList(Class.Field).init(self.allocator);
                     errdefer fields.deinit();
                     while (count > 0) : (count -= 1) {
@@ -669,7 +662,7 @@ pub const Vm = struct {
                     const value = self.pop();
                     var class = value.obj.data.class;
 
-                    var count = self.readInt(OpCode.Size(.class));
+                    var count = self.readInt(C.FIELDS);
                     var fields = std.ArrayList(Class.Field).init(self.allocator);
                     defer fields.deinit();
                     while (count > 0) : (count -= 1) {
@@ -710,7 +703,7 @@ pub const Vm = struct {
                                         try self.push(builtins.Has.value);
                                         try self.push(target);
                                     } else if (std.mem.eql(u8, name, "count")) {
-                                        try self.push(.{ .number = @as(f32, @floatFromInt(o.data.string.len)) });
+                                        try self.push(.{ .number = @as(f64, @floatFromInt(o.data.string.len)) });
                                     } else return self.fail("Unknown method \"{s}\" on string. Only \"count\", \"has\" are allowed.", .{index.obj.data.string});
                                 }
                             },
@@ -736,9 +729,9 @@ pub const Vm = struct {
                                 } else if (index == .number) {
                                     const i = @as(u32, @intFromFloat(index.number));
                                     if (i < 0 or i >= l.items.len) {
-                                        try self.push(values.Nil);
+                                        try self.push(Nil);
                                     } else try self.push(l.items[i]);
-                                } else try self.push(values.Nil);
+                                } else try self.push(Nil);
                             },
                             .map => |m| {
                                 if (m.get(index)) |v| {
@@ -761,7 +754,7 @@ pub const Vm = struct {
                                         try self.push(builtins.Clear.value);
                                         try self.push(target);
                                     } else return self.fail("Unknown method \"{s}\" on map. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
-                                } else try self.push(values.Nil);
+                                } else try self.push(Nil);
                             },
                             .set => {
                                 if (index != .obj)
@@ -864,7 +857,7 @@ pub const Vm = struct {
                         const tag_value = self.pop();
                         tags[tag_count - i - 1] = tag_value.obj.data.string;
                     }
-                    const id_index = self.readInt(OpCode.Size(.constant));
+                    const id_index = self.readInt(C.CONSTANT);
                     if (is_in_jump) continue;
                     self.is_waiting = true;
                     self.runner.onLine(self, .{
@@ -876,7 +869,7 @@ pub const Vm = struct {
                     return;
                 },
                 .call => {
-                    const arg_count = self.readInt(OpCode.Size(.call));
+                    const arg_count = self.readInt(C.ARGS);
                     const value = self.stack.items[self.stack.count - 1 - arg_count];
                     if (value != .obj)
                         return self.fail("Cannot call non-function type {s}", .{@tagName(value.obj.data)});
@@ -922,7 +915,7 @@ pub const Vm = struct {
                     }
                 },
                 .closure => {
-                    const index = self.readInt(OpCode.Size(.constant));
+                    const index = self.readInt(C.CONSTANT);
                     const count = self.readInt(u8);
                     var value = self.bytecode.constants[index];
                     var free_values = try self.allocator.alloc(Value, count);
@@ -952,7 +945,7 @@ pub const Vm = struct {
                 .return_void => {
                     const frame = self.frames.pop();
                     self.stack.count = frame.bp - 1;
-                    try self.push(values.Void);
+                    try self.push(Void);
                 },
                 .fork => {
                     if (is_in_jump) continue;
@@ -963,10 +956,10 @@ pub const Vm = struct {
                     return;
                 },
                 .choice => {
-                    const ip = self.readInt(OpCode.Size(.jump));
+                    const ip = self.readInt(C.JUMP);
                     const is_unique = self.readInt(u8) == 1;
-                    const id_index = self.readInt(OpCode.Size(.constant));
-                    const visit_index = self.readInt(OpCode.Size(.get_global));
+                    const id_index = self.readInt(C.CONSTANT);
+                    const visit_index = self.readInt(C.GLOBAL);
                     const visit_count = self.globals[visit_index].visit;
                     const content = self.pop().obj.data.string;
 
@@ -988,7 +981,7 @@ pub const Vm = struct {
                     });
                 },
                 .visit => {
-                    const index = self.readInt(OpCode.Size(.get_global));
+                    const index = self.readInt(C.GLOBAL);
                     self.globals[index].visit += 1;
                 },
                 .divert => {
@@ -999,7 +992,7 @@ pub const Vm = struct {
                     }
                     var count = self.readInt(u8);
                     while (count > 0) : (count -= 1) {
-                        const dest = self.readInt(OpCode.Size(.divert));
+                        const dest = self.readInt(C.JUMP);
                         const len = self.currentFrame().instructions().len;
                         if (dest > len) return self.fail("Divert {d} is out of range {d}", .{ dest, len });
                         try self.jump_requests.append(dest);
@@ -1009,7 +1002,7 @@ pub const Vm = struct {
                     }
                 },
                 .backup => {
-                    const ip = self.readInt(OpCode.Size(.backup));
+                    const ip = self.readInt(C.JUMP);
                     if (self.jump_backups.items.len > 0 and self.jump_backups.getLast() == ip) {
                         _ = self.pop();
                         continue;

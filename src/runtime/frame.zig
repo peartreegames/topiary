@@ -1,5 +1,5 @@
 const std = @import("std");
-const Obj = @import("./values.zig").Value.Obj;
+const Obj = @import("../types/index.zig").Value.Obj;
 
 pub const Frame = struct {
     cl: *Obj,

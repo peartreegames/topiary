@@ -1,5 +1,5 @@
 const std = @import("std");
-const Value = @import("values.zig").Value;
+const Value = @import("value.zig").Value;
 
 pub const Enum = struct {
     name: []const u8,

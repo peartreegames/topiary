@@ -1,11 +1,15 @@
-const Tree = @import("ast.zig").Tree;
-const Statement = @import("ast.zig").Statement;
-const Bytecode = @import("bytecode.zig").Bytecode;
-const Lexer = @import("lexer.zig").Lexer;
-const Parser = @import("parser.zig").Parser;
-const CompilerErrors = @import("compiler-error.zig").CompilerErrors;
-const Compiler = @import("compiler.zig").Compiler;
 const std = @import("std");
+const frontend = @import("frontend/index.zig");
+const Statement = frontend.Statement;
+const Tree = frontend.Tree;
+const Lexer = frontend.Lexer;
+const Parser = frontend.Parser;
+
+const backend = @import("backend/index.zig");
+const Bytecode = backend.Bytecode;
+const Compiler = backend.Compiler;
+const CompilerErrors = backend.CompilerErrors;
+
 const fs = std.fs;
 
 /// Group of files
