@@ -1,5 +1,5 @@
 const std = @import("std");
-const global_size = u32;
+const C = @import("../utils/index.zig").C;
 
 pub const VisitTree = struct {
     allocator: std.mem.Allocator,
@@ -10,11 +10,11 @@ pub const VisitTree = struct {
     pub const Node = struct {
         parent: ?*Node,
         name: []const u8,
-        index: global_size,
+        index: C.GLOBAL,
         children: std.ArrayList(*Node),
         anon_count: usize = 0,
 
-        pub fn create(allocator: std.mem.Allocator, name: []const u8, index: global_size, parent: ?*Node) !*Node {
+        pub fn create(allocator: std.mem.Allocator, name: []const u8, index: C.GLOBAL, parent: ?*Node) !*Node {
             const node = try allocator.create(Node);
             node.* = .{
                 .parent = parent,

@@ -101,6 +101,7 @@ pub const Value = union(Type) {
                 arity: u8,
                 context_ptr: usize,
                 backing: *const fn (context_ptr: usize, args: []Value) Value,
+                destroy: *const fn (context_ptr: usize, allocator: std.mem.Allocator) void,
             },
             builtin: struct {
                 arity: u8,
@@ -136,10 +137,7 @@ pub const Value = union(Type) {
                     allocator.free(f.debug_info);
                 },
                 .ext_function => |e| {
-                    // since we don't have the ExportFunction type here we're just freeing the memory manually
-                    const size = @sizeOf(usize) * 3;
-                    const non_const_ptr = @as([*]u8, @ptrFromInt(e.context_ptr));
-                    allocator.rawFree(non_const_ptr[0..size], @log2(8.0), @returnAddress());
+                    e.destroy(e.context_ptr, allocator);
                 },
                 .builtin => {},
                 .closure => |c| allocator.free(c.free_values),

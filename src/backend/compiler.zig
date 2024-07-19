@@ -3,26 +3,24 @@ const std = @import("std");
 const frontend = @import("../frontend/index.zig");
 const Statement = frontend.Statement;
 const Expression = frontend.Expression;
-const Parser = frontend.Parser;
 const Token = frontend.Token;
 
 const utils = @import("../utils/index.zig");
 const UUID = utils.UUID;
 const C = utils.C;
 
-const DebugInfo = @import("debug.zig").DebugInfo;
-const builtins = @import("../runtime/index.zig").builtin_definitions;
+const builtins = @import("../runtime/index.zig").builtins;
 
 const Module = @import("../module.zig").Module;
 
 const types = @import("../types/index.zig");
 const Value = types.Value;
-const ValueType = types.Type;
-const String = types.String;
-const Enum = types.Enum;
 
-const Scope = @import("scope.zig").Scope;
-const Symbol = @import("scope.zig").Symbol;
+const scope = @import("scope.zig");
+const Scope = scope.Scope;
+const Symbol = scope.Symbol;
+
+const DebugInfo = @import("debug.zig").DebugInfo;
 const CompilerErrors = @import("error.zig").CompilerErrors;
 const Bytecode = @import("bytecode.zig").Bytecode;
 const JumpTree = @import("jump-tree.zig").JumpTree;
@@ -146,15 +144,17 @@ pub const Compiler = struct {
     };
 
     pub const Error = error{
+        ParserError,
         CompilerError,
         IllegalOperation,
         OutOfScope,
         NoSpaceLeft,
+        OutOfMemory,
         SymbolNotFound,
         SymbolAlreadyDeclared,
         ExternError,
         NotYetImplemented,
-    } || Parser.Error;
+    };
 
     pub fn init(allocator: std.mem.Allocator, module: *Module) !Compiler {
         if (!module.entry.tree_loaded) return error.CompilerError;
@@ -1262,7 +1262,7 @@ pub const Compiler = struct {
     }
 
     fn initializeConstants(self: *Compiler) !void {
-        for (initial_constants) |c| {
+        inline for (initial_constants) |c| {
             _ = try self.addConstant(c);
         }
     }

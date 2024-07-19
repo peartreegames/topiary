@@ -97,9 +97,8 @@ const Print = struct {
 
 pub const Time = struct {
     const Self = @This();
-    var mstime: Value = .{
-        .obj = &Self.mstime_obj,
-    };
+    var mstime: Value = .{ .obj = &Self.mstime_obj };
+    var ustime: Value = .{ .obj = &Self.ustime_obj };
     var mstime_obj: Value.Obj = .{
         .data = .{
             .builtin = .{
@@ -110,24 +109,21 @@ pub const Time = struct {
             },
         },
     };
-    var nstime: Value = .{ .obj = &Self.nstime_obj };
-    var nstime_obj: Value.Obj = .{
+    var ustime_obj: Value.Obj = .{
         .data = .{
             .builtin = .{
-                .backing = Self.nsbuiltin,
+                .backing = Self.usbuiltin,
                 .arity = 0,
                 .is_method = false,
-                .name = "nstime",
+                .name = "ustime",
             },
         },
     };
     fn msbuiltin(_: *Vm, _: []Value) Value {
-        std.debug.print("MS: {}\n", .{std.time.milliTimestamp()});
         return .{ .number = @floatFromInt(std.time.milliTimestamp()) };
     }
-    fn nsbuiltin(_: *Vm, _: []Value) Value {
-        std.debug.print("NS: {}\n", .{std.time.nanoTimestamp()});
-        return .{ .number = @floatFromInt(std.time.nanoTimestamp()) };
+    fn usbuiltin(_: *Vm, _: []Value) Value {
+        return .{ .number = @floatFromInt(std.time.microTimestamp()) };
     }
 };
 
@@ -178,8 +174,8 @@ pub const definitions = [_]Definition{ .{
     .name = "mstime",
     .value = &Time.mstime,
 }, .{
-    .name = "nstime",
-    .value = &Time.nstime,
+    .name = "ustime",
+    .value = &Time.ustime,
 } };
 
 pub const Count = struct {
