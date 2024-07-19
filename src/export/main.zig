@@ -188,7 +188,12 @@ pub export fn setExternFunc(vm_ptr: usize, name_ptr: [*:0]const u8, value_ptr: u
         return;
     };
     wrapper.* = ExportFunction.create(vm, @ptrFromInt(value_ptr), @ptrFromInt(free_ptr));
-    const val = vm.gc.create(vm, .{ .ext_function = .{ .arity = arity, .backing = ExportFunction.call, .context_ptr = @intFromPtr(wrapper) } }) catch |err| {
+    const val = vm.gc.create(vm, .{ .ext_function = .{
+        .arity = arity,
+        .backing = ExportFunction.call,
+        .context_ptr = @intFromPtr(wrapper),
+        .destroy = ExportFunction.destroy,
+    } }) catch |err| {
         logger.log("Could not create function value '{s}': {s}", .{ name, @errorName(err) }, .err);
         return;
     };

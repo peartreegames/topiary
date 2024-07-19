@@ -1,7 +1,4 @@
 const std = @import("std");
-
-const types = @import("../types/index.zig");
-const Value = types.values.Value;
 const C = @import("../utils/index.zig").C;
 
 pub const Symbol = struct {

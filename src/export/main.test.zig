@@ -42,8 +42,10 @@ const TestRunner = struct {
 
     // *const fn (vm_ptr: usize, args: [*c]ExportValue, args_len: u8) callconv(.C) ExportValue;
     pub fn sum(_: usize, args: [*c]ExportValue, _: u8) callconv(.C) ExportValue {
-        std.debug.print("extern sum\n", .{});
-        return .{ .tag = .number, .data = .{ .number = args[0].data.number + args[1].data.number } };
+        const arg1 = args[0].data.number;
+        const arg2 = args[1].data.number;
+        std.debug.print("extern sum {d} + {d} = {d}\n", .{ arg1, arg2, arg1 + arg2 });
+        return .{ .tag = .number, .data = .{ .number = arg1 + arg2 } };
     }
 };
 

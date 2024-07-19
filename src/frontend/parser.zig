@@ -9,7 +9,6 @@ const TokenType = tok.TokenType;
 const Token = tok.Token;
 
 const File = @import("../module.zig").File;
-const Errors = @import("../backend/index.zig").CompilerErrors;
 const UUID = @import("../utils/index.zig").UUID;
 
 const Precedence = enum(u4) {
