@@ -503,18 +503,3 @@ pub const Value = union(Type) {
         }
     };
 };
-
-test "Serialize" {
-    const alloc = std.testing.allocator;
-    var data = std.ArrayList(u8).init(alloc);
-    defer data.deinit();
-
-    var value = Value{ .number = 15 };
-    try value.serialize(data.writer());
-
-    try std.testing.expectEqualSlices(
-        u8,
-        &[_]u8{ 0x03, 0x31, 0x35, 0x2e, 0x30, 0x30, 0x30, 0x30, 0x30, 0x00 },
-        data.items,
-    );
-}

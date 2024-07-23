@@ -3,16 +3,15 @@ const std = @import("std");
 const topi = @import("topi");
 const Vm = topi.runtime.Vm;
 
-const ExportValue = @import("value.zig").ExportValue;
-const export_runner = @import("runner.zig");
-const ExportLogger = export_runner.ExportLogger;
-const ExportRunner = export_runner.ExportRunner;
-const ExportFunction = export_runner.ExportFunction;
-const ExportString = export_runner.ExportString;
-const ExportLine = export_runner.ExportLine;
-const ExportChoice = export_runner.ExportChoice;
-
-const main = @import("main.zig");
+const exp = @import("export");
+const main = exp.main;
+const ExportValue = exp.ExportValue;
+const ExportLogger = exp.ExportLogger;
+const ExportRunner = exp.ExportRunner;
+const ExportFunction = exp.ExportFunction;
+const ExportString = exp.ExportString;
+const ExportLine = exp.ExportLine;
+const ExportChoice = exp.ExportChoice;
 
 const TestRunner = struct {
     pub fn onLine(vm_ptr: usize, dialogue: *ExportLine) callconv(.C) void {
@@ -37,7 +36,7 @@ const TestRunner = struct {
     }
 
     pub fn free(ptr: usize) void {
-        std.debug.print("free memory at: {d}\n", .{ptr});
+        std.debug.print("test export free memory at: {d}\n", .{ptr});
     }
 
     // *const fn (vm_ptr: usize, args: [*c]ExportValue, args_len: u8) callconv(.C) ExportValue;

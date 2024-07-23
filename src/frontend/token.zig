@@ -212,14 +212,3 @@ pub const Keywords = std.StaticStringMap(TokenType).initComptime(.{
 pub fn findType(identifier: []const u8) TokenType {
     return Keywords.get(identifier) orelse .identifier;
 }
-
-test "Identifiers" {
-    const idents = &[_][]const u8{
-        "a",
-        "test",
-        "word",
-    };
-    for (idents) |ident| {
-        try std.testing.expect(findType(ident) == .identifier);
-    }
-}
