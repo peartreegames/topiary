@@ -137,8 +137,7 @@ pub const ExportRunner = struct {
 
         var i: usize = 0;
         while (i < dialogue.tags.len) : (i += 1) {
-            const tag = dialogue.tags[i];
-            self.tags[i] = .{ .ptr = tag.ptr, .len = tag.len };
+            self.tags[i] = .{ .ptr = dialogue.tags[i].ptr, .len = dialogue.tags[i].len };
         }
 
         self.dialogue = .{
@@ -147,7 +146,7 @@ pub const ExportRunner = struct {
             .tags = &self.tags,
             .tags_length = @intCast(dialogue.tags.len),
         };
-        self.logger.log("Line:{s}: {s}", .{ dialogue.speaker orelse "", dialogue.content }, .debug);
+        self.logger.log("Line:{s}: {s} #{s}", .{ dialogue.speaker orelse "", dialogue.content, dialogue.tags }, .debug);
         self.on_line(@intFromPtr(vm), &self.dialogue);
     }
 
@@ -163,12 +162,11 @@ pub const ExportRunner = struct {
             var t: usize = 0;
             const t_start = t_count;
             while (t < choices[i].tags.len) : (t += 1) {
-                const tag = choices[i].tags[t];
-                self.tags[t_count + t] = .{ .ptr = tag.ptr, .len = tag.len };
+                self.tags[t_count + t] = .{ .ptr = choices[i].tags[t].ptr, .len = choices[i].tags[t].len };
             }
             t_count += t;
 
-            self.logger.log("Choice: {s}", .{choices[i].content}, .debug);
+            self.logger.log("Choice: {s} #{s}", .{ choices[i].content, choices[i].tags }, .debug);
             const content = choices[i].content;
             result[i] = .{
                 .content = .{ .ptr = content.ptr, .len = content.len },

@@ -218,7 +218,7 @@ pub const Add = struct {
             else => unreachable,
         }
         if (args[0].obj.index) |i| {
-            vm.notifyValueChange(i, args[0]);
+            vm.notifyValueChange(i, Void, args[0]);
         }
         return Void;
     }
@@ -242,7 +242,7 @@ pub const AddMap = struct {
             else => unreachable,
         }
         if (args[0].obj.index) |i| {
-            vm.notifyValueChange(i, args[0]);
+            vm.notifyValueChange(i, Void, args[0]);
         }
         return Void;
     }
@@ -272,7 +272,7 @@ pub const Remove = struct {
             else => unreachable,
         }
         if (args[0].obj.index) |i| {
-            vm.notifyValueChange(i, args[0]);
+            vm.notifyValueChange(i, Void, args[0]);
         }
         return Void;
     }
@@ -331,7 +331,7 @@ pub const Clear = struct {
             else => unreachable,
         }
         if (args[0].obj.index) |i| {
-            vm.notifyValueChange(i, args[0]);
+            vm.notifyValueChange(i, Void, args[0]);
         }
         return Void;
     }

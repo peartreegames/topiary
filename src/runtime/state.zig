@@ -299,11 +299,13 @@ pub const State = struct {
             const values_items = v.object.get("values").?.array.items;
             const vals = try vm.allocator.alloc([]const u8, values_items.len);
             for (values_items, 0..) |t, i| vals[i] = try vm.allocator.dupe(u8, t.string);
-            var result = try vm.gc.create(vm, .{ .@"enum" = .{
-                .name = v.object.get("name").?.string,
-                .is_seq = v.object.get("is_seq").?.bool,
-                .values = vals,
-            } });
+            var result = try vm.gc.create(vm, .{
+                .@"enum" = .{
+                    .name = try vm.allocator.dupe(u8, v.object.get("name").?.string),
+                    .is_seq = v.object.get("is_seq").?.bool,
+                    .values = vals,
+                },
+            });
             result.obj.id = id.?;
             try refs.put(id.?, result);
             return result;

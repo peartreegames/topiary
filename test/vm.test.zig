@@ -1515,6 +1515,11 @@ test "Save and Load State" {
         \\ }
         \\ var test = new Test{}
         \\ var func = || return "func"
+        \\ enum Enum = {
+        \\    One,
+        \\    Two
+        \\ }
+        \\ var enumValue = Enum.One
     ;
     const alloc = testing.allocator;
 
@@ -1535,6 +1540,10 @@ test "Save and Load State" {
         \\ value += 5
         \\ var outer = List{}
         \\ var test = "t"
+        \\ enum Enum = {
+        \\    One,
+        \\    Two
+        \\ }
     ;
 
     var mod2 = try Module.initEmpty(allocator);

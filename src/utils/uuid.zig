@@ -51,4 +51,10 @@ pub const UUID = struct {
         }
         return id;
     }
+
+    pub fn fromStringHash(str: []const u8) ID {
+        if (str.len == 0) return Empty;
+        const hash = std.hash.Wyhash.hash(0, str);
+        return create(hash);
+    }
 };

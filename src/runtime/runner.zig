@@ -1,4 +1,4 @@
-const Vm = @import("./vm.zig").Vm;
+const Vm = @import("vm.zig").Vm;
 const ID = @import("../utils/index.zig").UUID.ID;
 const Value = @import("../types/index.zig").Value;
 

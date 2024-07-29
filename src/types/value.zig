@@ -345,7 +345,7 @@ pub const Value = union(Type) {
                         const is_seq = try reader.readByte() == 1;
                         const values_length = try reader.readByte();
                         const obj = try allocator.create(Value.Obj);
-                        obj.* = .{ .data = .{ .@"enum" = .{ .name = name_buf, .values = try allocator.alloc([]const u8, values_length), .is_seq = is_seq } } };
+                        obj.* = .{ .id = id, .data = .{ .@"enum" = .{ .name = name_buf, .values = try allocator.alloc([]const u8, values_length), .is_seq = is_seq } } };
                         for (0..values_length) |i| {
                             const value_name_length = try reader.readByte();
                             const value_name_buf = try allocator.alloc(u8, value_name_length);

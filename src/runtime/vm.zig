@@ -264,10 +264,10 @@ pub const Vm = struct {
         return self.value_subscribers.remove(name);
     }
 
-    pub fn notifyValueChange(self: *Vm, index: usize, value: Value) void {
+    pub fn notifyValueChange(self: *Vm, index: usize, old_value: Value, new_value: Value) void {
         const name = self.bytecode.global_symbols[index].name;
-        if (self.value_subscribers.contains(name)) {
-            self.runner.onValueChanged(self, name, value);
+        if (self.value_subscribers.contains(name) and !old_value.eql(new_value)) {
+            self.runner.onValueChanged(self, name, new_value);
         }
     }
 
@@ -364,13 +364,15 @@ pub const Vm = struct {
             switch (op) {
                 .constant => {
                     const index = self.readInt(C.CONSTANT);
+                    if (index >= self.bytecode.constants.len)
+                        return self.fail("Constant index {d} outside of bounds length {d}", .{ index, self.bytecode.constants.len });
                     const value = self.bytecode.constants[index];
                     try self.push(value);
                 },
-                .pop => _ = self.pop(),
+                .pop => _ = try self.pop(),
                 .add => {
-                    const right = self.pop();
-                    const left = self.pop();
+                    const right = try self.pop();
+                    const left = try self.pop();
                     if (@intFromEnum(right) != @intFromEnum(left)) {
                         return self.fail("Cannot add types {s} and {s}", .{ left.typeName(), right.typeName() });
                     }
@@ -390,9 +392,9 @@ pub const Vm = struct {
                 .true => try self.push(True),
                 .false => try self.push(False),
                 .nil => try self.push(Nil),
-                .negate => try self.push(.{ .number = -self.pop().number }),
+                .negate => try self.push(.{ .number = -(try self.pop()).number }),
                 .not => {
-                    const value = self.pop();
+                    const value = try self.pop();
                     switch (value) {
                         .bool => |b| try self.push(if (b) False else True),
                         .nil => try self.push(True),
@@ -401,16 +403,16 @@ pub const Vm = struct {
                     }
                 },
                 .@"or" => {
-                    const right = self.pop();
-                    const left = self.pop();
+                    const right = try self.pop();
+                    const left = try self.pop();
                     if (right != .bool or left != .bool) {
                         return self.fail("Conditionals must be of type bool not types {s} and {s}", .{ left.typeName(), right.typeName() });
                     }
                     try self.push(.{ .bool = right.bool or left.bool });
                 },
                 .@"and" => {
-                    const right = self.pop();
-                    const left = self.pop();
+                    const right = try self.pop();
+                    const left = try self.pop();
                     if (right != .bool or left != .bool) {
                         return self.fail("Conditionals must be of type bool not types {s} and {s}", .{ left.typeName(), right.typeName() });
                     }
@@ -423,7 +425,7 @@ pub const Vm = struct {
                 },
                 .jump_if_false => {
                     const dest = self.readInt(C.JUMP);
-                    var condition = self.pop();
+                    var condition = try self.pop();
                     if (!try condition.isTruthy()) {
                         self.currentFrame().ip = dest;
                     }
@@ -431,11 +433,12 @@ pub const Vm = struct {
                 .prong => {
                     const dest = self.readInt(C.JUMP);
                     const values_count = self.readInt(u8);
-                    const capture = self.stack.items[self.stack.count - values_count - 1];
+                    const index = self.stack.count - values_count - 1;
+                    const capture = self.stack.items[index];
                     var i: usize = 0;
                     var match = false;
                     while (i < values_count) : (i += 1) {
-                        const value = self.pop();
+                        const value = try self.pop();
                         if (!self.prongIsMatch(capture, value)) continue;
                         match = true;
                         self.stack.count -= values_count - i - 1;
@@ -449,7 +452,7 @@ pub const Vm = struct {
                 .decl_global => {
                     const index = self.readInt(C.GLOBAL);
                     if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{index});
-                    const value = self.pop();
+                    const value = try self.pop();
                     // global already set from loaded state
                     if (self.globals[index] != .void) {
                         continue;
@@ -462,14 +465,15 @@ pub const Vm = struct {
                     if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{index});
 
                     if (index >= self.globals.len) return self.fail("Globals index {} is out of bounds of current size {}", .{ index, self.globals.len });
-                    var value = self.pop();
+                    var value = try self.pop();
                     const current = self.globals[index];
                     if (current == .enum_value and value == .enum_value and current.enum_value.base == value.enum_value.base and current.enum_value.base.data.@"enum".is_seq) {
                         if (current.enum_value.index > value.enum_value.index) value = current;
                     }
                     if (value == .obj) value.obj.index = @intCast(index);
+                    const old_value = self.globals[index];
                     self.globals[index] = value;
-                    self.notifyValueChange(index, value);
+                    self.notifyValueChange(index, old_value, value);
                 },
                 .get_global => {
                     const index = self.readInt(C.GLOBAL);
@@ -479,7 +483,7 @@ pub const Vm = struct {
                 .set_local => {
                     const index = self.readInt(C.LOCAL);
                     const frame = self.currentFrame();
-                    var value = self.pop();
+                    var value = try self.pop();
                     const current = self.stack.items[frame.bp + index];
                     if (current == .enum_value and value == .enum_value and current.enum_value.base == value.enum_value.base and current.enum_value.base.data.@"enum".is_seq) {
                         if (current.enum_value.index > value.enum_value.index) value = current;
@@ -493,9 +497,10 @@ pub const Vm = struct {
                     try self.push(value);
                 },
                 .set_property => {
-                    const field_value = self.pop();
-                    const instance_value = self.pop();
-                    const new_value = self.pop();
+                    const field_value = try self.pop();
+                    const instance_value = try self.pop();
+                    const new_value = try self.pop();
+                    if (instance_value != .obj) return self.fail("Property may only be set on object types, found '{s}'", .{instance_value.typeName()});
 
                     switch (instance_value.obj.data) {
                         .list => |l| {
@@ -503,25 +508,25 @@ pub const Vm = struct {
                             if (n >= l.items.len) return self.fail("Index {d} out of bounds for list of length {d}", .{ n, l.items.len });
                             l.items[n] = new_value;
                         },
-                        .map => {
-                            var m = instance_value.obj.data.map;
-                            try m.put(field_value, new_value);
+                        .map => |*m| {
+                            try m.*.put(field_value, new_value);
                         },
-                        .instance => {
-                            var inst = instance_value.obj.data.instance;
+                        .instance => |inst| {
                             const field_name = field_value.obj.data.string;
                             if (inst.base.data.class.getIndex(field_name)) |idx| {
                                 inst.fields[idx] = new_value;
                             } else {
-                                return self.fail("Instance of {s} does not contain field '{s}'", .{ inst.base.data.class.name, field_name });
+                                return self.fail("Instance of '{s}' does not contain field '{s}'", .{ inst.base.data.class.name, field_name });
                             }
                         },
                         // todo add string indexing
-                        else => return self.fail("Cannot index '{s}' into type {s}", .{ @tagName(field_value), @tagName(instance_value.obj.data) }),
+                        else => return self.fail("Cannot index '{s}' into type {s}", .{ field_value.typeName(), instance_value.typeName() }),
                     }
                 },
                 .get_builtin => {
                     const index = self.readInt(C.BUILTIN);
+                    if (index >= builtins.definitions.len)
+                        return self.fail("Index {d} out of bounds for builtins length {d}", .{ index, builtins.definitions.len });
                     const value = builtins.definitions[index].value;
                     try self.push(value.*);
                 },
@@ -533,17 +538,17 @@ pub const Vm = struct {
                 .set_free => {
                     const index = self.readInt(C.FREE);
                     var obj = self.currentFrame().cl;
-                    obj.data.closure.free_values[index] = self.pop();
+                    obj.data.closure.free_values[index] = try self.pop();
                 },
                 .string, .loc => {
                     const index = self.readInt(C.CONSTANT);
-                    const str = if (op == .string) self.bytecode.constants[index].obj.*.data.string else self.loc_map.get(self.bytecode.uuids[index]) orelse return self.fail("Could not find localization id {s}", .{self.bytecode.uuids[index]});
+                    const str = if (op == .string) self.bytecode.constants[index].obj.*.data.string else self.loc_map.get(self.bytecode.uuids[index]) orelse return self.fail("Could not find localization id '{s}'", .{self.bytecode.uuids[index]});
                     var count = self.readInt(u8);
                     var args = try self.allocator.alloc(Value, count);
                     defer self.allocator.free(args);
                     // const total = count;
                     while (count > 0) : (count -= 1) {
-                        args[count - 1] = self.pop();
+                        args[count - 1] = try self.pop();
                     }
                     var list = std.ArrayList(u8).init(self.allocator);
                     defer list.deinit();
@@ -570,7 +575,11 @@ pub const Vm = struct {
                                     try std.fmt.format(writer, "{d}", .{n});
                                 },
                                 .bool => |b| try writer.writeAll(if (b) "true" else "false"),
-                                .enum_value => |e| try writer.writeAll(e.base.data.@"enum".values[e.index]),
+                                .enum_value => |e| {
+                                    if (e.index >= e.base.data.@"enum".values.len)
+                                        return self.fail("Enum index {d} is out of bounds for '{s}'", .{ e.index, e.base.data.@"enum".name });
+                                    try writer.writeAll(e.base.data.@"enum".values[e.index]);
+                                },
                                 .obj => |o| {
                                     switch (o.data) {
                                         // remove final 0
@@ -578,7 +587,7 @@ pub const Vm = struct {
                                         else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), str }),
                                     }
                                 },
-                                .visit => |v| try std.fmt.formatIntValue(v, "", .{}, list.writer()),
+                                .visit => |v| try std.fmt.formatIntValue(v, "", .{}, writer),
                                 else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), str }),
                             }
                             s = i;
@@ -591,7 +600,7 @@ pub const Vm = struct {
                     var count = self.readInt(C.COLLECTION);
                     var list = try std.ArrayList(Value).initCapacity(self.allocator, count);
                     while (count > 0) : (count -= 1) {
-                        try list.append(self.pop());
+                        try list.append(try self.pop());
                     }
                     std.mem.reverse(Value, list.items);
                     try self.pushAlloc(.{ .list = list });
@@ -600,8 +609,8 @@ pub const Vm = struct {
                     var count = self.readInt(C.COLLECTION);
                     var map = Value.Obj.MapType.initContext(self.allocator, Value.adapter);
                     while (count > 0) : (count -= 1) {
-                        const value = self.pop();
-                        const key = self.pop();
+                        const value = try self.pop();
+                        const key = try self.pop();
                         try map.put(key, value);
                     }
                     map.sort(Value.adapter);
@@ -611,13 +620,13 @@ pub const Vm = struct {
                     var count = self.readInt(C.COLLECTION);
                     var set = Value.Obj.SetType.initContext(self.allocator, Value.adapter);
                     while (count > 0) : (count -= 1) {
-                        try set.put(self.pop(), {});
+                        try set.put(try self.pop(), {});
                     }
                     set.sort(Value.adapter);
                     try self.pushAlloc(.{ .set = set });
                 },
                 .iter_start => {
-                    var value = self.pop();
+                    var value = try self.pop();
                     self.iterators.push(.{
                         .value = value,
                         .index = 0,
@@ -640,14 +649,14 @@ pub const Vm = struct {
                     _ = self.iterators.pop();
                 },
                 .class => {
-                    const value = self.pop();
+                    const value = try self.pop();
                     var count = self.readInt(C.FIELDS);
                     var fields = std.ArrayList(Class.Field).init(self.allocator);
                     errdefer fields.deinit();
                     while (count > 0) : (count -= 1) {
-                        const name = self.pop();
+                        const name = try self.pop();
                         const field_name = name.obj.data.string;
-                        const field_value = self.pop();
+                        const field_value = try self.pop();
                         try fields.append(.{
                             .name = field_name,
                             .value = field_value,
@@ -659,16 +668,18 @@ pub const Vm = struct {
                     try self.pushAlloc(.{ .class = class });
                 },
                 .instance => {
-                    const value = self.pop();
+                    const value = try self.pop();
+                    if (value != .obj and value.obj.data != .class)
+                        return self.fail("Instance expected type class, but found '{s}'", .{value.typeName()});
                     var class = value.obj.data.class;
 
                     var count = self.readInt(C.FIELDS);
                     var fields = std.ArrayList(Class.Field).init(self.allocator);
                     defer fields.deinit();
                     while (count > 0) : (count -= 1) {
-                        const name = self.pop();
+                        const name = try self.pop();
                         const str_name = name.obj.data.string;
-                        const field = self.pop();
+                        const field = try self.pop();
                         try fields.append(.{
                             .name = str_name,
                             .value = field,
@@ -679,8 +690,11 @@ pub const Vm = struct {
                     try self.pushAlloc(.{ .instance = instance });
                 },
                 .range => {
-                    const left = self.pop();
-                    const right = self.pop();
+                    const left = try self.pop();
+                    const right = try self.pop();
+
+                    if (left != .number or right != .number)
+                        return self.fail("Range must be two number, found '{s}' and '{s}'", .{ left.typeName(), right.typeName() });
                     try self.push(.{
                         .range = .{
                             .start = @as(i32, @intFromFloat(left.number)),
@@ -689,8 +703,8 @@ pub const Vm = struct {
                     });
                 },
                 .index => {
-                    const index = self.pop();
-                    const target = self.pop();
+                    const index = try self.pop();
+                    const target = try self.pop();
                     switch (target) {
                         .obj => |o| switch (o.data) {
                             // TODO: Will want to clean this up.
@@ -704,7 +718,7 @@ pub const Vm = struct {
                                         try self.push(target);
                                     } else if (std.mem.eql(u8, name, "count")) {
                                         try self.push(.{ .number = @as(f64, @floatFromInt(o.data.string.len)) });
-                                    } else return self.fail("Unknown method \"{s}\" on string. Only \"count\", \"has\" are allowed.", .{index.obj.data.string});
+                                    } else return self.fail("Unknown method '{s}' on string. Only \"count\", \"has\" are allowed.", .{index.obj.data.string});
                                 }
                             },
                             .list => |l| {
@@ -725,7 +739,7 @@ pub const Vm = struct {
                                     } else if (std.mem.eql(u8, name, "clear")) {
                                         try self.push(builtins.Clear.value);
                                         try self.push(target);
-                                    } else return self.fail("Unknown method \"{s}\" on list. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
+                                    } else return self.fail("Unknown method '{s}' on list. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
                                 } else if (index == .number) {
                                     const i = @as(u32, @intFromFloat(index.number));
                                     if (i < 0 or i >= l.items.len) {
@@ -753,14 +767,12 @@ pub const Vm = struct {
                                     } else if (std.mem.eql(u8, name, "clear")) {
                                         try self.push(builtins.Clear.value);
                                         try self.push(target);
-                                    } else return self.fail("Unknown method \"{s}\" on map. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
+                                    } else return self.fail("Unknown method '{s}' on map. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
                                 } else try self.push(Nil);
                             },
                             .set => {
-                                if (index != .obj)
-                                    return self.fail("Can only query set methods by string name, not {s}", .{@tagName(index)});
-                                if (index.obj.data != .string)
-                                    return self.fail("Can only query set methods by string name, not {s}", .{@tagName(index.obj.data)});
+                                if (index != .obj and index.obj.data != .string)
+                                    return self.fail("Can only query set methods by string name, found '{s}'", .{index.typeName()});
                                 const name = index.obj.data.string;
                                 if (std.mem.eql(u8, name, "count")) {
                                     try self.push(builtins.Count.value);
@@ -777,40 +789,35 @@ pub const Vm = struct {
                                 } else if (std.mem.eql(u8, name, "clear")) {
                                     try self.push(builtins.Clear.value);
                                     try self.push(target);
-                                } else return self.fail("Unknown method \"{s}\" on set. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
+                                } else return self.fail("Unknown method '{s}' on set. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
                             },
                             .instance => |i| {
-                                if (index != .obj)
-                                    return self.fail("Can only query instance fields by string name, not '{s}'", .{@tagName(index)});
-                                if (index.obj.data != .string)
-                                    return self.fail("Can only query instance fields by string name, not '{s}'", .{@tagName(index.obj.data)});
+                                if (index != .obj and index.obj.data != .string)
+                                    return self.fail("Can only query instance fields by string name, found '{s}'", .{index.typeName()});
                                 if (i.base.data.class.getIndex(index.obj.data.string)) |idx| {
                                     const field = i.fields[idx];
                                     try self.push(field);
                                     if (field == .obj and field.obj.data == .closure) {
                                         try self.push(target);
                                     }
-                                } else return self.fail("Unknown field \"{s}\" on instance of {s}.", .{ index.obj.data.string, i.base.data.class.name });
+                                } else return self.fail("Unknown field '{s}' on instance of {s}.", .{ index.obj.data.string, i.base.data.class.name });
                             },
                             .@"enum" => |e| {
-                                if (index != .obj)
-                                    return self.fail("Can only query instance fields by string name, not {s}", .{@tagName(index)});
-                                if (index.obj.data != .string)
-                                    return self.fail("Can only query instance fields by string name, not {s}", .{@tagName(index.obj.data)});
+                                if (index != .obj and index.obj.data != .string)
+                                    return self.fail("Can only query enum values by string name, found '{s}'", .{index.typeName()});
                                 var found = false;
                                 for (e.values, 0..) |name, i| {
                                     if (std.mem.eql(u8, name, index.obj.data.string)) {
                                         try self.push(.{ .enum_value = .{ .index = @intCast(i), .base = target.obj } });
                                         found = true;
+                                        break;
                                     }
                                 }
-                                if (!found) return self.fail("Unknown value \"{s}\" on enum {s}", .{ index.obj.data.string, e.name });
+                                if (!found) return self.fail("Unknown value '{s}' on enum '{s}'", .{ index.obj.data.string, e.name });
                             },
                             .class => |c| {
-                                if (index != .obj)
-                                    return self.fail("Can only query instance fields by string name, not {s}", .{@tagName(index)});
-                                if (index.obj.data != .string)
-                                    return self.fail("Can only query instance fields by string name, not {s}", .{@tagName(index.obj.data)});
+                                if (index != .obj and index.obj.data != .string)
+                                    return self.fail("Can only query class fields by string name, found '{s}'", .{index.typeName()});
                                 var found = false;
                                 for (c.fields) |field| {
                                     if (std.mem.eql(u8, field.name, index.obj.data.string)) {
@@ -818,24 +825,22 @@ pub const Vm = struct {
                                         found = true;
                                     }
                                 }
-                                if (!found) return self.fail("Unknown value \"{s}\" on Class {s}", .{ index.obj.data.string, c.name });
+                                if (!found) return self.fail("Unknown value '{s}' on Class '{s}'", .{ index.obj.data.string, c.name });
                             },
-                            else => return self.fail("Unknown target type {s} to index. Only lists, maps, sets, or instances can be indexed.", .{@tagName(target)}),
+                            else => return self.fail("Unknown target type '{s}' to index. Only lists, maps, sets, or instances can be indexed.", .{index.typeName()}),
                         },
                         .map_pair => |mp| {
-                            if (index != .obj)
-                                return self.fail("Unknown index key \"{s}\" on map key/value pair. Only \"key\" or \"value\" are allowed.", .{@tagName(index)});
-                            if (index.obj.data != .string)
-                                return self.fail("Unknown index key \"{s}\" on map key/value pair. Only \"key\" or \"value\" are allowed.", .{@tagName(index.obj.data)});
+                            if (index != .obj and index.obj.data != .string)
+                                return self.fail("Unknown index key '{s}' on map key/value pair. Only \"key\" or \"value\" are allowed.", .{index.typeName()});
                             const name = index.obj.data.string;
                             if (std.mem.eql(u8, name, "key")) {
                                 try self.push(mp.key.*);
                             } else if (std.mem.eql(u8, name, "value")) {
                                 try self.push(mp.value.*);
-                            } else return self.fail("Unknown index key \"{s}\" on map key/value pair. Only \"key\" or \"value\" are allowed.", .{@tagName(index)});
+                            } else return self.fail("Unknown index key '{s}' on map key/value pair. Only \"key\" or \"value\" are allowed.", .{index.typeName()});
                         },
                         else => {
-                            return self.fail("Invalid index \"{s}\" on target type \"{s}\"", .{ @tagName(index), @tagName(target) });
+                            return self.fail("Invalid index '{s}' on target type '{s}'", .{ index.typeName(), target.typeName() });
                         },
                     }
                 },
@@ -843,18 +848,24 @@ pub const Vm = struct {
                     const has_speaker = self.readInt(u8) == 1;
                     var speaker: ?[]const u8 = null;
                     if (has_speaker) {
-                        const speaker_value = self.pop();
+                        const speaker_value = try self.pop();
+                        if (speaker_value != .obj and speaker_value.obj.data != .string)
+                            return self.fail("Speaker must be of type string, but found '{s}'", .{speaker_value.typeName()});
                         speaker = speaker_value.obj.data.string;
                     }
 
-                    const dialogue_value = self.pop();
+                    const dialogue_value = try self.pop();
+                    if (dialogue_value != .obj and dialogue_value.obj.data != .string)
+                        return self.fail("Dialogue must be of type string, but found '{s}'", .{dialogue_value.typeName()});
 
                     const tag_count = self.readInt(u8);
                     var tags = try self.allocator.alloc([]const u8, tag_count);
                     defer self.allocator.free(tags);
                     var i: usize = 0;
                     while (i < tag_count) : (i += 1) {
-                        const tag_value = self.pop();
+                        const tag_value = try self.pop();
+                        if (tag_value != .obj and tag_value.obj.data != .string)
+                            return self.fail("Tag must be of type string, but found '{s}'", .{tag_value.typeName()});
                         tags[tag_count - i - 1] = tag_value.obj.data.string;
                     }
                     const id_index = self.readInt(C.CONSTANT);
@@ -872,7 +883,7 @@ pub const Vm = struct {
                     const arg_count = self.readInt(C.ARGS);
                     const value = self.stack.items[self.stack.count - 1 - arg_count];
                     if (value != .obj)
-                        return self.fail("Cannot call non-function type {s}", .{@tagName(value.obj.data)});
+                        return self.fail("Cannot call non-function type {s}", .{value.typeName()});
                     switch (value.obj.data) {
                         .closure => |c| {
                             const f = c.data.function;
@@ -910,7 +921,7 @@ pub const Vm = struct {
                             try self.push(result);
                         },
                         else => {
-                            return self.fail("Cannot call non-function type {s}", .{@tagName(value.obj.data)});
+                            return self.fail("Cannot call non-function type '{s}'", .{value.typeName()});
                         },
                     }
                 },
@@ -937,7 +948,7 @@ pub const Vm = struct {
                     try self.push(.{ .obj = current });
                 },
                 .return_value => {
-                    const value = self.pop();
+                    const value = try self.pop();
                     const frame = self.frames.pop();
                     self.stack.count = frame.bp - 1;
                     try self.push(value);
@@ -961,13 +972,19 @@ pub const Vm = struct {
                     const id_index = self.readInt(C.CONSTANT);
                     const visit_index = self.readInt(C.GLOBAL);
                     const visit_count = self.globals[visit_index].visit;
-                    const content = self.pop().obj.data.string;
+
+                    const content_value = try self.pop();
+                    if (content_value != .obj and content_value.obj.data != .string)
+                        return self.fail("Choice content must be of type string, but found '{s}'", .{content_value.typeName()});
+                    const content = content_value.obj.data.string;
 
                     const tag_count = self.readInt(u8);
                     var tags = try self.allocator.alloc([]const u8, tag_count);
                     var i: usize = 0;
                     while (i < tag_count) : (i += 1) {
-                        const tag_value = self.pop();
+                        const tag_value = try self.pop();
+                        if (tag_value != .obj and tag_value.obj.data != .string)
+                            return self.fail("Tag must be of type string, but found '{s}'", .{tag_value.typeName()});
                         tags[tag_count - i - 1] = tag_value.obj.data.string;
                     }
                     if (visit_count > 0 and is_unique) continue;
@@ -1004,7 +1021,7 @@ pub const Vm = struct {
                 .backup => {
                     const ip = self.readInt(C.JUMP);
                     if (self.jump_backups.items.len > 0 and self.jump_backups.getLast() == ip) {
-                        _ = self.pop();
+                        _ = try self.pop();
                         continue;
                     }
                     try self.jump_backups.append(ip);
@@ -1027,26 +1044,30 @@ pub const Vm = struct {
     }
 
     fn binaryNumberOp(self: *Vm, op: OpCode) !void {
-        const right = self.pop().number;
-        const left = self.pop().number;
+        const right = try self.pop();
+        const left = try self.pop();
+        if (right != .number or left != .number)
+            return self.fail("Cannot perform binary operation on types of '{s}' and '{s}'", .{ left.typeName(), right.typeName() });
+        const right_num = right.number;
+        const left_num = left.number;
         const total = switch (op) {
-            .subtract => left - right,
-            .multiply => left * right,
-            .divide => left / right,
-            .modulus => @mod(left, right),
+            .subtract => left_num - right_num,
+            .multiply => left_num * right_num,
+            .divide => left_num / right_num,
+            .modulus => @mod(left_num, right_num),
             else => return self.fail("Unknown binary operator '{s}'", .{@tagName(op)}),
         };
         try self.push(.{ .number = total });
     }
 
     fn comparisonOp(self: *Vm, op: OpCode) !void {
-        var right = self.pop();
-        var left = self.pop();
+        var right = try self.pop();
+        var left = try self.pop();
         if (right == .visit) right = .{ .number = @floatFromInt(right.visit) };
         if (left == .visit) left = .{ .number = @floatFromInt(left.visit) };
 
         if (@intFromEnum(right) != @intFromEnum(left)) {
-            return self.fail("Cannot compare mismatched types '{s}' and '{s}'", .{ @tagName(left), @tagName(right) });
+            return self.fail("Cannot compare mismatched types '{s}' and '{s}'", .{ left.typeName(), right.typeName() });
         }
         if (right == .enum_value) right = .{ .number = @floatFromInt(right.enum_value.index) };
         if (left == .enum_value) left = .{ .number = @floatFromInt(left.enum_value.index) };
@@ -1069,8 +1090,7 @@ pub const Vm = struct {
     }
 
     fn push(self: *Vm, value: Value) !void {
-        errdefer value.print(std.debug, self.bytecode.constants);
-        if (self.stack.items.len >= stack_size) return error.OutOfMemory;
+        if (self.stack.items.len >= stack_size) return self.fail("Stack is full", .{});
         self.stack.push(value);
     }
 
@@ -1078,7 +1098,11 @@ pub const Vm = struct {
         self.stack.push(try self.gc.create(self, data));
     }
 
-    fn pop(self: *Vm) Value {
+    fn pop(self: *Vm) !Value {
+        if (self.stack.count == 0) {
+            self.fail("Trying to pop an empty stack", .{}) catch |err| return err;
+            return Nil;
+        }
         return self.stack.pop();
     }
 
