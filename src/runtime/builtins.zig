@@ -21,10 +21,10 @@ pub const Rnd = struct {
         },
     };
     fn builtin(_: *Vm, args: []Value) Value {
-        if (r == null) r = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
-        const start = @as(i64, @intFromFloat(args[0].number));
-        const end = @as(i64, @intFromFloat(args[1].number));
-        return .{ .number = @as(f64, @floatFromInt(r.?.random().intRangeAtMost(i64, start, end))) };
+        if (r == null) r = std.rand.DefaultPrng.init(std.crypto.random.int(u32));
+        const start = @as(i32, @intFromFloat(args[0].number));
+        const end = @as(i32, @intFromFloat(args[1].number));
+        return .{ .number = @as(f32, @floatFromInt(r.?.random().intRangeAtMost(i32, start, end))) };
     }
 };
 
@@ -47,7 +47,7 @@ const Rnd01 = struct {
     fn builtin(_: *Vm, args: []Value) Value {
         if (r == null) r = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
         _ = args;
-        return .{ .number = r.?.random().float(f64) };
+        return .{ .number = r.?.random().float(f32) };
     }
 };
 
@@ -88,9 +88,9 @@ const Print = struct {
         },
     };
     fn builtin(_: *Vm, args: []Value) Value {
-        const writer = std.debug;
-        args[0].print(writer, null);
-        writer.print("\n", .{});
+        const writer = std.io.getStdErr().writer();
+        args[0].print(writer) catch unreachable;
+        writer.print("\n", .{}) catch unreachable;
         return Void;
     }
 };
@@ -196,7 +196,7 @@ pub const Count = struct {
             .set => |s| s.count(),
             else => 0,
         };
-        return .{ .number = @as(f64, @floatFromInt(count)) };
+        return .{ .number = @as(f32, @floatFromInt(count)) };
     }
 };
 

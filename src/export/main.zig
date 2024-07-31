@@ -166,11 +166,11 @@ pub export fn setExtern(vm_ptr: usize, name_ptr: [*:0]const u8, exp_value: Expor
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
     const logger = runner.logger;
     const name = std.mem.sliceTo(name_ptr, 0);
-    logger.log("Setting {s} to {s}", .{ name, @tagName(exp_value.tag) }, .debug);
     const value = exp_value.toValue(vm, @ptrFromInt(free_ptr)) catch |err| {
         logger.log("Could not create Value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
         return;
     };
+    logger.log("Setting {s} to {s}", .{ name, value }, .debug);
 
     vm.setExtern(name, value) catch |err| {
         logger.log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);

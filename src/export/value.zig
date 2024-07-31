@@ -27,7 +27,7 @@ pub const ExportValue = extern struct {
     data: extern union {
         nil: void,
         bool: bool,
-        number: f64,
+        number: f32,
         string: ExportString,
         list: extern struct {
             items: [*c]ExportValue,

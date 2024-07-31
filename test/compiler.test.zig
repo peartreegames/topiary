@@ -1070,7 +1070,6 @@ test "Functions" {
         defer mod.deinit();
         var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
-        errdefer bytecode.print(std.debug);
         for (case.instructions, 0..) |instruction, i| {
             errdefer std.log.warn("Error on: {}\n {s}", .{ i, case.input });
             try testing.expectEqual(instruction, bytecode.instructions[i]);
@@ -1274,7 +1273,6 @@ test "Builtin Functions" {
         defer mod.deinit();
         var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
-        errdefer bytecode.print(std.debug);
         for (case.instructions, 0..) |instruction, i| {
             errdefer std.log.warn("Error on: {}", .{i});
             try testing.expectEqual(instruction, bytecode.instructions[i]);
@@ -1550,7 +1548,6 @@ test "Closures" {
         defer mod.deinit();
         var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
-        errdefer bytecode.print(std.debug);
         for (case.instructions, 0..) |instruction, i| {
             errdefer std.log.warn("Error on: {}", .{i});
             try testing.expectEqual(instruction, bytecode.instructions[i]);
@@ -1623,7 +1620,6 @@ test "Classes" {
         defer mod.deinit();
         var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
-        errdefer bytecode.print(std.debug);
         for (case.instructions, 0..) |instruction, i| {
             errdefer std.log.warn("Error on: {}", .{i});
             try testing.expectEqual(instruction, bytecode.instructions[i]);
@@ -1670,7 +1666,6 @@ test "Serialize" {
     const file = try std.fs.cwd().createFile("tmp.topi.byte", .{ .read = true });
     defer std.fs.cwd().deleteFile("tmp.topi.byte") catch {};
     defer file.close();
-    // bytecode.print(std.debug);
     try bytecode.serialize(file.writer());
 
     try file.seekTo(0);

@@ -32,7 +32,7 @@ pub const Expression = struct {
         },
         @"extern": void,
         boolean: bool,
-        number: f64,
+        number: f32,
         string: struct {
             raw: []const u8,
             value: []const u8,

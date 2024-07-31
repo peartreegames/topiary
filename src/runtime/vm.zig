@@ -717,7 +717,7 @@ pub const Vm = struct {
                                         try self.push(builtins.Has.value);
                                         try self.push(target);
                                     } else if (std.mem.eql(u8, name, "count")) {
-                                        try self.push(.{ .number = @as(f64, @floatFromInt(o.data.string.len)) });
+                                        try self.push(.{ .number = @as(f32, @floatFromInt(o.data.string.len)) });
                                     } else return self.fail("Unknown method '{s}' on string. Only \"count\", \"has\" are allowed.", .{index.obj.data.string});
                                 }
                             },

@@ -364,7 +364,7 @@ pub const Parser = struct {
             .identifier => try self.identifierExpression(),
             .number => blk: {
                 const string_number = self.file.source[self.current_token.start..self.current_token.end];
-                const value = try std.fmt.parseFloat(f64, string_number);
+                const value = try std.fmt.parseFloat(f32, string_number);
                 break :blk .{
                     .token = start,
                     .type = .{

@@ -61,7 +61,7 @@ test "Update File Localization Ids" {
     var buf_reader = std.io.bufferedReader(file.reader());
     const reader = buf_reader.reader();
 
-    const out = std.io.getStdOut().writer();
+    const out = std.io.getStdErr().writer();
 
     while (true) {
         reader.streamUntilDelimiter(out, '\n', null) catch break;

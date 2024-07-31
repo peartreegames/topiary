@@ -45,7 +45,7 @@ pub const Value = union(Type) {
     void: void,
     nil: void,
     bool: bool,
-    number: f64,
+    number: f32,
     range: struct {
         start: i32,
         end: i32,
@@ -205,7 +205,7 @@ pub const Value = union(Type) {
 
     pub fn getAtIndex(self: Value, index: usize) Value {
         return switch (self) {
-            .range => |r| .{ .number = @as(f64, @floatFromInt(r.start + @as(i64, @intCast(index)))) },
+            .range => |r| .{ .number = @as(f32, @floatFromInt(r.start + @as(i64, @intCast(index)))) },
             .obj => |o| switch (o.data) {
                 .list => |l| l.items[index],
                 .map => |m| .{
@@ -225,7 +225,7 @@ pub const Value = union(Type) {
         return switch (T) {
             bool => if (value) True else False,
             @TypeOf(null) => Nil,
-            f64 => .{ .number = value },
+            f32 => .{ .number = value },
             else => unreachable,
         };
     }
@@ -296,7 +296,7 @@ pub const Value = union(Type) {
             .number => {
                 const val = try reader.readUntilDelimiterAlloc(allocator, 0, 128);
                 defer allocator.free(val);
-                return .{ .number = try std.fmt.parseFloat(f64, val) };
+                return .{ .number = try std.fmt.parseFloat(f32, val) };
             },
             .visit => {
                 return .{ .visit = try reader.readInt(u32, .little) };
@@ -361,89 +361,98 @@ pub const Value = union(Type) {
         };
     }
 
-    pub fn print(self: Value, writer: anytype, constants: ?[]Value) void {
+    pub fn format(
+        self: Value,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        return self.print(writer);
+    }
+
+    pub fn print(self: Value, writer: anytype) !void {
         switch (self) {
-            .number => |n| writer.print("{d:.5}", .{n}),
-            .bool => |b| writer.print("{}", .{b}),
-            .nil => writer.print("nil", .{}),
-            .visit => |v| writer.print("{d}", .{v}),
-            .enum_value => |e| writer.print("{s}.{s}", .{ e.base.data.@"enum".name, e.base.data.@"enum".values[e.index] }),
+            .number => |n| try writer.print("{d:.5}", .{n}),
+            .bool => |b| try writer.print("{}", .{b}),
+            .nil => try writer.print("nil", .{}),
+            .visit => |v| try writer.print("{d}", .{v}),
+            .enum_value => |e| try writer.print("{s}.{s}", .{ e.base.data.@"enum".name, e.base.data.@"enum".values[e.index] }),
             .obj => |o| {
                 switch (o.data) {
-                    .string => |s| writer.print("{s}", .{s}),
+                    .string => |s| try writer.print("{s}", .{s}),
                     .list => |l| {
-                        writer.print("List{{", .{});
+                        try writer.print("List{{", .{});
                         for (l.items, 0..) |item, i| {
-                            item.print(writer, constants);
+                            try item.print(writer);
                             if (i != l.items.len - 1)
-                                writer.print(", ", .{});
+                                try writer.print(", ", .{});
                         }
-                        writer.print("}}", .{});
+                        try writer.print("}}", .{});
                     },
                     .map => |m| {
-                        writer.print("Map{{", .{});
+                        try writer.print("Map{{", .{});
                         const keys = m.keys();
                         for (keys, 0..) |k, i| {
-                            k.print(writer, constants);
-                            writer.print(":", .{});
-                            m.get(k).?.print(writer, constants);
+                            try k.print(writer);
+                            try writer.print(":", .{});
+                            try m.get(k).?.print(writer);
                             if (i != keys.len - 1)
-                                writer.print(", ", .{});
+                                try writer.print(", ", .{});
                         }
-                        writer.print("}}", .{});
+                        try writer.print("}}", .{});
                     },
                     .set => |s| {
                         const keys = s.keys();
-                        writer.print("Set{{", .{});
+                        try writer.print("Set{{", .{});
                         for (keys, 0..) |k, i| {
-                            k.print(writer, constants);
+                            try k.print(writer);
                             if (i != keys.len - 1)
-                                writer.print(", ", .{});
+                                try writer.print(", ", .{});
                         }
-                        writer.print("}}", .{});
+                        try writer.print("}}", .{});
                     },
                     .function => |f| {
-                        writer.print("\nfn---\n", .{});
-                        Bytecode.printInstructions(writer, f.instructions, constants);
-                        writer.print("---", .{});
+                        try writer.print("\nfn---\n", .{});
+                        try Bytecode.printInstructions(writer, f.instructions);
+                        try writer.print("---", .{});
                     },
                     .closure => |c| {
-                        writer.print("\ncl---\n", .{});
-                        Bytecode.printInstructions(writer, c.data.function.instructions, constants);
-                        writer.print("---", .{});
+                        try writer.print("\ncl---\n", .{});
+                        try Bytecode.printInstructions(writer, c.data.function.instructions);
+                        try writer.print("---", .{});
                     },
                     .class => |c| {
-                        writer.print("{s}", .{c.name});
+                        try writer.print("{s}", .{c.name});
                     },
                     .instance => |i| {
-                        writer.print("{s}.instance", .{i.base.data.class.name});
-                        writer.print(" {{\n", .{});
+                        try writer.print("{s}.instance", .{i.base.data.class.name});
+                        try writer.print(" {{\n", .{});
                         for (i.fields, 0..) |v, idx| {
-                            writer.print("    {s}: ", .{i.base.data.class.fields[idx].name});
-                            v.print(writer, constants);
-                            writer.print("\n", .{});
+                            try writer.print("    {s}: ", .{i.base.data.class.fields[idx].name});
+                            try v.print(writer);
+                            try writer.print("\n", .{});
                         }
-                        writer.print("}}", .{});
+                        try writer.print("}}", .{});
                     },
                     .@"enum" => |e| {
-                        writer.print("{s}{{", .{e.name});
+                        try writer.print("{s}{{", .{e.name});
                         for (e.values, 0..) |val, i| {
-                            writer.print("{s}", .{val});
+                            try writer.print("{s}", .{val});
                             if (i != e.values.len - 1)
-                                writer.print(", ", .{});
+                                try writer.print(", ", .{});
                         }
-                        writer.print("}}", .{});
+                        try writer.print("}}", .{});
                     },
                     .builtin => |b| {
-                        writer.print("builtin {s}", .{b.name});
+                        try writer.print("builtin {s}", .{b.name});
                     },
                     else => {
-                        writer.print("{s}", .{@tagName(o.data)});
+                        try writer.print("{s}", .{@tagName(o.data)});
                     },
                 }
             },
-            .range => |r| writer.print("{}..{}", .{ r.start, r.end }),
-            else => writer.print("{s}", .{@tagName(self)}),
+            .range => |r| try writer.print("{}..{}", .{ r.start, r.end }),
+            else => try writer.print("{s}", .{@tagName(self)}),
         }
     }
 

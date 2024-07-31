@@ -47,8 +47,8 @@ pub const TestRunner = struct {
         };
     }
 
-    pub fn onValueChanged(_: *Runner, vm: *Vm, name: []const u8, value: Value) void {
+    pub fn onValueChanged(_: *Runner, _: *Vm, name: []const u8, value: Value) void {
         std.debug.print("Value Changed Callback: {s}\n", .{name});
-        value.print(std.debug, vm.bytecode.constants);
+        value.print(std.io.getStdErr().writer()) catch unreachable;
     }
 };

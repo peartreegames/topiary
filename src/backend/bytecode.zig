@@ -155,29 +155,28 @@ pub const Bytecode = struct {
         };
     }
 
-    pub fn print(code: *Bytecode, writer: anytype) void {
-        writer.print("\n==BYTECODE==\n", .{});
-        printInstructions(writer, code.instructions, code.constants);
-        writer.print("\n==DEBUG==\n", .{});
-        printDebugInfo(writer, code.debug_info);
+    pub fn print(code: *Bytecode, writer: anytype) !void {
+        try writer.print("\n==BYTECODE==\n", .{});
+        try printInstructions(writer, code.instructions);
+        try writer.print("\n==DEBUG==\n", .{});
+        try printDebugInfo(writer, code.debug_info);
     }
 
-    pub fn printDebugInfo(writer: anytype, debug: []DebugInfo) void {
+    pub fn printDebugInfo(writer: anytype, debug: []DebugInfo) !void {
         for (debug) |info| {
-            writer.print("{s}\n", .{info.file});
+            try writer.print("{s}\n", .{info.file});
             for (info.ranges.items) |r| {
-                writer.print("    start: {}, end: {}, line: {}\n", .{ r.start, r.end, r.line });
+                try writer.print("    start: {}, end: {}, line: {}\n", .{ r.start, r.end, r.line });
             }
         }
     }
 
-    pub fn printInstructions(writer: anytype, instructions: []const u8, constants: ?[]Value) void {
+    pub fn printInstructions(writer: anytype, instructions: []const u8) !void {
         var i: usize = 0;
         while (i < instructions.len) {
-            errdefer writer.print("{any}", .{instructions[i..]});
-            writer.print("{d:0>4} ", .{i});
+            try writer.print("{d:0>4} ", .{i});
             const op: OpCode = @enumFromInt(instructions[i]);
-            writer.print("{s: <16} ", .{op.toString()});
+            try writer.print("{s: <16} ", .{op.toString()});
             i += 1;
             switch (op) {
                 .jump,
@@ -189,19 +188,19 @@ pub const Bytecode = struct {
                 .visit,
                 => {
                     const dest = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
-                    writer.print("{d: >8}", .{dest});
+                    try writer.print("{d: >8}", .{dest});
                     i += 4;
                 },
                 .divert => {
                     var count = instructions[i];
                     i += 1;
                     const dest = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
-                    writer.print("{d: >8} ", .{dest});
+                    try writer.print("{d: >8} ", .{dest});
                     i += 4;
                     count -= 1;
                     while (count > 0) : (count -= 1) {
                         const next = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
-                        writer.print(" {d}", .{next});
+                        try writer.print(" {d}", .{next});
                         i += 4;
                     }
                 },
@@ -212,7 +211,7 @@ pub const Bytecode = struct {
                 .set,
                 => {
                     const dest = std.mem.readVarInt(u16, instructions[i..(i + 2)], .little);
-                    writer.print("{d: >8}", .{dest});
+                    try writer.print("{d: >8}", .{dest});
                     i += 2;
                 },
                 .call,
@@ -223,22 +222,13 @@ pub const Bytecode = struct {
                 .set_free,
                 => {
                     const dest = instructions[i];
-                    writer.print("{d: >8}", .{dest});
+                    try writer.print("{d: >8}", .{dest});
                     i += 1;
                 },
                 .constant => {
                     const index = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
-                    writer.print("{d: >8} ", .{index});
+                    try writer.print("{d: >8} ", .{index});
                     i += 4;
-                    if (constants) |c| {
-                        if (index >= c.len) {
-                            writer.print("Constant Index {} out of bounds. Total length {}", .{ index, c.len });
-                            break;
-                        }
-                        var value = c[index];
-                        writer.print("  = ", .{});
-                        value.print(writer, c);
-                    }
                 },
                 .dialogue => {
                     const has_speaker = instructions[i] == 1;
@@ -246,9 +236,9 @@ pub const Bytecode = struct {
                     _ = tag_count;
                     const id = std.mem.readVarInt(u32, instructions[(i + 2)..(i + 6)], .little);
                     i += 6;
-                    writer.print("{: >8}", .{has_speaker});
-                    writer.print("   = ", .{});
-                    writer.print("{}", .{id});
+                    try writer.print("{: >8}", .{has_speaker});
+                    try writer.print("   = ", .{});
+                    try writer.print("{}", .{id});
                 },
                 .choice => {
                     const dest = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
@@ -263,31 +253,27 @@ pub const Bytecode = struct {
                     const tag_count = instructions[i + 1];
                     _ = tag_count;
                     i += 1;
-                    writer.print("{d: >8}", .{dest});
-                    writer.print(" unique: {}", .{is_unique});
+                    try writer.print("{d: >8}", .{dest});
+                    try writer.print(" unique: {}", .{is_unique});
                 },
                 .string, .closure => {
                     const index = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
                     i += 4;
-                    writer.print("{d: >8}", .{index});
+                    try writer.print("{d: >8}", .{index});
                     i += 1;
-                    writer.print("   = ", .{});
-                    if (constants) |c| {
-                        var value = c[index];
-                        value.print(writer, constants);
-                    }
+                    try writer.print("   = ", .{});
                 },
                 .prong => {
                     const index = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
                     i += 4;
-                    writer.print("{d: >8}", .{index});
+                    try writer.print("{d: >8}", .{index});
                     const count = instructions[i];
                     i += 1;
-                    writer.print("   = {d}", .{count});
+                    try writer.print("   = {d}", .{count});
                 },
                 else => {},
             }
-            writer.print("\n", .{});
+            try writer.print("\n", .{});
         }
     }
 };
