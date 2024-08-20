@@ -687,7 +687,9 @@ pub const Compiler = struct {
                 self.jump_tree.current.*.dest_ip = self.instructionPos();
                 defer self.jump_tree.pop();
 
+                const locals_count = self.scope.count;
                 try self.enterScope(.local);
+                self.scope.count = locals_count;
                 errdefer self.exitScope() catch {};
 
                 const path = try std.mem.join(self.allocator, ".", self.visit_tree.list.items);

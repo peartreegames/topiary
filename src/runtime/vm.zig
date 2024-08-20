@@ -371,8 +371,10 @@ pub const Vm = struct {
                 },
                 .pop => _ = try self.pop(),
                 .add => {
-                    const right = try self.pop();
-                    const left = try self.pop();
+                    var right = try self.pop();
+                    var left = try self.pop();
+                    if (right == .visit) right = .{ .number = @floatFromInt(right.visit) };
+                    if (left == .visit) left = .{ .number = @floatFromInt(left.visit) };
                     if (@intFromEnum(right) != @intFromEnum(left)) {
                         return self.fail("Cannot add types {s} and {s}", .{ left.typeName(), right.typeName() });
                     }
@@ -1044,8 +1046,10 @@ pub const Vm = struct {
     }
 
     fn binaryNumberOp(self: *Vm, op: OpCode) !void {
-        const right = try self.pop();
-        const left = try self.pop();
+        var right = try self.pop();
+        var left = try self.pop();
+        if (right == .visit) right = .{ .number = @floatFromInt(right.visit) };
+        if (left == .visit) left = .{ .number = @floatFromInt(left.visit) };
         if (right != .number or left != .number)
             return self.fail("Cannot perform binary operation on types of '{s}' and '{s}'", .{ left.typeName(), right.typeName() });
         const right_num = right.number;

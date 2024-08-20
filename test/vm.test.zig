@@ -602,7 +602,7 @@ test "Closures" {
     }
 }
 
-test "Loops" {
+test "While and For Loops" {
     const test_cases = .{
         .{ .input = 
         \\ var x = 0
@@ -638,6 +638,21 @@ test "Loops" {
         \\ }
         \\ x
         , .value = 10 },
+        .{ .input = 
+        \\ var x = 0
+        \\ while true {
+        \\    var y = 1
+        \\    while true {
+        \\       y += x + 1
+        \\       if y < 10 continue
+        \\       break;
+        \\    }
+        \\    x = x + y
+        \\    if x < 100 continue
+        \\    break
+        \\ }
+        \\ x
+        , .value = 190 },
         .{ .input = 
         \\ const list = List{1,2,3,4,5}
         \\ var sum = 0
@@ -684,6 +699,7 @@ test "Loops" {
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
+        errdefer std.log.warn("Error Case: {s}", .{case.input});
         vm.interpret() catch |err| {
             vm.err.print(std.io.getStdErr().writer());
             return err;
@@ -943,11 +959,15 @@ test "Boughs" {
         },
         .{ .input = 
         \\ === START {
+        \\    var str = "string"
         \\    :speaker: "Text goes here"
         \\    === OUTER {
+        \\        var num = 50
         \\        :speaker: "Outer text here doesn't happen"
         \\        === INNER {
-        \\            :speaker: "Inner and final text here"
+        \\            num += 5
+        \\            str += " gnirts"
+        \\            :speaker: "Inner and final text here {str} {num}"
         \\        }
         \\    }
         \\    :speaker: "More goes here"
@@ -961,10 +981,13 @@ test "Boughs" {
         var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
         std.debug.print("\n======\n", .{});
-        var vm = try initTestVm(case.input, mod, false);
+        var vm = try initTestVm(case.input, mod, true);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
-        try vm.interpret();
+        vm.interpret() catch |err| {
+            vm.err.print(std.io.getStdErr().writer());
+            return err;
+        };
     }
 }
 
@@ -1150,6 +1173,12 @@ test "Visits" {
             \\ print("START.NAMED: {START.NAMED}")
             \\ print("START.NAMED.ONE: {START.NAMED.ONE}")
             \\ print("START.NAMED.TWO: {START.NAMED.TWO}")
+            \\ // test binary operation
+            \\ print("ADD: {START + 1}")
+            \\ print("SUBTRACT: {START - 1}")
+            \\ print("PRODUCT: {START * 2}")
+            \\ print("DIVISION: {START / 3}")
+            \\ print("MODULUS: {START % 4}")
             \\ }
             ,
         },

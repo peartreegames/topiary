@@ -237,7 +237,7 @@ pub const State = struct {
         if (entry.object.get("number")) |v| return .{ .number = @floatCast(v.float) };
         if (entry.object.get("string")) |v| return try vm.gc.create(vm, .{ .string = try vm.allocator.dupe(u8, v.string) });
         if (entry.object.get("nil") != null) return Nil;
-        if (entry.object.get("boolean")) |v| return if (v.bool) True else False;
+        if (entry.object.get("bool")) |v| return if (v.bool) True else False;
         if (entry.object.get("visit")) |v| return .{ .visit = @intCast(v.integer) };
         if (entry.object.get("ref")) |v| {
             if (refs.get(UUID.fromString(v.string))) |ref| return ref;
