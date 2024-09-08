@@ -20,6 +20,8 @@ pub const Class = struct {
     }
 
     pub fn deinit(self: *const Class) void {
+        self.allocator.free(self.name);
+        for (self.fields) |f| self.allocator.free(f.name);
         self.allocator.free(self.fields);
     }
 

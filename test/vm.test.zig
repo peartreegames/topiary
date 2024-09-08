@@ -527,7 +527,10 @@ test "Builtin Functions" {
             vm.err.print(std.io.getStdErr().writer());
             return err;
         };
+        const writer = std.io.getStdErr().writer();
         const value = vm.stack.previous();
+        try value.print(writer);
+        try writer.writeAll("\n");
         try testing.expect(value == .number);
     }
 }
@@ -1360,6 +1363,17 @@ test "Jump Code" {
         .{
             .input =
             \\ === START {
+            \\    if true {
+            \\        :: "Testing fin"
+            \\        fin
+            \\    }
+            \\    :: "Fin did not work!"
+            \\ }
+            ,
+        },
+        .{
+            .input =
+            \\ === START {
             \\    => INNER^
             \\    :: "Fin executed correctly"
             \\    === INNER {
@@ -1549,6 +1563,7 @@ test "Save and Load State" {
         \\    Two
         \\ }
         \\ var enumValue = Enum.One
+        \\ var set = Set{"set_value"}
     ;
     const alloc = testing.allocator;
 
@@ -1573,6 +1588,7 @@ test "Save and Load State" {
         \\    One,
         \\    Two
         \\ }
+        \\ var set = Set{"will be overwritten"}
     ;
 
     var mod2 = try Module.initEmpty(allocator);
@@ -1586,6 +1602,13 @@ test "Save and Load State" {
     try testing.expectEqual(vm2.globals[2].obj.data.instance.fields[1].number, 2);
     try vm2.interpret();
     try testing.expectEqual(vm2.globals[0].number, 6);
+
+    var data2 = std.ArrayList(u8).init(alloc);
+    defer data2.deinit();
+    const size = try State.calculateSize(&vm2);
+    try testing.expectEqual(size, 677);
+    try State.serialize(&vm2, data2.writer());
+    std.debug.print("{s}\n", .{data2.items});
 }
 
 test "Includes" {

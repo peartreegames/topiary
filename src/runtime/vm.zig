@@ -657,7 +657,7 @@ pub const Vm = struct {
                     errdefer fields.deinit();
                     while (count > 0) : (count -= 1) {
                         const name = try self.pop();
-                        const field_name = name.obj.data.string;
+                        const field_name = try self.allocator.dupe(u8, name.obj.data.string);
                         const field_value = try self.pop();
                         try fields.append(.{
                             .name = field_name,
@@ -666,7 +666,7 @@ pub const Vm = struct {
                     }
 
                     std.mem.reverse(Class.Field, fields.items);
-                    const class = try Class.init(self.allocator, value.obj.data.string, try fields.toOwnedSlice());
+                    const class = try Class.init(self.allocator, try self.allocator.dupe(u8, value.obj.data.string), try fields.toOwnedSlice());
                     try self.pushAlloc(.{ .class = class });
                 },
                 .instance => {

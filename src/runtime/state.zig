@@ -50,8 +50,8 @@ pub const State = struct {
                 is_func = value.obj.data == .closure or value.obj.data == .function;
                 is_str = value.obj.data == .string;
             }
-            // we don't need to save 'const' values
-            if (!is_mut and !is_obj) continue;
+            // we don't need to save 'const' values (except visits)
+            if (!is_mut and !is_obj and value != .visit) continue;
             // or 'const' strings and functions;
             if (!is_mut and (is_func or is_str)) continue;
 
@@ -228,21 +228,24 @@ pub const State = struct {
         const root = parsed.value.object;
         for (vm.bytecode.global_symbols) |sym| {
             const maybe_entry = root.get(sym.name);
-            if (maybe_entry) |entry| vm.globals[sym.index] = try deserializeEntry(vm, &root, entry, &refs, null);
+            if (maybe_entry) |entry| {
+                vm.globals[sym.index] = try deserializeEntry(vm, &root, entry, &refs, null);
+            }
         }
     }
 
     fn deserializeEntry(vm: *Vm, root: *const std.json.ObjectMap, entry: std.json.Value, refs: *std.AutoHashMap(UUID.ID, Value), id: ?UUID.ID) !Value {
         if (entry.object.get("void") != null) return Void;
+        if (entry.object.get("nil") != null) return Nil;
         if (entry.object.get("number")) |v| return .{ .number = @floatCast(v.float) };
         if (entry.object.get("string")) |v| return try vm.gc.create(vm, .{ .string = try vm.allocator.dupe(u8, v.string) });
-        if (entry.object.get("nil") != null) return Nil;
         if (entry.object.get("bool")) |v| return if (v.bool) True else False;
         if (entry.object.get("visit")) |v| return .{ .visit = @intCast(v.integer) };
         if (entry.object.get("ref")) |v| {
-            if (refs.get(UUID.fromString(v.string))) |ref| return ref;
+            const uuid = UUID.fromString(v.string);
+            if (refs.get(uuid)) |ref| return ref;
             if (root.get(v.string)) |ref| {
-                const value = try deserializeEntry(vm, root, ref, refs, UUID.fromString(v.string));
+                const value = try deserializeEntry(vm, root, ref, refs, uuid);
                 try refs.put(UUID.fromString(v.string), value);
                 return value;
             }
@@ -347,11 +350,11 @@ pub const State = struct {
             return result;
         }
         if (entry.object.get("class")) |v| {
-            const name = v.object.get("name").?.string;
+            const name = try vm.allocator.dupe(u8, v.object.get("name").?.string);
             const ser_fields = v.object.get("fields").?.array.items;
             var fields = try vm.allocator.alloc(Class.Field, ser_fields.len);
             for (ser_fields, 0..) |f, i| {
-                fields[i].name = f.object.get("name").?.string;
+                fields[i].name = try vm.allocator.dupe(u8, f.object.get("name").?.string);
                 fields[i].value = try deserializeEntry(vm, root, f.object.get("value").?, refs, null);
             }
             var result = try vm.gc.create(vm, .{ .class = .{
