@@ -268,8 +268,8 @@ pub const Compiler = struct {
 
     pub fn compile(self: *Compiler) Error!void {
         const tree = self.module.entry.tree;
-        inline for (builtins) |builtin| {
-            _ = try self.builtins.define(builtin.name, false, false);
+        for (builtins.keys()) |name| {
+            _ = try self.builtins.define(name, false, false);
         }
 
         try self.initializeConstants();

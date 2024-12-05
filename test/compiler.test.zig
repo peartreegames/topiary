@@ -1258,7 +1258,7 @@ test "Builtin Functions" {
             .input = "rnd01()",
             .instructions = [_]u8{
                 @intFromEnum(OpCode.get_builtin),
-                1,
+                2,
                 @intFromEnum(OpCode.call),
                 0,
                 @intFromEnum(OpCode.pop),
@@ -1663,10 +1663,10 @@ test "Serialize" {
     defer bytecode.free(allocator);
 
     // this doesn't need to be a file, but it's nice to sometimes not delete it and inspect it
-    const file = try std.fs.cwd().createFile("tmp.topi.byte", .{ .read = true });
+    var file = try std.fs.cwd().createFile("tmp.topi.byte", .{ .read = true });
     defer std.fs.cwd().deleteFile("tmp.topi.byte") catch {};
     defer file.close();
-    try bytecode.serialize(file.writer());
+    try bytecode.serialize(&file);
 
     try file.seekTo(0);
     var deserialized = try Bytecode.deserialize(allocator, file.reader());

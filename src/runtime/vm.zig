@@ -527,10 +527,11 @@ pub const Vm = struct {
                 },
                 .get_builtin => {
                     const index = self.readInt(C.BUILTIN);
-                    if (index >= builtins.definitions.len)
-                        return self.fail("Index {d} out of bounds for builtins length {d}", .{ index, builtins.definitions.len });
-                    const value = builtins.definitions[index].value;
-                    try self.push(value.*);
+                    const len = builtins.functions.keys().len;
+                    if (index >= len)
+                        return self.fail("Index {d} out of bounds for builtins length {d}", .{ index, len });
+                    const value = builtins.functions.values()[index];
+                    try self.push(value);
                 },
                 .get_free => {
                     const index = self.readInt(C.FREE);
@@ -709,14 +710,11 @@ pub const Vm = struct {
                     const target = try self.pop();
                     switch (target) {
                         .obj => |o| switch (o.data) {
-                            // TODO: Will want to clean this up.
-                            // Also the fails here should be caught in the compiler
-                            // but that's for another day
                             .string => {
                                 if (index == .obj and index.obj.data == .string) {
                                     const name = index.obj.data.string;
                                     if (std.mem.eql(u8, name, "has")) {
-                                        try self.push(builtins.Has.value);
+                                        try self.push(builtins.methods.get("has").?);
                                         try self.push(target);
                                     } else if (std.mem.eql(u8, name, "count")) {
                                         try self.push(.{ .number = @as(f32, @floatFromInt(o.data.string.len)) });
@@ -726,20 +724,8 @@ pub const Vm = struct {
                             .list => |l| {
                                 if (index == .obj and index.obj.data == .string) {
                                     const name = index.obj.data.string;
-                                    if (std.mem.eql(u8, name, "count")) {
-                                        try self.push(builtins.Count.value);
-                                        try self.push(target);
-                                    } else if (std.mem.eql(u8, name, "add")) {
-                                        try self.push(builtins.Add.value);
-                                        try self.push(target);
-                                    } else if (std.mem.eql(u8, name, "remove")) {
-                                        try self.push(builtins.Remove.value);
-                                        try self.push(target);
-                                    } else if (std.mem.eql(u8, name, "has")) {
-                                        try self.push(builtins.Has.value);
-                                        try self.push(target);
-                                    } else if (std.mem.eql(u8, name, "clear")) {
-                                        try self.push(builtins.Clear.value);
+                                    if (builtins.methods.get(name)) |method_value| {
+                                        try self.push(method_value);
                                         try self.push(target);
                                     } else return self.fail("Unknown method '{s}' on list. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
                                 } else if (index == .number) {
@@ -754,20 +740,12 @@ pub const Vm = struct {
                                     try self.push(v);
                                 } else if (index == .obj and index.obj.data == .string) {
                                     const name = index.obj.data.string;
-                                    if (std.mem.eql(u8, name, "count")) {
-                                        try self.push(builtins.Count.value);
+                                    if (std.mem.eql(u8, name, "add")) {
+                                        try self.push(builtins.methods.get("__addmap").?);
                                         try self.push(target);
-                                    } else if (std.mem.eql(u8, name, "add")) {
-                                        try self.push(builtins.AddMap.value);
-                                        try self.push(target);
-                                    } else if (std.mem.eql(u8, name, "remove")) {
-                                        try self.push(builtins.Remove.value);
-                                        try self.push(target);
-                                    } else if (std.mem.eql(u8, name, "has")) {
-                                        try self.push(builtins.Has.value);
-                                        try self.push(target);
-                                    } else if (std.mem.eql(u8, name, "clear")) {
-                                        try self.push(builtins.Clear.value);
+                                    }
+                                    else if (builtins.methods.get(name)) |method_value| {
+                                        try self.push(method_value);
                                         try self.push(target);
                                     } else return self.fail("Unknown method '{s}' on map. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
                                 } else try self.push(Nil);
@@ -776,20 +754,8 @@ pub const Vm = struct {
                                 if (index != .obj and index.obj.data != .string)
                                     return self.fail("Can only query set methods by string name, found '{s}'", .{index.typeName()});
                                 const name = index.obj.data.string;
-                                if (std.mem.eql(u8, name, "count")) {
-                                    try self.push(builtins.Count.value);
-                                    try self.push(target);
-                                } else if (std.mem.eql(u8, name, "add")) {
-                                    try self.push(builtins.Add.value);
-                                    try self.push(target);
-                                } else if (std.mem.eql(u8, name, "remove")) {
-                                    try self.push(builtins.Remove.value);
-                                    try self.push(target);
-                                } else if (std.mem.eql(u8, name, "has")) {
-                                    try self.push(builtins.Has.value);
-                                    try self.push(target);
-                                } else if (std.mem.eql(u8, name, "clear")) {
-                                    try self.push(builtins.Clear.value);
+                                if (builtins.methods.get(name)) |method_value| {
+                                    try self.push(method_value);
                                     try self.push(target);
                                 } else return self.fail("Unknown method '{s}' on set. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
                             },

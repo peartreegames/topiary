@@ -19,6 +19,7 @@ pub const Bytecode = struct {
     boughs: []BoughJump,
     loc: []const u8,
 
+    const sectionCount = 7;
     pub const BoughJump = struct { name: []const u8, ip: C.JUMP };
 
     pub const GlobalSymbol = struct {
@@ -46,8 +47,17 @@ pub const Bytecode = struct {
         allocator.free(self.loc);
     }
 
-    pub fn serialize(self: *Bytecode, writer: anytype) !void {
-        // Keep symbols first for easier deserialization in other systems
+    pub fn serialize(self: *Bytecode, seekable: anytype) !void {
+        var writer = seekable.writer();
+        const isSeekable = @hasField(@TypeOf(seekable.*), "getPos");
+        const headerPos = if (isSeekable) try seekable.getPos() else 0;
+        var section: u8 = 0;
+        // globals, boughs, instructions, debug info, constants, uuids, loc
+        while (section < sectionCount) : (section += 1) {
+                try writer.writeInt(u64, 0, .little); // Placeholder for section offset
+        }
+
+        const globalPos = if (isSeekable) try seekable.getPos() else 0;
         try writer.writeInt(u64, @as(u64, @intCast(self.global_symbols.len)), .little);
         for (self.global_symbols) |sym| {
             try writer.writeInt(u8, @as(u8, @intCast(sym.name.len)), .little);
@@ -57,6 +67,7 @@ pub const Bytecode = struct {
             try writer.writeByte(if (sym.is_mutable) 1 else 0);
         }
 
+        const boughPos = if (isSeekable) try seekable.getPos() else 0;
         try writer.writeInt(u64, @as(u64, @intCast(self.boughs.len)), .little);
         for (self.boughs) |bough| {
             try writer.writeInt(u16, @as(u16, @intCast(bough.name.len)), .little);
@@ -64,23 +75,41 @@ pub const Bytecode = struct {
             try writer.writeInt(C.JUMP, bough.ip, .little);
         }
 
+        const instPos = if (isSeekable) try seekable.getPos() else 0;
         try writer.writeInt(u64, @as(u64, @intCast(self.instructions.len)), .little);
         try writer.writeAll(self.instructions);
 
+        const debugPos = if (isSeekable) try seekable.getPos() else 0;
         try writer.writeInt(u16, @as(u16, @intCast(self.debug_info.len)), .little);
         for (self.debug_info) |debug| try debug.serialize(writer);
 
+        const constPos = if (isSeekable) try seekable.getPos() else 0;
         try writer.writeInt(u64, @as(u64, @intCast(self.constants.len)), .little);
         for (self.constants) |constant| try constant.serialize(writer);
 
+        const uuidPos = if (isSeekable) try seekable.getPos() else 0;
         try writer.writeInt(u64, @as(u64, @intCast(self.uuids.len)), .little);
         for (self.uuids) |uuid| try writer.writeAll(&uuid);
 
+        const locPos = if (isSeekable) try seekable.getPos() else 0;
         try writer.writeInt(u128, @as(u128, @intCast(self.loc.len)), .little);
         try writer.writeAll(self.loc);
+
+        if (isSeekable) {
+            try seekable.seekTo(headerPos);
+            try writer.writeInt(u64, globalPos, .little);
+            try writer.writeInt(u64, boughPos, .little);
+            try writer.writeInt(u64, instPos, .little);
+            try writer.writeInt(u64, debugPos, .little);
+            try writer.writeInt(u64, constPos, .little);
+            try writer.writeInt(u64, uuidPos, .little);
+            try writer.writeInt(u64, locPos, .little);
+        }
     }
 
     pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !Bytecode {
+        // skip headers
+        try reader.skipBytes(sectionCount * @sizeOf(u64), .{});
         const globals_count = try reader.readInt(u64, .little);
         var global_symbols = try allocator.alloc(GlobalSymbol, globals_count);
         var count: usize = 0;

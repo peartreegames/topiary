@@ -28,7 +28,7 @@ pub export fn calculateCompileSize(path_ptr: [*:0]const u8, log_ptr: usize, log_
     const logger = ExportLogger{ .on_log = @ptrFromInt(log_ptr), .severity = @enumFromInt(log_severity), .allocator = alloc };
     logger.log("Calculating Compile size", .{}, .debug);
     var counter = std.io.countingWriter(std.io.null_writer);
-    writeBytecode(std.mem.sliceTo(path_ptr, 0), counter.writer(), logger);
+    writeBytecode(std.mem.sliceTo(path_ptr, 0), &counter, logger);
     return counter.bytes_written;
 }
 
@@ -37,12 +37,11 @@ pub export fn calculateCompileSize(path_ptr: [*:0]const u8, log_ptr: usize, log_
 pub export fn compile(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, log_ptr: usize, log_severity: u8) callconv(.C) usize {
     const logger = ExportLogger{ .on_log = @ptrFromInt(log_ptr), .severity = @enumFromInt(log_severity), .allocator = alloc };
     var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
-    const writer = fbs.writer();
-    writeBytecode(std.mem.sliceTo(path_ptr, 0), writer, logger);
+    writeBytecode(std.mem.sliceTo(path_ptr, 0), &fbs, logger);
     return fbs.pos;
 }
 
-fn writeBytecode(path: []const u8, writer: anytype, logger: ExportLogger) void {
+fn writeBytecode(path: []const u8, seekable: anytype, logger: ExportLogger) void {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     const comp_alloc = arena.allocator();
@@ -102,7 +101,7 @@ fn writeBytecode(path: []const u8, writer: anytype, logger: ExportLogger) void {
         return;
     };
 
-    bytecode.serialize(writer) catch |err| {
+    bytecode.serialize(seekable) catch |err| {
         logger.log("Could not serialize bytecode: {s}", .{@errorName(err)}, .err);
         return;
     };

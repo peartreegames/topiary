@@ -202,10 +202,9 @@ pub fn main() !void {
         if (std.fs.path.dirname(out_path.?)) |dir_name| {
             try dir.makePath(dir_name);
         }
-        const file = try dir.createFile(out_path.?, .{});
+        var file = try dir.createFile(out_path.?, .{});
         defer file.close();
-        const writer = file.writer();
-        bytecode.serialize(writer) catch |err| {
+        bytecode.serialize(&file) catch |err| {
             return checkVerbose(err);
         };
         return;

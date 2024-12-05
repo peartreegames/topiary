@@ -246,8 +246,11 @@ pub const Value = union(Type) {
         switch (self) {
             .bool => |b| try writer.writeByte(if (b) '1' else '0'),
             .number => |n| {
-                try writer.print("{d:.5}", .{n});
-                try writer.writeByte(0);
+                var buf: [128]u8 = undefined;
+                var fbs = std.io.fixedBufferStream(buf[0..]);
+                try fbs.writer().print("{d:.5}", .{n});
+                try writer.writeInt(u8, @as(u8, @intCast(fbs.pos)), .little);
+                try writer.writeAll(fbs.getWritten());
             },
             .visit => |v| {
                 try writer.writeInt(u32, v, .little);
@@ -294,9 +297,11 @@ pub const Value = union(Type) {
             .nil => Nil,
             .bool => if (try reader.readByte() == '1') True else False,
             .number => {
-                const val = try reader.readUntilDelimiterAlloc(allocator, 0, 128);
-                defer allocator.free(val);
-                return .{ .number = try std.fmt.parseFloat(f32, val) };
+                const length = try reader.readInt(u8, .little);
+                const buf = try allocator.alloc(u8, length);
+                defer allocator.free(buf);
+                try reader.readNoEof(buf);
+                return .{ .number = try std.fmt.parseFloat(f32, buf) };
             },
             .visit => {
                 return .{ .visit = try reader.readInt(u32, .little) };
