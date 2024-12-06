@@ -49,7 +49,7 @@ pub const Bytecode = struct {
 
     pub fn serialize(self: *Bytecode, seekable: anytype) !void {
         var writer = seekable.writer();
-        const isSeekable = @hasField(@TypeOf(seekable.*), "getPos");
+        const isSeekable = @hasDecl(@TypeOf(seekable.*), "getPos");
         const headerPos = if (isSeekable) try seekable.getPos() else 0;
         var section: u8 = 0;
         // globals, boughs, instructions, debug info, constants, uuids, loc
