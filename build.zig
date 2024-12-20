@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const name = b.option([]const u8, "name", "Name of the output file") orelse "topi";
 
     const version = getVersion(b) catch |err| {
         std.log.err("Could not get version: {}", .{err});
@@ -21,7 +22,7 @@ pub fn build(b: *std.Build) void {
     topi_export.addImport("topi", topi);
 
     const topilib = b.addSharedLibrary(.{
-        .name = "topi",
+        .name = name,
         .root_source_file = b.path("src/export/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -32,7 +33,7 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&art.step);
 
     const exe = b.addExecutable(.{
-        .name = "topi",
+        .name = name,
         .root_source_file = b.path("src/cli/main.zig"),
         .target = target,
         .optimize = optimize,

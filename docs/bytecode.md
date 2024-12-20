@@ -44,7 +44,7 @@ Starting Positions of each Section
 
 | Name     | Type       |
 |----------|------------|
-| Length   | u8         |
+| Length   | u16         |
 | Name     | u8[Length] |
 | Position | u32        |
 
