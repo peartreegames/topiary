@@ -91,15 +91,15 @@ test "Create and Destroy Vm" {
     try file.writer().writeAll(text);
 
     try file.seekTo(0);
-    const buf = try std.testing.allocator.alloc(u8, 8192);
-    defer std.testing.allocator.free(buf);
     const dir_path = try std.fs.cwd().realpathAlloc(std.testing.allocator, ".");
     defer std.testing.allocator.free(dir_path);
     const path = try std.fs.path.resolve(std.testing.allocator, &.{ dir_path, "tmp.topi" ++ "\x00" });
     defer std.testing.allocator.free(path);
     const path_ptr: [*:0]const u8 = path[0 .. path.len - 1 :0];
     const calc_size = main.calculateCompileSize(path_ptr, @intFromPtr(&TestRunner.log), @intFromEnum(ExportLogger.Severity.debug));
-    const compile_size = main.compile(path_ptr, buf.ptr, buf.len, @intFromPtr(&TestRunner.onValueChanged), @intFromEnum(ExportLogger.Severity.debug));
+    const buf = try std.testing.allocator.alloc(u8, calc_size);
+    defer std.testing.allocator.free(buf);
+    const compile_size = main.compile(path_ptr, buf.ptr, buf.len, @intFromPtr(&TestRunner.log), @intFromEnum(ExportLogger.Severity.debug));
     try std.testing.expectEqual(compile_size, calc_size);
 
     const vm_ptr = main.createVm(

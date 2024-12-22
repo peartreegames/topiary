@@ -927,11 +927,15 @@ pub const Vm = struct {
                     try self.push(Void);
                 },
                 .fork => {
-                    if (is_in_jump) continue;
                     self.is_waiting = true;
                     self.current_choices = try self.choices_list.toOwnedSlice();
-                    self.runner.onChoices(self, self.current_choices);
                     self.choices_list.clearRetainingCapacity();
+                    if (is_in_jump) {
+                        for(self.current_choices) |c| self.allocator.free(c.tags);
+                        self.allocator.free(self.current_choices);
+                        continue;
+                    }
+                    self.runner.onChoices(self, self.current_choices);
                     return;
                 },
                 .choice => {

@@ -26,9 +26,9 @@ var alloc = gpa.allocator();
 /// for a compiled topi module
 pub export fn calculateCompileSize(path_ptr: [*:0]const u8, log_ptr: usize, log_severity: u8) callconv(.C) usize {
     const logger = ExportLogger{ .on_log = @ptrFromInt(log_ptr), .severity = @enumFromInt(log_severity), .allocator = alloc };
-    logger.log("Calculating Compile size", .{}, .debug);
     var counter = std.io.countingWriter(std.io.null_writer);
     writeBytecode(std.mem.sliceTo(path_ptr, 0), &counter, logger);
+    logger.log("Calculated Compile size {d}", .{counter.bytes_written}, .debug);
     return counter.bytes_written;
 }
 
@@ -38,6 +38,7 @@ pub export fn compile(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, log_p
     const logger = ExportLogger{ .on_log = @ptrFromInt(log_ptr), .severity = @enumFromInt(log_severity), .allocator = alloc };
     var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
     writeBytecode(std.mem.sliceTo(path_ptr, 0), &fbs, logger);
+    logger.log("Compiled size {d} / {d}", .{fbs.pos, max}, .debug);
     return fbs.pos;
 }
 

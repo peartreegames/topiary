@@ -978,6 +978,34 @@ test "Boughs" {
         \\    assert(false, "should not be here")
         \\ }
         },
+        .{
+            .input =
+        \\ var count = 0
+        \\ === START {
+        \\    :speaker: "Text goes here"
+        \\    === QS {
+        \\        :speaker: "Start fork"
+        \\        fork QUESTION {
+        \\            ~ "One" #test => ANSWERS.ONE
+        \\            ~ "Two" => ANSWERS.TWO
+        \\        }
+        \\    }
+        \\    :speaker: "More goes here"
+        \\    => QS
+        \\    === ANSWERS {
+        \\        === ONE {
+        \\            :speaker: "One"
+        \\            count += 1
+        \\            if count < 3 => QS.QUESTION
+        \\        }
+        \\        === TWO {
+        \\            :speaker: "Two"
+        \\            count += 1
+        \\            if count < 3 => QS.QUESTION
+        \\        }
+        \\    }
+        \\ }
+        }
     };
 
     inline for (test_cases) |case| {

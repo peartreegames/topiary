@@ -48,6 +48,7 @@ pub const Bytecode = struct {
     }
 
     pub fn serialize(self: *Bytecode, seekable: anytype) !void {
+        std.debug.assert(@hasDecl(@TypeOf(seekable.*), "writer"));
         var writer = seekable.writer();
         const isSeekable = @hasDecl(@TypeOf(seekable.*), "getPos");
         const headerPos = if (isSeekable) try seekable.getPos() else 0;
@@ -96,6 +97,7 @@ pub const Bytecode = struct {
         try writer.writeAll(self.loc);
 
         if (isSeekable) {
+            const end = try seekable.getPos();
             try seekable.seekTo(headerPos);
             try writer.writeInt(u64, globalPos, .little);
             try writer.writeInt(u64, boughPos, .little);
@@ -104,6 +106,7 @@ pub const Bytecode = struct {
             try writer.writeInt(u64, constPos, .little);
             try writer.writeInt(u64, uuidPos, .little);
             try writer.writeInt(u64, locPos, .little);
+            try seekable.seekTo(end);
         }
     }
 
@@ -187,8 +190,8 @@ pub const Bytecode = struct {
     pub fn print(code: *Bytecode, writer: anytype) !void {
         try writer.print("\n==BYTECODE==\n", .{});
         try printInstructions(writer, code.instructions);
-        try writer.print("\n==DEBUG==\n", .{});
-        try printDebugInfo(writer, code.debug_info);
+        // try writer.print("\n==DEBUG==\n", .{});
+        // try printDebugInfo(writer, code.debug_info);
     }
 
     pub fn printDebugInfo(writer: anytype, debug: []DebugInfo) !void {
@@ -224,9 +227,9 @@ pub const Bytecode = struct {
                     var count = instructions[i];
                     i += 1;
                     const dest = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
-                    try writer.print("{d: >8} ", .{dest});
                     i += 4;
                     count -= 1;
+                    try writer.print("{d: >8} ", .{dest});
                     while (count > 0) : (count -= 1) {
                         const next = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
                         try writer.print(" {d}", .{next});
@@ -263,27 +266,28 @@ pub const Bytecode = struct {
                     const has_speaker = instructions[i] == 1;
                     const tag_count = instructions[i + 1];
                     _ = tag_count;
-                    const id = std.mem.readVarInt(u32, instructions[(i + 2)..(i + 6)], .little);
-                    i += 6;
+                    i += 2;
+                    const id = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
+                    i += 4;
                     try writer.print("{: >8}", .{has_speaker});
                     try writer.print("   = ", .{});
                     try writer.print("{}", .{id});
                 },
                 .choice => {
                     const dest = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
-                    const is_unique = instructions[i + 4] == 1;
                     i += 4;
+                    const is_unique = instructions[i] == 1;
+                    i += 1;
                     const id = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
                     _ = id;
                     i += 4;
                     const visit_id = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
                     _ = visit_id;
                     i += 4;
-                    const tag_count = instructions[i + 1];
-                    _ = tag_count;
+                    const tag_count = instructions[i];
                     i += 1;
                     try writer.print("{d: >8}", .{dest});
-                    try writer.print(" unique: {}", .{is_unique});
+                    try writer.print(" unique: {}, tags: {d}", .{is_unique, tag_count});
                 },
                 .string, .closure => {
                     const index = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
