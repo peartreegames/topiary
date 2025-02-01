@@ -51,9 +51,10 @@ fn usage(comptime msg: []const u8) !void {
     try out.print("       -l, --localize            Include localization in compiled bytecode\n", .{});
     try out.print("       -v, --verbose\n", .{});
     try out.print("   topi loc validate <file>      Validate dialogue localization ids\n", .{});
+    try out.print("       -d, --dry                 Do not write to file on end\n", .{});
     try out.print("       -v, --verbose\n", .{});
     try out.print("   topi loc export <file>        Export dialogue localization to csv\n", .{});
-    try out.print("       -d, --dry                 Do not output to file on end\n", .{});
+    try out.print("       -d, --dry                 Do not write to file on end\n", .{});
     try out.print("       -o, --output <file>       Write to file on end\n", .{});
     try out.print("       -v, --verbose\n", .{});
     try out.print("\n", .{});
