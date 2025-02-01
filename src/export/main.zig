@@ -38,7 +38,7 @@ pub export fn compile(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, log_p
     const logger = ExportLogger{ .on_log = @ptrFromInt(log_ptr), .severity = @enumFromInt(log_severity), .allocator = alloc };
     var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
     writeBytecode(std.mem.sliceTo(path_ptr, 0), &fbs, logger);
-    logger.log("Compiled size {d} / {d}", .{fbs.pos, max}, .debug);
+    logger.log("Compiled size {d} / {d}", .{ fbs.pos, max }, .debug);
     return fbs.pos;
 }
 
@@ -269,6 +269,21 @@ pub export fn calculateStateSize(vm_ptr: usize) usize {
     return State.calculateSize(vm) catch 0;
 }
 
+pub export fn saveStateFile(vm_ptr: usize, path_ptr: [*:0]u8) void {
+    const vm: *Vm = @ptrFromInt(vm_ptr);
+    const path = std.mem.sliceTo(path_ptr, 0);
+    var file = std.fs.openFileAbsolute(path, .{}) catch |err| {
+        const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
+        runner.logger.log("Could not open file: {s}", .{@errorName(err)}, .err);
+        return;
+    };
+    defer file.close();
+    State.serialize(vm, file.writer()) catch |err| {
+        const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
+        runner.logger.log("Could not serialize state: {s}", .{@errorName(err)}, .err);
+    };
+}
+
 pub export fn saveState(vm_ptr: usize, out_ptr: [*:0]u8, max: usize) usize {
     const vm: *Vm = @ptrFromInt(vm_ptr);
     var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
@@ -280,9 +295,25 @@ pub export fn saveState(vm_ptr: usize, out_ptr: [*:0]u8, max: usize) usize {
     return fbs.pos;
 }
 
+pub export fn loadStateFile(vm_ptr: usize, path_ptr: [*:0]u8) void {
+    const vm: *Vm = @ptrFromInt(vm_ptr);
+    const path = std.mem.sliceTo(path_ptr, 0);
+    var file = std.fs.openFileAbsolute(path, .{}) catch |err| {
+        const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
+        runner.logger.log("Could not load file: {s}", .{@errorName(err)}, .err);
+        return;
+    };
+    defer file.close();
+    State.deserialize(vm, file.reader()) catch |err| {
+        const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
+        runner.logger.log("Could not deserialize data: {s}", .{@errorName(err)}, .err);
+    };
+}
+
 pub export fn loadState(vm_ptr: usize, json_str: [*]const u8, json_len: usize) void {
     const vm: *Vm = @ptrFromInt(vm_ptr);
-    State.deserialize(vm, json_str[0..json_len]) catch |err| {
+    var fbs = std.io.fixedBufferStream(json_str[0..json_len]);
+    State.deserialize(vm, fbs.reader()) catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
         runner.logger.log("Could not deserialize data: {s}", .{@errorName(err)}, .err);
     };

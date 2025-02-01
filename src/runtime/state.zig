@@ -220,12 +220,15 @@ pub const State = struct {
         try stream.endObject();
     }
 
-    pub fn deserialize(vm: *Vm, json_str: []const u8) !void {
-        var parsed = try std.json.parseFromSlice(std.json.Value, vm.allocator, json_str, .{});
-        defer parsed.deinit();
-        var refs = std.AutoHashMap(UUID.ID, Value).init(vm.allocator);
-        defer refs.deinit();
-        const root = parsed.value.object;
+    pub fn deserialize(vm: *Vm, reader: anytype) !void {
+        var arena = std.heap.ArenaAllocator.init(vm.allocator);
+        defer arena.deinit();
+        var json = std.json.reader(vm.allocator, reader);
+        defer json.deinit();
+
+        const value = try std.json.parseFromTokenSourceLeaky(std.json.Value, arena.allocator(), &json, .{});
+        var refs = std.AutoHashMap(UUID.ID, Value).init(arena.allocator());
+        const root = value.object;
         for (vm.bytecode.global_symbols) |sym| {
             const maybe_entry = root.get(sym.name);
             if (maybe_entry) |entry| {
