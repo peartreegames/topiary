@@ -978,8 +978,7 @@ test "Boughs" {
         \\    assert(false, "should not be here")
         \\ }
         },
-        .{
-            .input =
+        .{ .input = 
         \\ var count = 0
         \\ === START {
         \\    :speaker: "Text goes here"
@@ -1005,7 +1004,7 @@ test "Boughs" {
         \\        }
         \\    }
         \\ }
-        }
+        },
     };
 
     inline for (test_cases) |case| {
@@ -1016,6 +1015,41 @@ test "Boughs" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
+            vm.err.print(std.io.getStdErr().writer());
+            return err;
+        };
+    }
+}
+
+test "Bough Nested Starts with Backups" {
+    const input =
+        \\ === START {
+        \\    => OUTER^
+        \\    var val = "value"
+        \\    === OUTER {
+        \\        fork^ {
+        \\           ~ "One" { "One" }
+        \\           ~ "Two" { "Two" }
+        \\        }
+        \\        :Speaker: "Outer"    
+        \\        === INNER {
+        \\            :Speaker: "Inner"
+        \\        }
+        \\        :Speaker: "After Inner"
+        \\    }
+        \\    :Speaker: "After Outer"
+        \\ }
+        \\ :Speaker: "After Start"
+    ;
+
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(input, mod, false);
+    defer vm.deinit();
+    defer vm.bytecode.free(testing.allocator);
+    try vm.start("START.OUTER.INNER");
+    while (vm.can_continue) {
+        vm.run() catch |err| {
             vm.err.print(std.io.getStdErr().writer());
             return err;
         };
@@ -1624,7 +1658,8 @@ test "Save and Load State" {
     var vm2 = try initTestVm(second_case, mod2, false);
     defer vm2.deinit();
     defer vm2.bytecode.free(testing.allocator);
-    try State.deserialize(&vm2, data.items);
+    var data_fbs = std.io.fixedBufferStream(data.items);
+    try State.deserialize(&vm2, data_fbs.reader());
     try testing.expectEqual(vm2.globals[0].number, 1);
     try testing.expectEqualSlices(u8, vm2.globals[1].obj.data.list.items[0].obj.data.list.items[0].obj.data.string, "changed");
     try testing.expectEqual(vm2.globals[2].obj.data.instance.fields[1].number, 2);

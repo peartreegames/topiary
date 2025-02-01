@@ -743,8 +743,7 @@ pub const Vm = struct {
                                     if (std.mem.eql(u8, name, "add")) {
                                         try self.push(builtins.methods.get("__addmap").?);
                                         try self.push(target);
-                                    }
-                                    else if (builtins.methods.get(name)) |method_value| {
+                                    } else if (builtins.methods.get(name)) |method_value| {
                                         try self.push(method_value);
                                         try self.push(target);
                                     } else return self.fail("Unknown method '{s}' on map. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
@@ -931,7 +930,7 @@ pub const Vm = struct {
                     self.current_choices = try self.choices_list.toOwnedSlice();
                     self.choices_list.clearRetainingCapacity();
                     if (is_in_jump) {
-                        for(self.current_choices) |c| self.allocator.free(c.tags);
+                        for (self.current_choices) |c| self.allocator.free(c.tags);
                         self.allocator.free(self.current_choices);
                         continue;
                     }
@@ -992,6 +991,7 @@ pub const Vm = struct {
                 },
                 .backup => {
                     const ip = self.readInt(C.JUMP);
+                    if (is_in_jump) continue;
                     if (self.jump_backups.items.len > 0 and self.jump_backups.getLast() == ip) {
                         _ = try self.pop();
                         continue;
