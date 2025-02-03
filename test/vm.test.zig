@@ -529,7 +529,7 @@ test "Builtin Functions" {
         };
         const writer = std.io.getStdErr().writer();
         const value = vm.stack.previous();
-        try value.print(writer);
+        try value.print(writer, null);
         try writer.writeAll("\n");
         try testing.expect(value == .number);
     }
