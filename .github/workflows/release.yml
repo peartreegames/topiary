@@ -1,0 +1,55 @@
+
+on:
+  push:
+    tags:
+      - 'v*'
+name: Release
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Test
+        run: zig build test
+
+      - name: Build x86_64-windows
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-windows -p ./x86_64-windows
+
+      - name: Package x64_64-windows
+        run: zip -r x86_64-windows ./x86_64-windows
+
+      - name: Build x86_64-linux
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux -p ./x86_64-linux
+
+      - name: Package x86_64-linux
+        run: tar -czvf x86_64-linux.tar.gz ./x86_64-linux
+
+      - name: Build x86_64-macos
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-macos -p ./x86_64-macos
+
+      - name: Package x64_64-macos
+        run: tar -czvf x86_64-macos.tar.gz ./x86_64-macos
+
+      - name: Build aarch64-macos
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=aarch64-macos -p ./aarch64-macos
+
+      - name: Package aarch64-macos
+        run: tar -czvf aarch64-macos.tar.gz ./aarch64-macos
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            x86_64-windows.zip
+            x86_64-linux.tar.xz
+            x86_64-macos.tar.xz
+            aarch64-macos.tar.xz
