@@ -1461,6 +1461,26 @@ test "Jump Code" {
     }
 }
 
+test "Circular References" {
+    const input =
+        \\ var one = List{}
+        \\ var two = List{}
+        \\ one.add(two)
+        \\ two.add(one)
+        \\ print(one)
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    std.debug.print("\n======\n", .{});
+    var vm = try initTestVm(input, mod, false);
+    defer vm.deinit();
+    defer vm.bytecode.free(testing.allocator);
+    vm.interpret() catch |err| {
+        vm.err.print(std.io.getStdErr().writer());
+        return err;
+    };
+}
+
 test "Switch" {
     const test_cases = .{
         .{

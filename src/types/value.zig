@@ -372,10 +372,12 @@ pub const Value = union(Type) {
         _: std.fmt.FormatOptions,
         writer: anytype,
     ) !void {
-        return self.print(writer);
+        return self.print(writer, null);
     }
 
-    pub fn print(self: Value, writer: anytype) !void {
+    /// Prints value to writer
+    /// Optional AutoArrayHashMap can be passed in to detect circular references
+    pub fn print(self: Value, writer: anytype, set: ?*std.AutoArrayHashMap(UUID.ID, void)) !void {
         switch (self) {
             .number => |n| try writer.print("{d:.5}", .{n}),
             .bool => |b| try writer.print("{}", .{b}),
@@ -383,12 +385,25 @@ pub const Value = union(Type) {
             .visit => |v| try writer.print("{d}", .{v}),
             .enum_value => |e| try writer.print("{s}.{s}", .{ e.base.data.@"enum".name, e.base.data.@"enum".values[e.index] }),
             .obj => |o| {
+                const is_container: bool = switch (o.data) {
+                    .list, .map, .set, .instance => true,
+                    else => false,
+                };
+                if (is_container) {
+                    if (set) |a| {
+                        if (a.contains(o.id)) {
+                            try writer.print("CIRCULAR", .{});
+                            return;
+                        }
+                        try a.putNoClobber(o.id, {});
+                    }
+                }
                 switch (o.data) {
                     .string => |s| try writer.print("{s}", .{s}),
                     .list => |l| {
                         try writer.print("List{{", .{});
                         for (l.items, 0..) |item, i| {
-                            try item.print(writer);
+                            try item.print(writer, set);
                             if (i != l.items.len - 1)
                                 try writer.print(", ", .{});
                         }
@@ -398,9 +413,9 @@ pub const Value = union(Type) {
                         try writer.print("Map{{", .{});
                         const keys = m.keys();
                         for (keys, 0..) |k, i| {
-                            try k.print(writer);
+                            try k.print(writer, set);
                             try writer.print(":", .{});
-                            try m.get(k).?.print(writer);
+                            try m.get(k).?.print(writer, set);
                             if (i != keys.len - 1)
                                 try writer.print(", ", .{});
                         }
@@ -410,7 +425,7 @@ pub const Value = union(Type) {
                         const keys = s.keys();
                         try writer.print("Set{{", .{});
                         for (keys, 0..) |k, i| {
-                            try k.print(writer);
+                            try k.print(writer, set);
                             if (i != keys.len - 1)
                                 try writer.print(", ", .{});
                         }
@@ -434,7 +449,7 @@ pub const Value = union(Type) {
                         try writer.print(" {{\n", .{});
                         for (i.fields, 0..) |v, idx| {
                             try writer.print("    {s}: ", .{i.base.data.class.fields[idx].name});
-                            try v.print(writer);
+                            try v.print(writer, set);
                             try writer.print("\n", .{});
                         }
                         try writer.print("}}", .{});

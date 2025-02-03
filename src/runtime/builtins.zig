@@ -6,6 +6,9 @@ const Void = types.Void;
 const True = types.True;
 const False = types.False;
 
+const utils = @import("../utils/index.zig");
+const UUID = utils.UUID;
+
 const Vm = @import("vm.zig").Vm;
 pub const Builtin = *const fn (vm: *Vm, args: []Value) Value;
 var r: ?std.rand.DefaultPrng = null;
@@ -91,9 +94,11 @@ fn abs(_: *Vm, args: []Value) Value {
     return .{ .number = @abs(args[0].number) };
 }
 
-fn print(_: *Vm, args: []Value) Value {
+fn print(vm: *Vm, args: []Value) Value {
     const writer = std.io.getStdErr().writer();
-    args[0].print(writer) catch unreachable;
+    var arr = std.AutoArrayHashMap(UUID.ID, void).init(vm.allocator);
+    defer arr.deinit();
+    args[0].print(writer, &arr) catch unreachable;
     writer.print("\n", .{}) catch unreachable;
     return Void;
 }
