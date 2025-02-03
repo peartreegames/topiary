@@ -50,6 +50,6 @@ jobs:
           generate_release_notes: true
           files: |
             x86_64-windows.zip
-            x86_64-linux.tar.xz
-            x86_64-macos.tar.xz
-            aarch64-macos.tar.xz
+            x86_64-linux.tar.gz
+            x86_64-macos.tar.gz
+            aarch64-macos.tar.gz
