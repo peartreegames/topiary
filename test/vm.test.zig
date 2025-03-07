@@ -715,26 +715,37 @@ test "While and For Loops" {
 test "Classes" {
     const input =
         \\ class Test = {
-        \\    value = 0
+        \\    value = 0,
+        \\    one = || return 1,
         \\ }
         \\ assert(Test.value == 0, "Test.value == 0")
+        \\ assert(Test.one() == 1, "Test.one == 1")
     ;
     var mod = try Module.initEmpty(allocator);
     defer mod.deinit();
     var vm = try initTestVm(input, mod, false);
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
-    try vm.interpret();
+    vm.interpret() catch |err| {
+        vm.err.print(std.io.getStdErr().writer());
+        return err;
+    };
 }
 
 test "Class Runtime Error" {
     const tests = .{
         \\ class Test = {
-        \\    value = 0
+        \\    value = 0,
+        \\    one = || return 1,
         \\ }
         \\ var test = new Test{}
         \\ test.val = 55
         ,
+        \\ class Test = {
+        \\    value = 0, // zero
+        \\    one = || return self.value,
+        \\ }
+        \\ Test.one() != Test.value
     };
     inline for (tests) |input| {
         var mod = try Module.initEmpty(allocator);

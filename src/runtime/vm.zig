@@ -324,6 +324,9 @@ pub const Vm = struct {
                 }
             }
         }
+        while (self.frames.count > 1) {
+            _ = self.frames.pop();
+        }
         self.can_continue = false;
         return Error.RuntimeError;
     }
@@ -789,6 +792,9 @@ pub const Vm = struct {
                                 for (c.fields) |field| {
                                     if (std.mem.eql(u8, field.name, index.obj.data.string)) {
                                         try self.push(field.value);
+                                        if (field.value == .obj and field.value.obj.data == .closure) {
+                                            try self.push(Nil); // add nil for "self" in static method
+                                        }
                                         found = true;
                                     }
                                 }

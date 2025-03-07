@@ -1652,7 +1652,10 @@ test "Serialize" {
         \\ const fun = |x| {
         \\     return x * 2
         \\ }
-        \\ var list = List{"one", "two"}
+        \\ var list = List{
+        \\    "one", // comment on one
+        \\    "two"
+        \\ }
         \\ const set = Set{1, 2, 3.3}
         \\ const map = Map{1:2.2, 3: 4.4}
     ;

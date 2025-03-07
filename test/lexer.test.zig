@@ -128,7 +128,6 @@ test "Check supported tokens" {
         .{ .token_type = .comma, .start = 291, .end = 291, .line = 26, .column = 9, .file_index = 0 },
         .{ .token_type = .number, .start = 293, .end = 294, .line = 26, .column = 11, .file_index = 0 },
         .{ .token_type = .right_brace, .start = 294, .end = 294, .line = 26, .column = 12, .file_index = 0 },
-        .{ .token_type = .comment, .start = 299, .end = 307, .line = 27, .column = 13, .file_index = 0 },
         .{ .token_type = .class, .start = 309, .end = 314, .line = 28, .column = 3, .file_index = 0 },
         .{ .token_type = .identifier, .start = 315, .end = 326, .line = 28, .column = 9, .file_index = 0 },
         .{ .token_type = .left_brace, .start = 327, .end = 327, .line = 28, .column = 21, .file_index = 0 },
