@@ -129,7 +129,6 @@ pub const Parser = struct {
                     .block = try self.block(),
                 },
             },
-            .comment => try self.commentStatement(),
             else => .{
                 .token = self.current_token,
                 .type = .{
@@ -1056,15 +1055,6 @@ pub const Parser = struct {
                     .values = if (is_else) null else try values.toOwnedSlice(),
                     .body = try self.block(),
                 },
-            },
-        };
-    }
-
-    fn commentStatement(self: *Parser) Error!Statement {
-        return .{
-            .token = self.current_token,
-            .type = .{
-                .comment = try self.getStringValue(),
             },
         };
     }

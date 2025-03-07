@@ -112,16 +112,8 @@ pub const Lexer = struct {
             '/' => if (self.peekChar() == '=') {
                 return self.readAndCreateToken(.slash_equal, 2, file_index);
             } else if (self.peekChar() == '/') {
-                const start = self.position;
                 self.readLine();
-                return .{
-                    .token_type = .comment,
-                    .start = start + 2,
-                    .end = self.position,
-                    .line = self.line,
-                    .column = self.column,
-                    .file_index = file_index,
-                };
+                return next(self, file_index);
             } else .slash,
             '"' => {
                 self.readChar();
