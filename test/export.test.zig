@@ -14,33 +14,36 @@ const ExportLine = exp.ExportLine;
 const ExportChoice = exp.ExportChoice;
 
 const TestRunner = struct {
-    pub fn onLine(vm_ptr: usize, dialogue: *ExportLine) callconv(.C) void {
+    pub fn onLine(vm_ptr: usize, dialogue: *ExportLine) callconv(.c) void {
         _ = dialogue;
         main.selectContinue(vm_ptr);
     }
 
-    pub fn onChoices(vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) callconv(.C) void {
+    pub fn onChoices(vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) callconv(.c) void {
         _ = choices;
         _ = choices_len;
         main.selectChoice(vm_ptr, 0);
     }
 
-    pub fn onValueChanged(_: usize, name_ptr: [*c]const u8, name_len: usize, value: ExportValue) callconv(.C) void {
-        std.debug.print("onValueChanged: {s} = ", .{name_ptr[0..name_len]});
-        value.print(std.debug);
-        std.debug.print("\n", .{});
+    pub fn onValueChanged(_: usize, name_ptr: [*c]const u8, name_len: usize, value: ExportValue) callconv(.c) void {
+        var buffer: [1024]u8 = undefined;
+        var writer = std.fs.File.stderr().writer(&buffer);
+        const stderr = &writer.interface;
+        stderr.print("onValueChanged: {s} = ", .{name_ptr[0..name_len]}) catch {};
+        value.print(stderr) catch {};
+        stderr.print("\n", .{}) catch {};
     }
 
-    pub fn log(msg: ExportString, severity: ExportLogger.Severity) callconv(.C) void {
-        std.debug.print("[{s}] {s}\n", .{ @tagName(severity), msg.ptr[0..msg.len] });
+    pub fn log(msg: ExportString, severity: ExportLogger.Severity) callconv(.c) void {
+        std.debug.print("[{t}] {s}\n", .{ severity, msg.ptr[0..msg.len] });
     }
 
     pub fn free(ptr: usize) void {
         std.debug.print("test export free memory at: {d}\n", .{ptr});
     }
 
-    // *const fn (vm_ptr: usize, args: [*c]ExportValue, args_len: u8) callconv(.C) ExportValue;
-    pub fn sum(_: usize, args: [*c]ExportValue, _: u8) callconv(.C) ExportValue {
+    // *const fn (vm_ptr: usize, args: [*c]ExportValue, args_len: u8) callconv(.c) ExportValue;
+    pub fn sum(_: usize, args: [*c]ExportValue, _: u8) callconv(.c) ExportValue {
         const arg1 = args[0].data.number;
         const arg2 = args[1].data.number;
         std.debug.print("extern sum {d} + {d} = {d}\n", .{ arg1, arg2, arg1 + arg2 });
@@ -85,10 +88,14 @@ test "Create and Destroy Vm" {
         \\
     ;
 
-    const file = try std.fs.cwd().createFile("tmp.topi", .{ .read = true });
+    const file = try std.fs.cwd().createFile("tmp.topi", .{ .read = false });
     defer std.fs.cwd().deleteFile("tmp.topi") catch {};
     defer file.close();
-    try file.writer().writeAll(text);
+    var file_buf: [1024]u8 = undefined;
+    var file_writer = file.writer(&file_buf);
+    const file_write = &file_writer.interface;
+    try file_write.writeAll(text);
+    try file_write.flush();
 
     try file.seekTo(0);
     const dir_path = try std.fs.cwd().realpathAlloc(std.testing.allocator, ".");
@@ -124,9 +131,14 @@ test "Create and Destroy Vm" {
             .count = 2,
         },
     } };
+
+    const someStr = try std.testing.allocator.dupe(u8, "some");
+    defer std.testing.allocator.free(someStr);
+    const valueStr = try std.testing.allocator.dupe(u8, "value");
+    defer std.testing.allocator.free(valueStr);
     var set_value = [2]ExportValue{
-        .{ .tag = .string, .data = .{ .string = .{ .ptr = "some".ptr, .len = 4 } } },
-        .{ .tag = .string, .data = .{ .string = .{ .ptr = "value".ptr, .len = 5 } } },
+        .{ .tag = .string, .data = .{ .string = .{ .ptr = someStr.ptr, .len = someStr.len } } },
+        .{ .tag = .string, .data = .{ .string = .{ .ptr = valueStr.ptr, .len = valueStr.len } } },
     };
     const set = ExportValue{
         .tag = .set,
@@ -143,11 +155,15 @@ test "Create and Destroy Vm" {
         .data = .{ .list = .{ .items = &map_value, .count = 4 } },
     };
 
+    const enumStr = try std.testing.allocator.dupe(u8, "Enum");
+    defer std.testing.allocator.free(enumStr);
+    const twoStr = try std.testing.allocator.dupe(u8, "Two");
+    defer std.testing.allocator.free(twoStr);
     const enum_value = ExportValue{
         .tag = .@"enum",
         .data = .{ .@"enum" = .{
-            .name = .{ .ptr = "Enum".ptr, .len = 4 },
-            .value = .{ .ptr = "Two".ptr, .len = 3 },
+            .name = .{ .ptr = enumStr.ptr, .len = enumStr.len },
+            .value = .{ .ptr = twoStr.ptr, .len = twoStr.len },
         } },
     };
     const free_ptr = @intFromPtr(&TestRunner.free);

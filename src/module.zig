@@ -49,8 +49,13 @@ pub const Module = struct {
 
     pub fn generateBytecode(self: *Module, allocator: std.mem.Allocator) !Bytecode {
         try self.entry.loadSource();
+
+        var stderr_buffer: [1024]u8 = undefined;
+        var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+        const stderr = &stderr_writer.interface;
+
         self.entry.buildTree() catch |err| {
-            try self.writeErrors(std.io.getStdErr().writer());
+            try self.writeErrors(stderr);
             return err;
         };
 
@@ -59,13 +64,13 @@ pub const Module = struct {
         defer compiler.deinit();
 
         compiler.compile() catch |e| {
-            try self.writeErrors(std.io.getStdErr().writer());
+            try self.writeErrors(stderr);
             return e;
         };
         return try compiler.bytecode();
     }
 
-    pub fn writeErrors(self: *Module, writer: anytype) !void {
+    pub fn writeErrors(self: *Module, writer: *std.Io.Writer) !void {
         var it = self.includes.iterator();
         while (it.next()) |kvp| {
             var file = kvp.value_ptr.*;
@@ -115,14 +120,15 @@ pub const File = struct {
 
     pub fn loadSource(self: *File) !void {
         if (self.source_loaded) return;
-        const file = try fs.openFileAbsolute(self.path, .{});
+        var file = try fs.openFileAbsolute(self.path, .{});
         defer file.close();
 
         const stat = try file.stat();
         const file_size = stat.size;
-        const source = try self.module.arena.allocator().alloc(u8, file_size);
-        try file.reader().readNoEof(source);
-        self.source = source;
+        var buf: [1024]u8 = undefined;
+        var reader = file.reader(&buf);
+        const read = &reader.interface;
+        self.source = try read.readAlloc(self.module.arena.allocator(), file_size);
         self.source_loaded = true;
     }
 
@@ -144,9 +150,11 @@ pub const File = struct {
 
         const stat = try file.stat();
         const file_size = stat.size;
-        const source = try allocator.alloc(u8, file_size);
-        try file.reader().readNoEof(source);
-        self.loc = source;
+        var buf: [1024]u8 = undefined;
+
+        var reader = file.reader(&buf);
+        const read = &reader.interface;
+        self.loc = try read.readAlloc(self.module.allocator, file_size);
         self.loc_loaded = true;
     }
 
@@ -171,15 +179,15 @@ pub const File = struct {
             .file_index = file_index,
         };
 
-        var nodes = std.ArrayList(Statement).init(alloc);
-        errdefer nodes.deinit();
+        var nodes: std.ArrayList(Statement) = .empty;
+        errdefer nodes.deinit(alloc);
 
         while (!parser.currentIs(.eof)) : (parser.next()) {
-            try nodes.append(try parser.statement());
+            try nodes.append(alloc, try parser.statement());
         }
 
         self.tree = Tree{
-            .root = try nodes.toOwnedSlice(),
+            .root = try nodes.toOwnedSlice(alloc),
         };
         self.tree_loaded = true;
     }

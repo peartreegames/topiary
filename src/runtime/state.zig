@@ -20,18 +20,22 @@ const UUID = @import("../utils/index.zig").UUID;
 
 pub const State = struct {
     pub fn calculateSize(vm: *Vm) !usize {
-        var counter = std.io.countingWriter(std.io.null_writer);
-        try serialize(vm, counter.writer());
-        return counter.bytes_written;
+        var buf: [1024]u8 = undefined;
+        var counter = std.Io.Writer.Discarding.init(&buf);
+        try serialize(vm, &counter.writer);
+        return counter.count;
     }
 
-    pub fn serialize(vm: *Vm, writer: anytype) !void {
-        var references = std.ArrayList(Value).init(vm.allocator);
-        defer references.deinit();
-        var seen = std.AutoHashMap(UUID.ID, void).init(vm.allocator);
-        defer seen.deinit();
-        var stream = std.json.writeStream(writer, .{ .whitespace = .minified });
-        defer stream.deinit();
+    pub fn serialize(vm: *Vm, writer: *std.Io.Writer) !void {
+        var references = std.ArrayList(Value).empty;
+        defer references.deinit(vm.alloc);
+        var seen = std.AutoHashMapUnmanaged(UUID.ID, void).empty;
+        defer seen.deinit(vm.alloc);
+
+        var stream: std.json.Stringify = .{
+            .writer = writer,
+            .options = .{ .whitespace = .minified },
+        };
         try stream.beginObject();
         for (vm.bytecode.global_symbols) |s| {
             if (s.is_extern) continue;
@@ -56,15 +60,16 @@ pub const State = struct {
             if (!is_mut and (is_func or is_str)) continue;
 
             try stream.objectField(s.name);
-            try serializeValue(value, &stream, &references);
+            try serializeValue(vm.alloc, value, &stream, &references);
         }
-        while (references.popOrNull()) |value| {
+        while (references.pop()) |value| {
             if (seen.contains(value.obj.id)) continue;
-            try seen.put(value.obj.id, {});
+            try seen.put(vm.alloc, value.obj.id, {});
             try stream.objectField(&value.obj.id);
-            try serializeObj(vm.allocator, value, &stream, &references);
+            try serializeObj(vm.alloc, value, &stream, &references);
         }
         try stream.endObject();
+        try writer.flush();
     }
 
     fn serializeObj(allocator: std.mem.Allocator, value: Value, stream: anytype, references: *std.ArrayList(Value)) !void {
@@ -73,12 +78,12 @@ pub const State = struct {
         switch (value.obj.data) {
             .list => |l| {
                 try stream.beginArray();
-                for (l.items) |item| try serializeValue(item, stream, references);
+                for (l.items) |item| try serializeValue(allocator, item, stream, references);
                 try stream.endArray();
             },
             .set => |s| {
                 try stream.beginArray();
-                for (s.keys()) |item| try serializeValue(item, stream, references);
+                for (s.keys()) |item| try serializeValue(allocator, item, stream, references);
                 try stream.endArray();
             },
             .map => |m| {
@@ -86,9 +91,9 @@ pub const State = struct {
                 for (m.keys()) |key| {
                     try stream.beginObject();
                     try stream.objectField("key");
-                    try serializeValue(key, stream, references);
+                    try serializeValue(allocator, key, stream, references);
                     try stream.objectField("value");
-                    try serializeValue(m.get(key).?, stream, references);
+                    try serializeValue(allocator, m.get(key).?, stream, references);
                     try stream.endObject();
                 }
                 try stream.endArray();
@@ -141,11 +146,11 @@ pub const State = struct {
                 try stream.objectField("function");
 
                 const obj: *Value.Obj = @fieldParentPtr("data", c.data);
-                try serializeValue(.{ .obj = obj }, stream, references);
+                try serializeValue(allocator, .{ .obj = obj }, stream, references);
 
                 try stream.objectField("free_values");
                 try stream.beginArray();
-                for (c.free_values) |v| try serializeValue(v, stream, references);
+                for (c.free_values) |v| try serializeValue(allocator, v, stream, references);
                 try stream.endArray();
 
                 try stream.endObject();
@@ -161,7 +166,7 @@ pub const State = struct {
                     try stream.objectField("name");
                     try stream.write(f.name);
                     try stream.objectField("value");
-                    try serializeValue(f.value, stream, references);
+                    try serializeValue(allocator, f.value, stream, references);
                     try stream.endObject();
                 }
                 try stream.endArray();
@@ -170,10 +175,10 @@ pub const State = struct {
             .instance => |i| {
                 try stream.beginObject();
                 try stream.objectField("base");
-                try serializeValue(.{ .obj = i.base }, stream, references);
+                try serializeValue(allocator, .{ .obj = i.base }, stream, references);
                 try stream.objectField("fields");
                 try stream.beginArray();
-                for (i.fields) |f| try serializeValue(f, stream, references);
+                for (i.fields) |f| try serializeValue(allocator, f, stream, references);
                 try stream.endArray();
                 try stream.endObject();
             },
@@ -182,7 +187,7 @@ pub const State = struct {
         try stream.endObject();
     }
 
-    fn serializeValue(value: Value, stream: anytype, references: *std.ArrayList(Value)) !void {
+    fn serializeValue(allocator: std.mem.Allocator, value: Value, stream: anytype, references: *std.ArrayList(Value)) !void {
         try stream.beginObject();
         switch (value) {
             .obj => |o| switch (o.data) {
@@ -200,7 +205,7 @@ pub const State = struct {
             .enum_value => |e| {
                 try stream.beginObject();
                 try stream.objectField("base");
-                try serializeValue(.{ .obj = e.base }, stream, references);
+                try serializeValue(allocator, .{ .obj = e.base }, stream, references);
                 try stream.objectField("index");
                 try stream.write(e.index);
                 try stream.endObject();
@@ -210,7 +215,7 @@ pub const State = struct {
                 switch (o.data) {
                     .string => |s| try stream.write(s),
                     else => {
-                        try references.append(value);
+                        try references.append(allocator, value);
                         try stream.write(&o.id);
                     },
                 }
@@ -220,14 +225,15 @@ pub const State = struct {
         try stream.endObject();
     }
 
-    pub fn deserialize(vm: *Vm, reader: anytype) !void {
-        var arena = std.heap.ArenaAllocator.init(vm.allocator);
+    pub fn deserialize(vm: *Vm, reader: *std.Io.Reader) !void {
+        var arena = std.heap.ArenaAllocator.init(vm.alloc);
         defer arena.deinit();
-        var json = std.json.reader(vm.allocator, reader);
+        var json = std.json.Reader.init(vm.alloc, reader);
         defer json.deinit();
 
         const value = try std.json.parseFromTokenSourceLeaky(std.json.Value, arena.allocator(), &json, .{});
-        var refs = std.AutoHashMap(UUID.ID, Value).init(arena.allocator());
+        var refs = std.AutoHashMapUnmanaged(UUID.ID, Value).empty;
+        defer refs.deinit(vm.alloc);
         const root = value.object;
         for (vm.bytecode.global_symbols) |sym| {
             const maybe_entry = root.get(sym.name);
@@ -237,11 +243,11 @@ pub const State = struct {
         }
     }
 
-    fn deserializeEntry(vm: *Vm, root: *const std.json.ObjectMap, entry: std.json.Value, refs: *std.AutoHashMap(UUID.ID, Value), id: ?UUID.ID) !Value {
+    fn deserializeEntry(vm: *Vm, root: *const std.json.ObjectMap, entry: std.json.Value, refs: *std.AutoHashMapUnmanaged(UUID.ID, Value), id: ?UUID.ID) !Value {
         if (entry.object.get("void") != null) return Void;
         if (entry.object.get("nil") != null) return Nil;
         if (entry.object.get("number")) |v| return .{ .number = @floatCast(v.float) };
-        if (entry.object.get("string")) |v| return try vm.gc.create(vm, .{ .string = try vm.allocator.dupe(u8, v.string) });
+        if (entry.object.get("string")) |v| return try vm.gc.create(vm, .{ .string = try vm.alloc.dupe(u8, v.string) });
         if (entry.object.get("bool")) |v| return if (v.bool) True else False;
         if (entry.object.get("visit")) |v| return .{ .visit = @intCast(v.integer) };
         if (entry.object.get("ref")) |v| {
@@ -249,7 +255,7 @@ pub const State = struct {
             if (refs.get(uuid)) |ref| return ref;
             if (root.get(v.string)) |ref| {
                 const value = try deserializeEntry(vm, root, ref, refs, uuid);
-                try refs.put(UUID.fromString(v.string), value);
+                try refs.put(vm.alloc, UUID.fromString(v.string), value);
                 return value;
             }
             return Void;
@@ -259,7 +265,7 @@ pub const State = struct {
             const base_id = UUID.fromString(base_ref.string);
             const base = if (refs.get(base_id)) |b| b else blk: {
                 const value = try deserializeEntry(vm, root, v.object.get("base").?, refs, base_id);
-                try refs.put(base_id, value);
+                try refs.put(vm.alloc, base_id, value);
                 break :blk value;
             };
             return .{
@@ -270,50 +276,50 @@ pub const State = struct {
             };
         }
         if (entry.object.get("list")) |v| {
-            var list = std.ArrayList(Value).init(vm.allocator);
+            var list: std.ArrayList(Value) = .empty;
             for (v.array.items) |item| {
-                try list.append(try deserializeEntry(vm, root, item, refs, null));
+                try list.append(vm.alloc, try deserializeEntry(vm, root, item, refs, null));
             }
             var result = try vm.gc.create(vm, .{ .list = list });
             result.obj.id = id.?;
-            try refs.put(id.?, result);
+            try refs.put(vm.alloc, id.?, result);
             return result;
         }
         if (entry.object.get("map")) |v| {
-            var map = Value.Obj.MapType.init(vm.allocator);
+            var map = Value.Obj.MapType.empty;
             for (v.array.items) |item| {
                 const key = try deserializeEntry(vm, root, item.object.get("key").?, refs, null);
                 const value = try deserializeEntry(vm, root, item.object.get("value").?, refs, null);
-                try map.put(key, value);
+                try map.put(vm.alloc, key, value);
             }
             var result = try vm.gc.create(vm, .{ .map = map });
             result.obj.id = id.?;
-            try refs.put(id.?, result);
+            try refs.put(vm.alloc, id.?, result);
             return result;
         }
         if (entry.object.get("set")) |v| {
-            var set = Value.Obj.SetType.init(vm.allocator);
+            var set = Value.Obj.SetType.empty;
             for (v.array.items) |item| {
-                try set.put(try deserializeEntry(vm, root, item, refs, null), {});
+                try set.put(vm.alloc, try deserializeEntry(vm, root, item, refs, null), {});
             }
             var result = try vm.gc.create(vm, .{ .set = set });
             result.obj.id = id.?;
-            try refs.put(id.?, result);
+            try refs.put(vm.alloc, id.?, result);
             return result;
         }
         if (entry.object.get("enum")) |v| {
             const values_items = v.object.get("values").?.array.items;
-            const vals = try vm.allocator.alloc([]const u8, values_items.len);
-            for (values_items, 0..) |t, i| vals[i] = try vm.allocator.dupe(u8, t.string);
+            const vals = try vm.alloc.alloc([]const u8, values_items.len);
+            for (values_items, 0..) |t, i| vals[i] = try vm.alloc.dupe(u8, t.string);
             var result = try vm.gc.create(vm, .{
                 .@"enum" = .{
-                    .name = try vm.allocator.dupe(u8, v.object.get("name").?.string),
+                    .name = try vm.alloc.dupe(u8, v.object.get("name").?.string),
                     .is_seq = v.object.get("is_seq").?.bool,
                     .values = vals,
                 },
             });
             result.obj.id = id.?;
-            try refs.put(id.?, result);
+            try refs.put(vm.alloc, id.?, result);
             return result;
         }
         if (entry.object.get("function")) |v| {
@@ -321,21 +327,22 @@ pub const State = struct {
             const inst = v.object.get("inst").?.string;
             const locals = v.object.get("locals_count").?.integer;
             const is_method = v.object.get("is_method").?.bool;
-            const inst_alloc = try vm.allocator.alloc(u8, try std.base64.standard.Decoder.calcSizeForSlice(inst));
+            const inst_alloc = try vm.alloc.alloc(u8, try std.base64.standard.Decoder.calcSizeForSlice(inst));
             try std.base64.standard.Decoder.decode(inst_alloc, inst);
 
             const debug_items = v.object.get("debug").?.array.items;
-            const debug_info = try vm.allocator.alloc(DebugInfo, debug_items.len);
+            const debug_info = try vm.alloc.alloc(DebugInfo, debug_items.len);
             for (debug_items, 0..) |d, i| {
                 const file = d.object.get("file").?.string;
                 const range_items = d.object.get("ranges").?.array.items;
-                const ranges = try std.ArrayList(DebugInfo.Range).initCapacity(vm.allocator, range_items.len);
+                const ranges = try std.ArrayList(DebugInfo.Range).initCapacity(vm.alloc, range_items.len);
                 for (range_items, 0..) |r, ri| ranges.items[ri] = .{
                     .start = @intCast(r.array.items[0].integer),
                     .end = @intCast(r.array.items[1].integer),
                     .line = @intCast(r.array.items[2].integer),
                 };
                 debug_info[i] = .{
+                    .allocator = vm.alloc,
                     .file = file,
                     .ranges = ranges,
                 };
@@ -349,24 +356,24 @@ pub const State = struct {
                 .is_method = is_method,
             } });
             result.obj.id = id.?;
-            try refs.put(id.?, result);
+            try refs.put(vm.alloc, id.?, result);
             return result;
         }
         if (entry.object.get("class")) |v| {
-            const name = try vm.allocator.dupe(u8, v.object.get("name").?.string);
+            const name = try vm.alloc.dupe(u8, v.object.get("name").?.string);
             const ser_fields = v.object.get("fields").?.array.items;
-            var fields = try vm.allocator.alloc(Class.Field, ser_fields.len);
+            var fields = try vm.alloc.alloc(Class.Field, ser_fields.len);
             for (ser_fields, 0..) |f, i| {
-                fields[i].name = try vm.allocator.dupe(u8, f.object.get("name").?.string);
+                fields[i].name = try vm.alloc.dupe(u8, f.object.get("name").?.string);
                 fields[i].value = try deserializeEntry(vm, root, f.object.get("value").?, refs, null);
             }
             var result = try vm.gc.create(vm, .{ .class = .{
-                .allocator = vm.allocator,
+                .allocator = vm.alloc,
                 .name = name,
                 .fields = fields,
             } });
             result.obj.id = id.?;
-            try refs.put(id.?, result);
+            try refs.put(vm.alloc, id.?, result);
             return result;
         }
         if (entry.object.get("instance")) |v| {
@@ -374,11 +381,11 @@ pub const State = struct {
             const base_id = UUID.fromString(base_ref.string);
             const base = if (refs.get(base_id)) |b| b else blk: {
                 const value = try deserializeEntry(vm, root, v.object.get("base").?, refs, base_id);
-                try refs.put(base_id, value);
+                try refs.put(vm.alloc, base_id, value);
                 break :blk value;
             };
             const ser_fields = v.object.get("fields").?.array.items;
-            var fields = try vm.allocator.alloc(Value, ser_fields.len);
+            var fields = try vm.alloc.alloc(Value, ser_fields.len);
             for (ser_fields, 0..) |f, i| {
                 fields[i] = try deserializeEntry(vm, root, f, refs, null);
             }
@@ -388,7 +395,7 @@ pub const State = struct {
                 .fields = fields,
             } });
             result.obj.id = id.?;
-            try refs.put(id.?, result);
+            try refs.put(vm.alloc, id.?, result);
             return result;
         }
 

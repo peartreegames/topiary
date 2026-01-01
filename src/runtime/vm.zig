@@ -43,12 +43,12 @@ const InterpretResult = union(enum) {
 /// Virtual Machine
 /// Executes bytecode
 pub const Vm = struct {
-    allocator: std.mem.Allocator,
+    alloc: std.mem.Allocator,
     frames: Stack(Frame),
     err: RuntimeErr,
     gc: Gc,
     globals: []Value,
-    value_subscribers: std.StringHashMap(void),
+    value_subscribers: std.StringHashMapUnmanaged(void),
 
     stack: Stack(Value),
     /// Current iterators to allow easy nesting
@@ -77,7 +77,7 @@ pub const Vm = struct {
     loc_key: ?[]const u8 = null,
 
     /// The currently loaded localization map
-    loc_map: std.AutoHashMap(UUID.ID, []const u8),
+    loc_map: std.AutoHashMapUnmanaged(UUID.ID, []const u8),
 
     runner: *Runner,
 
@@ -118,7 +118,7 @@ pub const Vm = struct {
         };
 
         var vm = Vm{
-            .allocator = allocator,
+            .alloc = allocator,
             .bytecode = bytecode,
             .frames = try Stack(Frame).init(allocator, frame_size),
             .err = .{},
@@ -127,11 +127,11 @@ pub const Vm = struct {
             .gc = Gc.init(allocator),
             .stack = try Stack(Value).init(allocator, stack_size),
             .iterators = try Stack(Iterator).init(allocator, iterator_size),
-            .jump_backups = std.ArrayList(C.JUMP).init(allocator),
-            .jump_requests = std.ArrayList(C.JUMP).init(allocator),
-            .choices_list = std.ArrayList(Choice).init(allocator),
-            .value_subscribers = std.StringHashMap(void).init(allocator),
-            .loc_map = std.AutoHashMap(UUID.ID, []const u8).init(allocator),
+            .jump_backups = .empty,
+            .jump_requests = .empty,
+            .choices_list = .empty,
+            .value_subscribers = .empty,
+            .loc_map = .empty,
         };
 
         vm.stack.resize(bytecode.locals_count);
@@ -143,13 +143,13 @@ pub const Vm = struct {
         self.loc_key = key;
         self.loc_map.clearRetainingCapacity();
         if (key == null) return;
-        var fbs = std.io.fixedBufferStream(self.bytecode.loc);
+        var fbs = std.Io.fixedBufferStream(self.bytecode.loc);
         var reader = fbs.reader();
-        var line = std.ArrayList(u8).init(self.allocator);
-        defer line.deinit();
-        const writer = line.writer();
+        var line = std.ArrayList(u8).empty;
+        defer line.deinit(self.alloc);
+        const writer = line.writer(self.alloc);
         try reader.streamUntilDelimiter(writer, '\n', null);
-        var headers = std.mem.split(u8, line.items, ",");
+        var headers = std.mem.splitSequence(u8, line.items, ",");
         var index: usize = 0;
         while (headers.next()) |header| : (index += 1) {
             if (std.mem.eql(u8, key.?, std.mem.trim(u8, header, "\""))) break;
@@ -174,24 +174,28 @@ pub const Vm = struct {
                     if (count == index) c_start = i + 2;
                     if (count <= index) continue;
                 }
-                try self.loc_map.put(id, try self.allocator.dupe(u8, line.items[c_start..i]));
+                try self.loc_map.put(self.alloc, id, try self.alloc.dupe(u8, line.items[c_start..i]));
             }
         }
     }
 
     pub fn deinit(self: *Vm) void {
-        self.allocator.destroy(self.currentFrame().cl.data.closure.data);
-        Value.Obj.destroy(self.allocator, self.currentFrame().cl);
-        self.choices_list.deinit();
+        self.alloc.destroy(self.currentFrame().cl.data.closure.data);
+        Value.Obj.destroy(self.alloc, self.currentFrame().cl);
+        self.choices_list.deinit(self.alloc);
         self.stack.deinit();
         self.iterators.deinit();
-        self.jump_backups.deinit();
-        self.jump_requests.deinit();
+        self.jump_backups.deinit(self.alloc);
+        self.jump_requests.deinit(self.alloc);
         self.frames.deinit();
         self.gc.deinit();
-        self.value_subscribers.deinit();
-        self.allocator.free(self.globals);
-        if (self.err.msg) |msg| self.allocator.free(msg);
+        self.value_subscribers.deinit(self.alloc);
+        self.alloc.free(self.globals);
+        if (self.err.msg) |msg| {
+            self.alloc.free(msg);
+            self.err.msg = null;
+            self.err.file = null;
+        }
     }
 
     /// Returns root values that should not be cleaned up by the garbage collector
@@ -217,9 +221,9 @@ pub const Vm = struct {
         self.currentFrame().ip = choice.ip;
         self.is_waiting = false;
         for (self.current_choices) |c| {
-            self.allocator.free(c.tags);
+            self.alloc.free(c.tags);
         }
-        self.allocator.free(self.current_choices);
+        self.alloc.free(self.current_choices);
     }
 
     pub fn getGlobalsIndex(self: *Vm, name: []const u8) !usize {
@@ -254,7 +258,7 @@ pub const Vm = struct {
         if (self.value_subscribers.contains(name)) return true;
         for (self.bytecode.global_symbols) |s| {
             if (!std.mem.eql(u8, name, s.name)) continue;
-            try self.value_subscribers.put(s.name, {});
+            try self.value_subscribers.put(self.alloc, s.name, {});
             return true;
         }
         return false;
@@ -287,24 +291,24 @@ pub const Vm = struct {
         }
         self.currentFrame().ip = 0;
         if (bough_path) |path| {
-            var split_it = std.mem.split(u8, path, ".");
-            var path_parts = std.ArrayList([]const u8).init(self.allocator);
-            defer path_parts.deinit();
+            var split_it = std.mem.splitSequence(u8, path, ".");
+            var path_parts = std.ArrayList([]const u8).empty;
+            defer path_parts.deinit(self.alloc);
             while (split_it.next()) |split| {
-                try path_parts.append(split);
-                const current_path = try std.mem.join(self.allocator, ".", path_parts.items);
-                defer self.allocator.free(current_path);
+                try path_parts.append(self.alloc, split);
+                const current_path = try std.mem.join(self.alloc, ".", path_parts.items);
+                defer self.alloc.free(current_path);
                 var found = false;
                 for (self.bytecode.boughs) |b| {
                     if (std.mem.eql(u8, current_path, b.name)) {
-                        try self.jump_requests.append(b.ip);
+                        try self.jump_requests.append(self.alloc, b.ip);
                         found = true;
                         break;
                     }
                 }
                 if (!found) {
-                    self.err.msg = "Could not find starting path";
-                    self.err.line = 0;
+                    self.err.msg = try std.fmt.allocPrint(self.alloc, "Could not find starting path", .{});
+                    self.err.line = 1;
                     return Error.BoughNotFound;
                 }
             }
@@ -313,7 +317,7 @@ pub const Vm = struct {
     }
 
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {
-        self.err.msg = try std.fmt.allocPrint(self.allocator, msg, args);
+        self.err.msg = try std.fmt.allocPrint(self.alloc, msg, args);
         const ip = self.currentFrame().ip;
         cont: for (self.currentFrame().cl.data.closure.data.function.debug_info) |d| {
             for (d.ranges.items) |r| {
@@ -331,17 +335,17 @@ pub const Vm = struct {
         return Error.RuntimeError;
     }
 
-    fn readByte(self: *Vm) u8 {
+    fn takeByte(self: *Vm) u8 {
         var frame = self.currentFrame();
         const byte = frame.instructions()[frame.ip];
         frame.ip += 1;
         return byte;
     }
 
-    fn readInt(self: *Vm, comptime T: type) T {
+    fn takeInt(self: *Vm, comptime T: type) T {
         var frame = self.currentFrame();
         if (T == u8) {
-            return self.readByte();
+            return self.takeByte();
         } else {
             const result = std.mem.readVarInt(T, frame.instructions()[frame.ip..(frame.ip + @sizeOf(T))], .little);
             frame.ip += @sizeOf(T);
@@ -356,7 +360,7 @@ pub const Vm = struct {
     pub fn run(self: *Vm) !void {
         if (!self.can_continue or self.is_waiting) return;
         while (self.ip < self.currentFrame().instructions().len) : (self.ip = self.currentFrame().ip) {
-            const instruction = self.readByte();
+            const instruction = self.takeByte();
             if (instruction == 170) {
                 self.end();
                 return;
@@ -366,7 +370,7 @@ pub const Vm = struct {
 
             switch (op) {
                 .constant => {
-                    const index = self.readInt(C.CONSTANT);
+                    const index = self.takeInt(C.CONSTANT);
                     if (index >= self.bytecode.constants.len)
                         return self.fail("Constant index {d} outside of bounds length {d}", .{ index, self.bytecode.constants.len });
                     const value = self.bytecode.constants[index];
@@ -376,8 +380,14 @@ pub const Vm = struct {
                 .add => {
                     var right = try self.pop();
                     var left = try self.pop();
-                    if (right == .visit) right = .{ .number = @floatFromInt(right.visit) };
-                    if (left == .visit) left = .{ .number = @floatFromInt(left.visit) };
+                    if (right == .visit) {
+                        const value: f32 = @floatFromInt(right.visit);
+                        right = .{ .number = value };
+                    }
+                    if (left == .visit) {
+                        const value: f32 = @floatFromInt(left.visit);
+                        left = .{ .number = value };
+                    }
                     if (@intFromEnum(right) != @intFromEnum(left)) {
                         return self.fail("Cannot add types {s} and {s}", .{ left.typeName(), right.typeName() });
                     }
@@ -385,7 +395,7 @@ pub const Vm = struct {
                         .number => try self.push(.{ .number = right.number + left.number }),
                         .obj => |o| {
                             switch (o.data) {
-                                .string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.allocator, u8, &.{ std.mem.trimRight(u8, left.obj.data.string, &[_]u8{0}), s }) }),
+                                .string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.alloc, u8, &.{ std.mem.trimRight(u8, left.obj.data.string, &[_]u8{0}), s }) }),
                                 else => return self.fail("Cannot add types {s} and {s}", .{ left.typeName(), right.typeName() }),
                             }
                         },
@@ -424,20 +434,20 @@ pub const Vm = struct {
                     try self.push(.{ .bool = right.bool and left.bool });
                 },
                 .jump => {
-                    const dest = self.readInt(C.JUMP);
+                    const dest = self.takeInt(C.JUMP);
                     if (dest > self.currentFrame().instructions().len) break;
                     self.currentFrame().ip = dest;
                 },
                 .jump_if_false => {
-                    const dest = self.readInt(C.JUMP);
+                    const dest = self.takeInt(C.JUMP);
                     var condition = try self.pop();
                     if (!try condition.isTruthy()) {
                         self.currentFrame().ip = dest;
                     }
                 },
                 .prong => {
-                    const dest = self.readInt(C.JUMP);
-                    const values_count = self.readInt(u8);
+                    const dest = self.takeInt(C.JUMP);
+                    const values_count = self.takeInt(u8);
                     const index = self.stack.count - values_count - 1;
                     const capture = self.stack.items[index];
                     var i: usize = 0;
@@ -455,7 +465,7 @@ pub const Vm = struct {
                     }
                 },
                 .decl_global => {
-                    const index = self.readInt(C.GLOBAL);
+                    const index = self.takeInt(C.GLOBAL);
                     if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{index});
                     const value = try self.pop();
                     // global already set from loaded state
@@ -466,7 +476,7 @@ pub const Vm = struct {
                     self.globals[index] = value;
                 },
                 .set_global => {
-                    const index = self.readInt(C.GLOBAL);
+                    const index = self.takeInt(C.GLOBAL);
                     if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{index});
 
                     if (index >= self.globals.len) return self.fail("Globals index {} is out of bounds of current size {}", .{ index, self.globals.len });
@@ -481,12 +491,12 @@ pub const Vm = struct {
                     self.notifyValueChange(index, old_value, value);
                 },
                 .get_global => {
-                    const index = self.readInt(C.GLOBAL);
+                    const index = self.takeInt(C.GLOBAL);
                     const value = self.globals[index];
                     try self.push(value);
                 },
                 .set_local => {
-                    const index = self.readInt(C.LOCAL);
+                    const index = self.takeInt(C.LOCAL);
                     const frame = self.currentFrame();
                     var value = try self.pop();
                     const current = self.stack.items[frame.bp + index];
@@ -496,7 +506,7 @@ pub const Vm = struct {
                     self.stack.items[frame.bp + index] = value;
                 },
                 .get_local => {
-                    const index = self.readInt(C.LOCAL);
+                    const index = self.takeInt(C.LOCAL);
                     const frame = self.currentFrame();
                     const value = self.stack.items[frame.bp + index];
                     try self.push(value);
@@ -514,7 +524,7 @@ pub const Vm = struct {
                             l.items[n] = new_value;
                         },
                         .map => |*m| {
-                            try m.*.put(field_value, new_value);
+                            try m.*.put(self.alloc, field_value, new_value);
                         },
                         .instance => |inst| {
                             const field_name = field_value.obj.data.string;
@@ -529,7 +539,7 @@ pub const Vm = struct {
                     }
                 },
                 .get_builtin => {
-                    const index = self.readInt(C.BUILTIN);
+                    const index = self.takeInt(C.BUILTIN);
                     const len = builtins.functions.keys().len;
                     if (index >= len)
                         return self.fail("Index {d} out of bounds for builtins length {d}", .{ index, len });
@@ -537,28 +547,28 @@ pub const Vm = struct {
                     try self.push(value);
                 },
                 .get_free => {
-                    const index = self.readInt(C.FREE);
+                    const index = self.takeInt(C.FREE);
                     const obj = self.currentFrame().cl;
                     try self.push(obj.data.closure.free_values[index]);
                 },
                 .set_free => {
-                    const index = self.readInt(C.FREE);
+                    const index = self.takeInt(C.FREE);
                     var obj = self.currentFrame().cl;
                     obj.data.closure.free_values[index] = try self.pop();
                 },
                 .string, .loc => {
-                    const index = self.readInt(C.CONSTANT);
+                    const index = self.takeInt(C.CONSTANT);
                     const str = if (op == .string) self.bytecode.constants[index].obj.*.data.string else self.loc_map.get(self.bytecode.uuids[index]) orelse return self.fail("Could not find localization id '{s}'", .{self.bytecode.uuids[index]});
-                    var count = self.readInt(u8);
-                    var args = try self.allocator.alloc(Value, count);
-                    defer self.allocator.free(args);
+                    var count = self.takeInt(u8);
+                    var args = try self.alloc.alloc(Value, count);
+                    defer self.alloc.free(args);
                     // const total = count;
                     while (count > 0) : (count -= 1) {
                         args[count - 1] = try self.pop();
                     }
-                    var list = std.ArrayList(u8).init(self.allocator);
-                    defer list.deinit();
-                    var writer = list.writer();
+                    var list = std.ArrayList(u8).empty;
+                    defer list.deinit(self.alloc);
+                    var writer = list.writer(self.alloc);
                     // index
                     var i: usize = 0;
                     // start
@@ -593,40 +603,40 @@ pub const Vm = struct {
                                         else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), str }),
                                     }
                                 },
-                                .visit => |v| try std.fmt.formatIntValue(v, "", .{}, writer),
+                                .visit => |v| try writer.print("{}", .{v}),
                                 else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), str }),
                             }
                             s = i;
                         }
                     }
                     try writer.writeAll(str[s..]);
-                    try self.pushAlloc(.{ .string = try list.toOwnedSlice() });
+                    try self.pushAlloc(.{ .string = try list.toOwnedSlice(self.alloc) });
                 },
                 .list => {
-                    var count = self.readInt(C.COLLECTION);
-                    var list = try std.ArrayList(Value).initCapacity(self.allocator, count);
+                    var count = self.takeInt(C.COLLECTION);
+                    var list = try std.ArrayList(Value).initCapacity(self.alloc, count);
                     while (count > 0) : (count -= 1) {
-                        try list.append(try self.pop());
+                        list.appendAssumeCapacity(try self.pop());
                     }
                     std.mem.reverse(Value, list.items);
                     try self.pushAlloc(.{ .list = list });
                 },
                 .map => {
-                    var count = self.readInt(C.COLLECTION);
-                    var map = Value.Obj.MapType.initContext(self.allocator, Value.adapter);
+                    var count = self.takeInt(C.COLLECTION);
+                    var map = Value.Obj.MapType.empty;
                     while (count > 0) : (count -= 1) {
                         const value = try self.pop();
                         const key = try self.pop();
-                        try map.put(key, value);
+                        try map.put(self.alloc, key, value);
                     }
                     map.sort(Value.adapter);
                     try self.pushAlloc(.{ .map = map });
                 },
                 .set => {
-                    var count = self.readInt(C.COLLECTION);
-                    var set = Value.Obj.SetType.initContext(self.allocator, Value.adapter);
+                    var count = self.takeInt(C.COLLECTION);
+                    var set = Value.Obj.SetType.empty;
                     while (count > 0) : (count -= 1) {
-                        try set.put(try self.pop(), {});
+                        try set.put(self.alloc, try self.pop(), {});
                     }
                     set.sort(Value.adapter);
                     try self.pushAlloc(.{ .set = set });
@@ -656,21 +666,25 @@ pub const Vm = struct {
                 },
                 .class => {
                     const value = try self.pop();
-                    var count = self.readInt(C.FIELDS);
-                    var fields = std.ArrayList(Class.Field).init(self.allocator);
-                    errdefer fields.deinit();
+                    var count = self.takeInt(C.FIELDS);
+                    var fields = try std.ArrayList(Class.Field).initCapacity(self.alloc, count);
+                    errdefer fields.deinit(self.alloc);
                     while (count > 0) : (count -= 1) {
                         const name = try self.pop();
-                        const field_name = try self.allocator.dupe(u8, name.obj.data.string);
+                        const field_name = try self.alloc.dupe(u8, name.obj.data.string);
                         const field_value = try self.pop();
-                        try fields.append(.{
+                        fields.appendAssumeCapacity(.{
                             .name = field_name,
                             .value = field_value,
                         });
                     }
 
                     std.mem.reverse(Class.Field, fields.items);
-                    const class = try Class.init(self.allocator, try self.allocator.dupe(u8, value.obj.data.string), try fields.toOwnedSlice());
+                    const class = try Class.init(
+                        self.alloc,
+                        try self.alloc.dupe(u8, value.obj.data.string),
+                        try fields.toOwnedSlice(self.alloc),
+                    );
                     try self.pushAlloc(.{ .class = class });
                 },
                 .instance => {
@@ -679,20 +693,20 @@ pub const Vm = struct {
                         return self.fail("Instance expected type class, but found '{s}'", .{value.typeName()});
                     var class = value.obj.data.class;
 
-                    var count = self.readInt(C.FIELDS);
-                    var fields = std.ArrayList(Class.Field).init(self.allocator);
-                    defer fields.deinit();
+                    var count = self.takeInt(C.FIELDS);
+                    var fields = std.ArrayList(Class.Field).empty;
+                    defer fields.deinit(self.alloc);
                     while (count > 0) : (count -= 1) {
                         const name = try self.pop();
                         const str_name = name.obj.data.string;
                         const field = try self.pop();
-                        try fields.append(.{
+                        try fields.append(self.alloc, .{
                             .name = str_name,
                             .value = field,
                         });
                     }
                     std.mem.reverse(Class.Field, fields.items);
-                    const instance = try class.createInstance(value.obj, try fields.toOwnedSlice());
+                    const instance = try class.createInstance(value.obj, try fields.toOwnedSlice(self.alloc));
                     try self.pushAlloc(.{ .instance = instance });
                 },
                 .range => {
@@ -818,7 +832,7 @@ pub const Vm = struct {
                     }
                 },
                 .dialogue => {
-                    const has_speaker = self.readInt(u8) == 1;
+                    const has_speaker = self.takeInt(u8) == 1;
                     var speaker: ?[]const u8 = null;
                     if (has_speaker) {
                         const speaker_value = try self.pop();
@@ -831,9 +845,9 @@ pub const Vm = struct {
                     if (dialogue_value != .obj and dialogue_value.obj.data != .string)
                         return self.fail("Dialogue must be of type string, but found '{s}'", .{dialogue_value.typeName()});
 
-                    const tag_count = self.readInt(u8);
-                    var tags = try self.allocator.alloc([]const u8, tag_count);
-                    defer self.allocator.free(tags);
+                    const tag_count = self.takeInt(u8);
+                    var tags = try self.alloc.alloc([]const u8, tag_count);
+                    defer self.alloc.free(tags);
                     var i: usize = 0;
                     while (i < tag_count) : (i += 1) {
                         const tag_value = try self.pop();
@@ -841,7 +855,7 @@ pub const Vm = struct {
                             return self.fail("Tag must be of type string, but found '{s}'", .{tag_value.typeName()});
                         tags[tag_count - i - 1] = tag_value.obj.data.string;
                     }
-                    const id_index = self.readInt(C.CONSTANT);
+                    const id_index = self.takeInt(C.CONSTANT);
                     if (is_in_jump) continue;
                     self.is_waiting = true;
                     self.runner.onLine(self, .{
@@ -853,7 +867,7 @@ pub const Vm = struct {
                     return;
                 },
                 .call => {
-                    const arg_count = self.readInt(C.ARGS);
+                    const arg_count = self.takeInt(C.ARGS);
                     const value = self.stack.items[self.stack.count - 1 - arg_count];
                     if (value != .obj)
                         return self.fail("Cannot call non-function type {s}", .{value.typeName()});
@@ -899,10 +913,10 @@ pub const Vm = struct {
                     }
                 },
                 .closure => {
-                    const index = self.readInt(C.CONSTANT);
-                    const count = self.readInt(u8);
+                    const index = self.takeInt(C.CONSTANT);
+                    const count = self.takeInt(u8);
                     var value = self.bytecode.constants[index];
-                    var free_values = try self.allocator.alloc(Value, count);
+                    var free_values = try self.alloc.alloc(Value, count);
                     for (0..count) |i| {
                         free_values[i] = self.stack.items[self.stack.count - count + i];
                     }
@@ -933,21 +947,21 @@ pub const Vm = struct {
                 },
                 .fork => {
                     self.is_waiting = true;
-                    self.current_choices = try self.choices_list.toOwnedSlice();
+                    self.current_choices = try self.choices_list.toOwnedSlice(self.alloc);
                     self.choices_list.clearRetainingCapacity();
                     if (is_in_jump) {
-                        for (self.current_choices) |c| self.allocator.free(c.tags);
-                        self.allocator.free(self.current_choices);
+                        for (self.current_choices) |c| self.alloc.free(c.tags);
+                        self.alloc.free(self.current_choices);
                         continue;
                     }
                     self.runner.onChoices(self, self.current_choices);
                     return;
                 },
                 .choice => {
-                    const ip = self.readInt(C.JUMP);
-                    const is_unique = self.readInt(u8) == 1;
-                    const id_index = self.readInt(C.CONSTANT);
-                    const visit_index = self.readInt(C.GLOBAL);
+                    const ip = self.takeInt(C.JUMP);
+                    const is_unique = self.takeInt(u8) == 1;
+                    const id_index = self.takeInt(C.CONSTANT);
+                    const visit_index = self.takeInt(C.GLOBAL);
                     const visit_count = self.globals[visit_index].visit;
 
                     const content_value = try self.pop();
@@ -955,8 +969,8 @@ pub const Vm = struct {
                         return self.fail("Choice content must be of type string, but found '{s}'", .{content_value.typeName()});
                     const content = content_value.obj.data.string;
 
-                    const tag_count = self.readInt(u8);
-                    var tags = try self.allocator.alloc([]const u8, tag_count);
+                    const tag_count = self.takeInt(u8);
+                    var tags = try self.alloc.alloc([]const u8, tag_count);
                     var i: usize = 0;
                     while (i < tag_count) : (i += 1) {
                         const tag_value = try self.pop();
@@ -966,7 +980,7 @@ pub const Vm = struct {
                     }
                     if (visit_count > 0 and is_unique) continue;
 
-                    try self.choices_list.append(.{
+                    try self.choices_list.append(self.alloc, .{
                         .content = content,
                         .tags = tags,
                         .visit_count = visit_count,
@@ -975,42 +989,42 @@ pub const Vm = struct {
                     });
                 },
                 .visit => {
-                    const index = self.readInt(C.GLOBAL);
+                    const index = self.takeInt(C.GLOBAL);
                     self.globals[index].visit += 1;
                 },
                 .divert => {
                     // already in a jump request, continue
-                    if (is_in_jump) {
-                        self.currentFrame().ip = self.jump_requests.pop();
+                    if (self.jump_requests.pop()) |req| {
+                        self.currentFrame().ip = req;
                         continue;
                     }
-                    var count = self.readInt(u8);
+                    var count = self.takeInt(u8);
                     while (count > 0) : (count -= 1) {
-                        const dest = self.readInt(C.JUMP);
+                        const dest = self.takeInt(C.JUMP);
                         const len = self.currentFrame().instructions().len;
                         if (dest > len) return self.fail("Divert {d} is out of range {d}", .{ dest, len });
-                        try self.jump_requests.append(dest);
+                        try self.jump_requests.append(self.alloc, dest);
                     }
-                    if (self.jump_requests.items.len > 0) {
-                        self.currentFrame().ip = self.jump_requests.pop();
+                    if (self.jump_requests.pop()) |req| {
+                        self.currentFrame().ip = req;
                     }
                 },
                 .backup => {
-                    const ip = self.readInt(C.JUMP);
+                    const ip = self.takeInt(C.JUMP);
                     if (is_in_jump) continue;
                     if (self.jump_backups.items.len > 0 and self.jump_backups.getLast() == ip) {
                         _ = try self.pop();
                         continue;
                     }
-                    try self.jump_backups.append(ip);
+                    try self.jump_backups.append(self.alloc, ip);
                 },
                 .fin => {
-                    if (is_in_jump) {
-                        self.currentFrame().ip = self.jump_requests.pop();
+                    if (self.jump_requests.pop()) |req| {
+                        self.currentFrame().ip = req;
                         continue;
                     }
-                    if (self.jump_backups.items.len > 0) {
-                        self.currentFrame().ip = self.jump_backups.pop();
+                    if (self.jump_backups.pop()) |backup| {
+                        self.currentFrame().ip = backup;
                         continue;
                     }
                     self.end();
@@ -1024,8 +1038,14 @@ pub const Vm = struct {
     fn binaryNumberOp(self: *Vm, op: OpCode) !void {
         var right = try self.pop();
         var left = try self.pop();
-        if (right == .visit) right = .{ .number = @floatFromInt(right.visit) };
-        if (left == .visit) left = .{ .number = @floatFromInt(left.visit) };
+        if (right == .visit) {
+            const value: f32 = @floatFromInt(right.visit);
+            right = .{ .number = value };
+        }
+        if (left == .visit) {
+            const value: f32 = @floatFromInt(left.visit);
+            left = .{ .number = value };
+        }
         if (right != .number or left != .number)
             return self.fail("Cannot perform binary operation on types of '{s}' and '{s}'", .{ left.typeName(), right.typeName() });
         const right_num = right.number;
@@ -1043,14 +1063,26 @@ pub const Vm = struct {
     fn comparisonOp(self: *Vm, op: OpCode) !void {
         var right = try self.pop();
         var left = try self.pop();
-        if (right == .visit) right = .{ .number = @floatFromInt(right.visit) };
-        if (left == .visit) left = .{ .number = @floatFromInt(left.visit) };
+        if (right == .visit) {
+            const value: f32 = @floatFromInt(right.visit);
+            right = .{ .number = value };
+        }
+        if (left == .visit) {
+            const value: f32 = @floatFromInt(left.visit);
+            left = .{ .number = value };
+        }
 
         if (@intFromEnum(right) != @intFromEnum(left)) {
             return self.fail("Cannot compare mismatched types '{s}' and '{s}'", .{ left.typeName(), right.typeName() });
         }
-        if (right == .enum_value) right = .{ .number = @floatFromInt(right.enum_value.index) };
-        if (left == .enum_value) left = .{ .number = @floatFromInt(left.enum_value.index) };
+        if (right == .enum_value) {
+            const value: f32 = @floatFromInt(right.enum_value.index);
+            right = .{ .number = value };
+        }
+        if (left == .enum_value) {
+            const value: f32 = @floatFromInt(left.enum_value.index);
+            left = .{ .number = value };
+        }
         switch (op) {
             .equal => try self.push(.{ .bool = right.eql(left) }),
             .not_equal => try self.push(.{ .bool = !right.eql(left) }),
@@ -1086,7 +1118,7 @@ pub const Vm = struct {
         return self.stack.pop();
     }
 
-    pub fn print(self: *Vm, writer: anytype) void {
+    pub fn print(self: *Vm, writer: *std.Io.Writer) void {
         writer.print("==STACK==\n", .{});
         for (self.stack.items) |*item| {
             writer.print("[", .{});

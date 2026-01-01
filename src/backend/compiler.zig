@@ -51,14 +51,14 @@ fn arrayOfTypeContains(comptime T: type, haystack: []const []const T, needle: []
     return false;
 }
 pub const Compiler = struct {
-    allocator: std.mem.Allocator,
+    alloc: std.mem.Allocator,
     builtins: *Scope,
     constants: std.ArrayList(Value),
     uuids: std.ArrayList(UUID.ID),
     err: *CompilerErrors,
     scope: *Scope,
     root_scope: *Scope,
-    identifier_cache: std.StringHashMap(C.CONSTANT),
+    identifier_cache: std.StringHashMapUnmanaged(C.CONSTANT),
     chunk: *Chunk,
     locals_count: usize = 0,
     use_loc: bool = false,
@@ -68,14 +68,14 @@ pub const Compiler = struct {
     divert_log: std.ArrayList(JumpTree.Entry),
     visit_tree: VisitTree,
 
-    types: std.StringHashMap(Statement),
+    types: std.StringHashMapUnmanaged(Statement),
 
     pub const Chunk = struct {
         instructions: std.ArrayList(u8),
         debug_markers: std.ArrayList(Marker),
         parent: ?*Chunk,
         module: *Module,
-        allocator: std.mem.Allocator,
+        alloc: std.mem.Allocator,
 
         const Marker = struct {
             file_index: u32,
@@ -85,30 +85,31 @@ pub const Compiler = struct {
         pub fn init(allocator: std.mem.Allocator, parent: ?*Chunk, module: *Module) !*Chunk {
             const chunk = try allocator.create(Chunk);
             chunk.* = .{
-                .instructions = std.ArrayList(u8).init(allocator),
-                .debug_markers = std.ArrayList(Marker).init(allocator),
+                .instructions = .empty,
+                .debug_markers = .empty,
                 .module = module,
                 .parent = parent,
-                .allocator = allocator,
+                .alloc = allocator,
             };
             return chunk;
         }
 
         pub fn debugInfo(self: *Chunk, allocator: std.mem.Allocator) ![]DebugInfo {
-            var infos = std.ArrayList(DebugInfo).init(allocator);
-            if (self.debug_markers.items.len == 0) return infos.toOwnedSlice();
+            var infos: std.ArrayList(DebugInfo) = .empty;
+            defer infos.deinit(allocator);
+            if (self.debug_markers.items.len == 0) return infos.toOwnedSlice(self.alloc);
             var file_index = self.debug_markers.items[0].file_index;
             var line = self.debug_markers.items[0].line;
             var start: u32 = 0;
             var file_name = try allocator.dupe(u8, std.fs.path.basename(self.module.includes.keys()[file_index]));
 
-            try infos.append(DebugInfo.init(allocator, file_name));
+            try infos.append(allocator, DebugInfo.init(allocator, file_name));
             var info: *DebugInfo = &(infos.items[0]);
             for (self.debug_markers.items, 0..) |d, ip| {
                 const end: u32 = @intCast(ip);
                 // file changed make a new debug info or find an existing one
-                if (file_index != d.file_index) {
-                    try info.ranges.append(.{ .start = start, .end = end, .line = line });
+                if (file_index != d.file_index and d.file_index < self.module.includes.count()) {
+                    try info.ranges.append(allocator, .{ .start = start, .end = end, .line = line });
                     line = d.line;
                     start = end;
 
@@ -120,26 +121,26 @@ pub const Compiler = struct {
                     } else blk: {
                         file_name = try allocator.dupe(u8, file_name);
                         const new_info = DebugInfo.init(allocator, file_name);
-                        try infos.append(new_info);
+                        try infos.append(allocator, new_info);
                         break :blk &(infos.items[infos.items.len - 1]);
                     };
                     continue;
                 }
                 // line changed, add new range to debug info
                 if (d.line != line) {
-                    try info.ranges.append(.{ .start = start, .end = end, .line = line });
+                    try info.ranges.append(allocator, .{ .start = start, .end = end, .line = line });
                     line = d.line;
                     start = end;
                 }
             }
-            try info.ranges.append(.{ .start = start, .end = @intCast(self.debug_markers.items.len), .line = line });
-            return try infos.toOwnedSlice();
+            try info.ranges.append(allocator, .{ .start = start, .end = @intCast(self.debug_markers.items.len), .line = line });
+            return try infos.toOwnedSlice(allocator);
         }
 
         pub fn deinit(self: *Chunk) void {
-            self.instructions.deinit();
-            self.debug_markers.deinit();
-            self.allocator.destroy(self);
+            self.instructions.deinit(self.alloc);
+            self.debug_markers.deinit(self.alloc);
+            self.alloc.destroy(self);
         }
     };
 
@@ -156,24 +157,24 @@ pub const Compiler = struct {
         NotYetImplemented,
     };
 
-    pub fn init(allocator: std.mem.Allocator, module: *Module) !Compiler {
+    pub fn init(alloc: std.mem.Allocator, module: *Module) !Compiler {
         if (!module.entry.tree_loaded) return error.CompilerError;
-        const root_chunk = try Compiler.Chunk.init(allocator, null, module);
-        const root_scope = try Scope.create(allocator, null, .global);
-        const root_builtins = try Scope.create(allocator, null, .builtin);
+        const root_chunk = try Compiler.Chunk.init(alloc, null, module);
+        const root_scope = try Scope.create(alloc, null, .global);
+        const root_builtins = try Scope.create(alloc, null, .builtin);
         return .{
-            .allocator = allocator,
+            .alloc = alloc,
             .builtins = root_builtins,
-            .constants = std.ArrayList(Value).init(allocator),
-            .uuids = std.ArrayList(UUID.ID).init(allocator),
-            .identifier_cache = std.StringHashMap(C.CONSTANT).init(allocator),
+            .constants = .empty,
+            .uuids = .empty,
+            .identifier_cache = .empty,
             .chunk = root_chunk,
             .scope = root_scope,
             .root_scope = root_scope,
-            .jump_tree = try JumpTree.init(allocator),
-            .visit_tree = try VisitTree.init(allocator),
-            .divert_log = std.ArrayList(JumpTree.Entry).init(allocator),
-            .types = std.StringHashMap(Statement).init(allocator),
+            .jump_tree = try JumpTree.init(alloc),
+            .visit_tree = try VisitTree.init(alloc),
+            .divert_log = .empty,
+            .types = .empty,
             .err = &module.entry.errors,
             .module = module,
         };
@@ -186,14 +187,14 @@ pub const Compiler = struct {
         self.visit_tree.deinit();
         for (self.constants.items) |item| {
             if (item == .obj) {
-                Value.Obj.destroy(self.allocator, item.obj);
+                Value.Obj.destroy(self.alloc, item.obj);
             }
         }
-        self.constants.deinit();
-        self.divert_log.deinit();
-        self.identifier_cache.deinit();
+        self.constants.deinit(self.alloc);
+        self.divert_log.deinit(self.alloc);
+        self.identifier_cache.deinit(self.alloc);
         self.builtins.destroy();
-        self.types.deinit();
+        self.types.deinit(self.alloc);
     }
 
     fn fail(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype) Error {
@@ -208,61 +209,59 @@ pub const Compiler = struct {
 
     pub fn bytecode(self: *Compiler) !Bytecode {
         if (self.scope.parent != null) return Error.OutOfScope;
-        var global_symbols = try self.allocator.alloc(Bytecode.GlobalSymbol, self.scope.symbols.count());
+        var global_symbols = try self.alloc.alloc(Bytecode.GlobalSymbol, self.scope.symbols.count());
         for (self.scope.symbols.values(), 0..) |s, i| {
             global_symbols[i] = Bytecode.GlobalSymbol{
-                .name = try self.allocator.dupe(u8, s.name),
+                .name = try self.alloc.dupe(u8, s.name),
                 .index = s.index,
                 .is_extern = s.is_extern,
                 .is_mutable = s.is_mutable,
             };
         }
-        var boughs = std.ArrayList(Bytecode.BoughJump).init(self.allocator);
-        defer boughs.deinit();
-        var stack = std.ArrayList(*const JumpTree.Node).init(self.allocator);
-        defer stack.deinit();
+        var boughs: std.ArrayList(Bytecode.BoughJump) = .empty;
+        errdefer boughs.deinit(self.alloc);
+        var stack: std.ArrayList(*const JumpTree.Node) = .empty;
+        defer stack.deinit(self.alloc);
         // reverse iterate so we keep the order when popping off stack
         var i: usize = self.jump_tree.root.children.items.len;
         while (i > 0) {
             i -= 1;
-            try stack.append(self.jump_tree.root.children.items[i]);
+            try stack.append(self.alloc, self.jump_tree.root.children.items[i]);
         }
-        while (stack.items.len > 0) {
-            var node = stack.pop();
-            var path = std.ArrayList(u8).init(self.allocator);
-            defer path.deinit();
-            try node.writePath(path.writer());
-            try boughs.append(.{
-                .name = try path.toOwnedSlice(),
+        while (stack.pop()) |node| {
+            var aw: std.Io.Writer.Allocating = .init(self.alloc);
+            try node.writePath(self.alloc, &aw.writer);
+            try boughs.append(self.alloc, .{
+                .name = try aw.toOwnedSlice(),
                 .ip = node.dest_ip,
             });
             var child_i: usize = node.children.items.len;
             while (child_i > 0) {
                 child_i -= 1;
-                try stack.append(node.children.items[child_i]);
+                try stack.append(self.alloc, node.children.items[child_i]);
             }
         }
 
-        var loc = std.ArrayList(u8).init(self.allocator);
-        defer loc.deinit();
+        var loc: std.ArrayList(u8) = .empty;
+        defer loc.deinit(self.alloc);
         if (self.use_loc) {
             var it = self.module.includes.iterator();
             while (it.next()) |kvp| {
                 const file = kvp.value_ptr.*;
                 try file.loadLoc();
                 defer file.unloadLoc();
-                if (file.loc_loaded) try loc.appendSlice(file.loc);
+                if (file.loc_loaded) try loc.appendSlice(self.alloc, file.loc);
             }
         }
         return .{
-            .instructions = try self.chunk.instructions.toOwnedSlice(),
-            .boughs = try boughs.toOwnedSlice(),
-            .debug_info = try self.chunk.debugInfo(self.allocator),
-            .constants = try self.constants.toOwnedSlice(),
+            .instructions = try self.chunk.instructions.toOwnedSlice(self.alloc),
+            .boughs = try boughs.toOwnedSlice(self.alloc),
+            .debug_info = try self.chunk.debugInfo(self.alloc),
+            .constants = try self.constants.toOwnedSlice(self.alloc),
             .global_symbols = global_symbols,
             .locals_count = self.locals_count,
-            .uuids = try self.uuids.toOwnedSlice(),
-            .loc = try loc.toOwnedSlice(),
+            .uuids = try self.uuids.toOwnedSlice(self.alloc),
+            .loc = try loc.toOwnedSlice(self.alloc),
         };
     }
 
@@ -292,13 +291,13 @@ pub const Compiler = struct {
         // Add one final fin at the end of file to grab the initial jump_request
         if (self.chunk.debug_markers.items.len > 0) {
             const dupe = self.chunk.debug_markers.items[self.chunk.debug_markers.items.len - 1];
-            try self.chunk.debug_markers.append(dupe);
-            try self.chunk.instructions.append(@intFromEnum(OpCode.fin));
+            try self.chunk.debug_markers.append(self.alloc, dupe);
+            try self.chunk.instructions.append(self.alloc, @intFromEnum(OpCode.fin));
         }
     }
 
     fn enterChunk(self: *Compiler) !void {
-        self.chunk = try Chunk.init(self.allocator, self.chunk, self.module);
+        self.chunk = try Chunk.init(self.alloc, self.chunk, self.module);
     }
 
     // Caller owns memory and must deinit returned chunk
@@ -309,7 +308,7 @@ pub const Compiler = struct {
     }
 
     fn enterScope(self: *Compiler, tag: Scope.Tag) !void {
-        self.scope = try Scope.create(self.allocator, self.scope, tag);
+        self.scope = try Scope.create(self.alloc, self.scope, tag);
     }
 
     fn exitScope(self: *Compiler) !void {
@@ -336,14 +335,14 @@ pub const Compiler = struct {
                 defer _ = self.visit_tree.list.pop();
                 defer self.visit_tree.pop();
 
-                const bough_node = try JumpTree.Node.create(self.allocator, b.name, node);
+                const bough_node = try JumpTree.Node.create(self.alloc, b.name, node);
                 for (b.body) |s| try self.precompileJumps(s, bough_node);
-                try node.children.append(bough_node);
+                try node.children.append(self.alloc, bough_node);
             },
             .fork => |f| {
                 var v_node = self.visit_tree.current;
-                const fork_count = try std.fmt.allocPrint(self.allocator, "_{d}", .{v_node.anon_count});
-                defer self.allocator.free(fork_count);
+                const fork_count = try std.fmt.allocPrint(self.alloc, "_{d}", .{v_node.anon_count});
+                defer self.alloc.free(fork_count);
                 v_node.anon_count += 1;
 
                 try self.compileVisitDecl(f.name orelse fork_count, stmt.token);
@@ -351,9 +350,9 @@ pub const Compiler = struct {
                 defer self.visit_tree.pop();
 
                 if (f.name) |name| {
-                    const fork_node = try JumpTree.Node.create(self.allocator, name, node);
+                    const fork_node = try JumpTree.Node.create(self.alloc, name, node);
                     for (f.body) |s| try self.precompileJumps(s, fork_node);
-                    try node.children.append(fork_node);
+                    try node.children.append(self.alloc, fork_node);
                 } else {
                     for (f.body) |s| try self.precompileJumps(s, node);
                 }
@@ -414,12 +413,56 @@ pub const Compiler = struct {
                 try self.compileBlock(i.else_branch.?);
                 try self.replaceValue(jumpPos, C.JUMP, self.instructionPos());
             },
+            .function => |f| {
+                try self.enterScope(.local);
+                try self.enterChunk();
+
+                var length = f.parameters.len;
+                if (f.is_method) {
+                    length += 1;
+                    _ = try self.scope.define("self", false, false);
+                }
+
+                for (f.parameters) |param| {
+                    _ = try self.scope.define(param, true, false);
+                }
+
+                try self.compileBlock(f.body);
+                if (!(try self.lastIs(.return_value)) and !(try self.lastIs(.return_void))) {
+                    try self.writeOp(.return_void, token);
+                }
+
+                const chunk = try self.exitChunk();
+                defer chunk.deinit();
+                const count = self.scope.count;
+
+                try self.exitScope();
+                const obj = try self.alloc.create(Value.Obj);
+
+                obj.* = .{
+                    .id = UUID.new(),
+                    .data = .{
+                        .function = .{
+                            .is_method = f.is_method,
+                            .instructions = try chunk.instructions.toOwnedSlice(self.alloc),
+                            .debug_info = try chunk.debugInfo(self.alloc),
+                            .locals_count = count,
+                            .arity = @as(u8, @intCast(length)),
+                        },
+                    },
+                };
+                const i = try self.addConstant(.{ .obj = obj });
+
+                const symbol = try self.scope.define(f.name, false, false);
+                symbol.tag = .constant;
+                symbol.index = i;
+            },
             .@"switch" => |s| {
                 const start = self.instructionPos();
                 try self.compileExpression(&s.capture);
-                var prong_jumps = try self.allocator.alloc(usize, s.prongs.len);
+                var prong_jumps = try self.alloc.alloc(usize, s.prongs.len);
                 var inferred_else_jump: ?usize = null;
-                defer self.allocator.free(prong_jumps);
+                defer self.alloc.free(prong_jumps);
                 // compile expressions and jumps
                 var has_else = false;
                 for (s.prongs, 0..) |prong_stmt, i| {
@@ -541,7 +584,7 @@ pub const Compiler = struct {
                 try self.setSymbol(symbol, token, true);
             },
             .class => |c| {
-                try self.types.putNoClobber(c.name, stmt);
+                try self.types.putNoClobber(self.alloc, c.name, stmt);
                 try self.enterScope(.local);
                 for (c.fields, 0..) |field, i| {
                     try self.compileExpression(&field);
@@ -558,12 +601,12 @@ pub const Compiler = struct {
                 try self.setSymbol(symbol, token, true);
             },
             .@"enum" => |e| {
-                try self.types.putNoClobber(e.name, stmt);
-                var values = try self.allocator.alloc([]const u8, e.values.len);
-                const obj = try self.allocator.create(Value.Obj);
+                try self.types.putNoClobber(self.alloc, e.name, stmt);
+                var values = try self.alloc.alloc([]const u8, e.values.len);
+                const obj = try self.alloc.create(Value.Obj);
 
                 for (e.values, 0..) |value, i| {
-                    values[i] = try self.allocator.dupe(u8, value);
+                    values[i] = try self.alloc.dupe(u8, value);
                 }
 
                 obj.* = .{
@@ -571,7 +614,7 @@ pub const Compiler = struct {
                     .data = .{
                         .@"enum" = .{
                             .is_seq = e.is_seq,
-                            .name = try self.allocator.dupe(u8, e.name),
+                            .name = try self.alloc.dupe(u8, e.name),
                             .values = values,
                         },
                     },
@@ -585,22 +628,25 @@ pub const Compiler = struct {
             },
             .fork => |f| {
                 const anon_count = self.visit_tree.current.anon_count;
-                const fork_count = try std.fmt.allocPrint(self.allocator, "_{d}", .{anon_count});
-                defer self.allocator.free(fork_count);
+                const fork_count = try std.fmt.allocPrint(self.alloc, "_{d}", .{anon_count});
+                defer self.alloc.free(fork_count);
 
                 self.visit_tree.current.anon_count += 1;
                 const cur = if (self.visit_tree.current.getChild(f.name orelse fork_count)) |n| n else {
-                    self.visit_tree.print(std.debug);
+                    var buffer: [1024]u8 = undefined;
+                    var writer = std.fs.File.stderr().writer(&buffer);
+                    const stderr = &writer.interface;
+                    self.visit_tree.print(stderr);
                     return self.fail("Could not find '{s}' in visit tree node '{s}'", token, .{ f.name orelse fork_count, self.visit_tree.current.name });
                 };
                 self.visit_tree.current = cur;
                 defer self.visit_tree.current = cur.parent.?;
 
-                try self.visit_tree.list.append(f.name orelse fork_count);
+                try self.visit_tree.list.append(self.alloc, f.name orelse fork_count);
                 defer _ = self.visit_tree.list.pop();
 
-                const path = try std.mem.join(self.allocator, ".", self.visit_tree.list.items);
-                defer self.allocator.free(path);
+                const path = try std.mem.join(self.alloc, ".", self.visit_tree.list.items);
+                defer self.alloc.free(path);
                 const symbol = try self.root_scope.resolve(path);
                 try self.compileVisit(symbol, path, token);
 
@@ -631,17 +677,20 @@ pub const Compiler = struct {
                     try self.getOrSetIdentifierConstant(tag, token);
                 }
                 const name = c.name orelse &c.id;
-                try self.visit_tree.list.append(name);
+                try self.visit_tree.list.append(self.alloc, name);
                 const cur = if (self.visit_tree.current.getChild(name)) |n| n else {
-                    self.visit_tree.print(std.debug);
+                    var buffer: [1024]u8 = undefined;
+                    var writer = std.fs.File.stderr().writer(&buffer);
+                    const stderr = &writer.interface;
+                    self.visit_tree.print(stderr);
                     return self.fail("Could not find '{s}' in visit tree node '{s}'", token, .{ name, self.visit_tree.current.name });
                 };
                 self.visit_tree.current = cur;
                 defer self.visit_tree.current = cur.parent.?;
                 defer _ = self.visit_tree.list.pop();
 
-                const path = try std.mem.join(self.allocator, ".", self.visit_tree.list.items);
-                defer self.allocator.free(path);
+                const path = try std.mem.join(self.alloc, ".", self.visit_tree.list.items);
+                defer self.alloc.free(path);
                 const visit_symbol = try self.root_scope.resolve(path);
 
                 if (self.use_loc) {
@@ -674,7 +723,7 @@ pub const Compiler = struct {
                 try self.replaceValue(jump_pos, C.JUMP, self.instructionPos());
             },
             .bough => |b| {
-                try self.visit_tree.list.append(b.name);
+                try self.visit_tree.list.append(self.alloc, b.name);
                 self.visit_tree.current = self.visit_tree.current.getChild(b.name).?;
                 defer self.visit_tree.current = self.visit_tree.current.parent.?;
                 defer _ = self.visit_tree.list.pop();
@@ -692,8 +741,8 @@ pub const Compiler = struct {
                 self.scope.count = locals_count;
                 errdefer self.exitScope() catch {};
 
-                const path = try std.mem.join(self.allocator, ".", self.visit_tree.list.items);
-                defer self.allocator.free(path);
+                const path = try std.mem.join(self.alloc, ".", self.visit_tree.list.items);
+                defer self.alloc.free(path);
                 const symbol = try self.root_scope.resolve(path);
                 try self.compileVisit(symbol, path, token);
 
@@ -731,8 +780,8 @@ pub const Compiler = struct {
             },
             .divert => |d| {
                 if (self.scope == self.root_scope) {
-                    const path = try std.mem.join(self.allocator, ".", d.path);
-                    defer self.allocator.free(path);
+                    const path = try std.mem.join(self.alloc, ".", d.path);
+                    defer self.alloc.free(path);
                     return self.fail("Cannot execute jump \"{s}\" in global scope", token, .{path});
                 }
                 var backup_pos: usize = 0;
@@ -745,7 +794,7 @@ pub const Compiler = struct {
                 var i: usize = d.path.len;
                 while (i > 0) : (i -= 1) {
                     const node = try self.getDivertNode(d.path[0..i], token);
-                    try self.divert_log.append(.{ .node = node, .jump_ip = self.instructionPos() });
+                    try self.divert_log.append(self.alloc, .{ .node = node, .jump_ip = self.instructionPos() });
                     _ = try self.writeInt(C.JUMP, DIVERT_HOLDER, token);
                 }
                 const end_pos = self.instructionPos();
@@ -815,11 +864,14 @@ pub const Compiler = struct {
     }
 
     fn compileVisitDecl(self: *Compiler, name: []const u8, token: Token) Error!void {
-        try self.visit_tree.list.append(name);
-        const path = try std.mem.join(self.allocator, ".", self.visit_tree.list.items);
-        defer self.allocator.free(path);
+        try self.visit_tree.list.append(self.alloc, name);
+        const path = try std.mem.join(self.alloc, ".", self.visit_tree.list.items);
+        defer self.alloc.free(path);
         const symbol = self.root_scope.define(path, false, false) catch {
-            self.visit_tree.print(std.debug);
+            var buffer: [1024]u8 = undefined;
+            var writer = std.fs.File.stderr().writer(&buffer);
+            const stderr = &writer.interface;
+            self.visit_tree.print(stderr);
             return self.fail("Visit '{s}' is already declared", token, .{path});
         };
         try self.writeOp(.constant, token);
@@ -935,16 +987,16 @@ pub const Compiler = struct {
                 for (s.expressions) |*item| {
                     try self.compileExpression(item);
                 }
-                const obj = try self.allocator.create(Value.Obj);
+                const obj = try self.alloc.create(Value.Obj);
                 // remove secondary escape double quotes
-                var value = try std.ArrayList(u8).initCapacity(self.allocator, s.value.len);
-                defer value.deinit();
+                var value = try std.ArrayList(u8).initCapacity(self.alloc, s.value.len);
+                defer value.deinit(self.alloc);
                 var i: usize = 0;
                 while (i < s.value.len) : (i += 1) {
                     if (s.value[i] == '"') i += 1;
                     value.appendAssumeCapacity(s.value[i]);
                 }
-                obj.* = .{ .data = .{ .string = try value.toOwnedSlice() } };
+                obj.* = .{ .data = .{ .string = try value.toOwnedSlice(self.alloc) } };
                 const index = try self.addConstant(.{ .obj = obj });
                 try self.writeOp(.string, token);
                 _ = try self.writeInt(C.CONSTANT, index, token);
@@ -1035,58 +1087,6 @@ pub const Compiler = struct {
                 try self.compileExpression(i.else_value);
                 try self.replaceValue(nextPos, C.JUMP, self.instructionPos());
             },
-            .function => |f| {
-                try self.enterScope(.closure);
-                try self.enterChunk();
-
-                if (f.name) |name| {
-                    _ = try self.scope.defineFunction(name);
-                }
-
-                var length = f.parameters.len;
-
-                if (f.is_method) {
-                    length += 1;
-                    _ = try self.scope.define("self", false, false);
-                }
-
-                for (f.parameters) |param| {
-                    _ = try self.scope.define(param, true, false);
-                }
-
-                try self.compileBlock(f.body);
-                if (!(try self.lastIs(.return_value)) and !(try self.lastIs(.return_void))) {
-                    try self.writeOp(.return_void, token);
-                }
-
-                const chunk = try self.exitChunk();
-                defer chunk.deinit();
-                const count = self.scope.count;
-                const free_symbols = self.scope.free_symbols.items;
-                for (free_symbols) |s| {
-                    try self.loadSymbol(s, s.name, token);
-                }
-                try self.exitScope();
-                const obj = try self.allocator.create(Value.Obj);
-
-                obj.* = .{
-                    .id = UUID.new(),
-                    .data = .{
-                        .function = .{
-                            .is_method = f.is_method,
-                            .instructions = try chunk.instructions.toOwnedSlice(),
-                            .debug_info = try chunk.debugInfo(self.allocator),
-                            .locals_count = count,
-                            .arity = @as(u8, @intCast(length)),
-                        },
-                    },
-                };
-                const i = try self.addConstant(.{ .obj = obj });
-
-                try self.writeOp(.closure, token);
-                _ = try self.writeInt(C.CONSTANT, i, token);
-                _ = try self.writeInt(u8, @as(u8, @intCast(free_symbols.len)), token);
-            },
             .instance => |ins| {
                 const cls: ?Statement = self.types.get(ins.name);
                 if (cls == null or cls.?.type != .class) return self.fail("Unknown class '{s}'", token, .{ins.name});
@@ -1146,6 +1146,10 @@ pub const Compiler = struct {
     fn loadSymbol(self: *Compiler, symbol: ?*Symbol, name: []const u8, token: Token) !void {
         if (symbol) |ptr| {
             switch (ptr.tag) {
+                .constant => {
+                    try self.writeOp(.constant, token);
+                    _ = try self.writeInt(C.CONSTANT, @as(C.CONSTANT, @intCast(ptr.index)), token);
+                },
                 .global => {
                     try self.writeOp(.get_global, token);
                     _ = try self.writeInt(C.GLOBAL, ptr.index, token);
@@ -1180,14 +1184,14 @@ pub const Compiler = struct {
 
     fn writeOp(self: *Compiler, op: OpCode, token: Token) !void {
         var chunk = self.chunk;
-        try chunk.debug_markers.append(.{ .file_index = @intCast(token.file_index), .line = @intCast(token.line) });
-        try chunk.instructions.append(@intFromEnum(op));
+        try chunk.debug_markers.append(self.alloc, .{ .file_index = @intCast(token.file_index), .line = @intCast(token.line) });
+        try chunk.instructions.append(self.alloc, @intFromEnum(op));
     }
 
     fn writeValue(self: *Compiler, buf: []const u8, token: Token) !void {
         var chunk = self.chunk;
-        try chunk.debug_markers.appendNTimes(.{ .file_index = @intCast(token.file_index), .line = @intCast(token.line) }, buf.len);
-        try chunk.instructions.writer().writeAll(buf);
+        try chunk.debug_markers.appendNTimes(self.alloc, .{ .file_index = @intCast(token.file_index), .line = @intCast(token.line) }, buf.len);
+        try chunk.instructions.writer(self.alloc).writeAll(buf);
     }
 
     fn writeInt(self: *Compiler, comptime T: type, value: T, token: Token) !usize {
@@ -1200,7 +1204,7 @@ pub const Compiler = struct {
     }
 
     pub fn writeId(self: *Compiler, id: UUID.ID, token: Token) !void {
-        try self.uuids.append(id);
+        try self.uuids.append(self.alloc, id);
         _ = try self.writeInt(C.CONSTANT, @as(C.CONSTANT, @intCast(self.uuids.items.len - 1)), token);
     }
 
@@ -1232,19 +1236,19 @@ pub const Compiler = struct {
         if (idx.index.type != .identifier) return false;
         if (idx.target.type != .indexer and idx.target.type != .identifier) return false;
 
-        var list = std.ArrayList([]const u8).init(self.allocator);
-        defer list.deinit();
-        try list.append(idx.index.type.identifier);
+        var list: std.ArrayList([]const u8) = .empty;
+        defer list.deinit(self.alloc);
+        try list.append(self.alloc, idx.index.type.identifier);
         while (idx.target.type == .indexer) {
             idx = idx.target.type.indexer;
-            try list.append(idx.index.type.identifier);
+            try list.append(self.alloc, idx.index.type.identifier);
         }
         if (idx.target.type != .identifier) return false;
-        try list.append(idx.target.type.identifier);
+        try list.append(self.alloc, idx.target.type.identifier);
         std.mem.reverse([]const u8, list.items);
 
-        const joined = try std.mem.join(self.allocator, ".", list.items);
-        defer self.allocator.free(joined);
+        const joined = try std.mem.join(self.alloc, ".", list.items);
+        defer self.alloc.free(joined);
         if (self.visit_tree.resolve(list.items[0])) |visit_node| {
             var node = visit_node;
             for (list.items, 0..) |item, i| {
@@ -1259,7 +1263,7 @@ pub const Compiler = struct {
     }
 
     pub fn addConstant(self: *Compiler, value: Value) !C.CONSTANT {
-        try self.constants.append(value);
+        try self.constants.append(self.alloc, value);
         return @as(C.CONSTANT, @intCast(self.constants.items.len - 1));
     }
 
@@ -1275,10 +1279,10 @@ pub const Compiler = struct {
             _ = try self.writeInt(C.CONSTANT, position, token);
             return;
         }
-        const obj = try self.allocator.create(Value.Obj);
-        obj.* = .{ .data = .{ .string = try self.allocator.dupe(u8, name) } };
+        const obj = try self.alloc.create(Value.Obj);
+        obj.* = .{ .data = .{ .string = try self.alloc.dupe(u8, name) } };
         const i = try self.addConstant(.{ .obj = obj });
-        try self.identifier_cache.putNoClobber(name, i);
+        try self.identifier_cache.putNoClobber(self.alloc, name, i);
 
         try self.writeOp(.constant, token);
         _ = try self.writeInt(C.CONSTANT, i, token);

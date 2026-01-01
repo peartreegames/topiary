@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub const DebugInfo = struct {
+    allocator: std.mem.Allocator,
     file: []const u8,
     ranges: std.ArrayList(Range),
 
@@ -12,17 +13,18 @@ pub const DebugInfo = struct {
 
     pub fn init(allocator: std.mem.Allocator, file: []const u8) DebugInfo {
         return .{
+            .allocator = allocator,
             .file = file,
-            .ranges = std.ArrayList(Range).init(allocator),
+            .ranges = .empty,
         };
     }
 
-    pub fn deinit(self: *const DebugInfo, allocator: std.mem.Allocator) void {
-        allocator.free(self.file);
-        self.ranges.deinit();
+    pub fn deinit(self: *DebugInfo) void {
+        self.allocator.free(self.file);
+        self.ranges.deinit(self.allocator);
     }
 
-    pub fn serialize(self: *const DebugInfo, writer: anytype) !void {
+    pub fn serialize(self: *const DebugInfo, writer: *std.Io.Writer) !void {
         try writer.writeInt(u16, @intCast(self.file.len), .little);
         try writer.writeAll(self.file);
         try writer.writeInt(u16, @intCast(self.ranges.items.len), .little);
@@ -33,16 +35,16 @@ pub const DebugInfo = struct {
         }
     }
 
-    pub fn deserialize(reader: anytype, allocator: std.mem.Allocator) !DebugInfo {
-        const file_len = try reader.readInt(u16, .little);
+    pub fn deserialize(reader: *std.Io.Reader, allocator: std.mem.Allocator) !DebugInfo {
+        const file_len = try reader.takeInt(u16, .little);
         const file_buf = try allocator.alloc(u8, file_len);
-        try reader.readNoEof(file_buf);
-        var ranges_len = try reader.readInt(u16, .little);
+        try reader.readSliceAll(file_buf);
+        var ranges_len = try reader.takeInt(u16, .little);
         var ranges = try std.ArrayList(Range).initCapacity(allocator, ranges_len);
         while (ranges_len > 0) : (ranges_len -= 1) {
-            const start = try reader.readInt(u32, .little);
-            const end = try reader.readInt(u32, .little);
-            const line = try reader.readInt(u32, .little);
+            const start = try reader.takeInt(u32, .little);
+            const end = try reader.takeInt(u32, .little);
+            const line = try reader.takeInt(u32, .little);
             ranges.appendAssumeCapacity(.{
                 .start = start,
                 .end = end,
@@ -50,6 +52,7 @@ pub const DebugInfo = struct {
             });
         }
         return .{
+            .allocator = allocator,
             .file = file_buf,
             .ranges = ranges,
         };

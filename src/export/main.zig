@@ -19,97 +19,128 @@ const ExportString = export_runner.ExportString;
 const ExportLine = export_runner.ExportLine;
 const ExportChoice = export_runner.ExportChoice;
 
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+var gpa: std.heap.DebugAllocator(.{}) = .init;
 var alloc = gpa.allocator();
 
 /// Used to pre-calculate the size required
 /// for a compiled topi module
-pub export fn calculateCompileSize(path_ptr: [*:0]const u8, log_ptr: usize, log_severity: u8) callconv(.C) usize {
+pub export fn calculateCompileSize(path_ptr: [*:0]const u8, log_ptr: usize, log_severity: u8) callconv(.c) usize {
     const logger = ExportLogger{ .on_log = @ptrFromInt(log_ptr), .severity = @enumFromInt(log_severity), .allocator = alloc };
-    var counter = std.io.countingWriter(std.io.null_writer);
-    writeBytecode(std.mem.sliceTo(path_ptr, 0), &counter, logger);
-    logger.log("Calculated Compile size {d}", .{counter.bytes_written}, .debug);
-    return counter.bytes_written;
+
+    const mod = createModule( std.mem.sliceTo(path_ptr, 0), logger);
+    if (mod == null) return 0;
+    defer mod.?.deinit();
+
+    var bytecode = createBytecode(mod.?, logger);
+    if (bytecode == null) return 0;
+
+    var buf: [1024]u8 = undefined;
+    var counter = std.Io.Writer.Discarding.init(&buf);
+    const count = bytecode.?.serialize(alloc, &counter.writer) catch |err| {
+        logger.log("Could not calculate size {s}", .{@errorName(err)}, .err);
+        return 0;
+    };
+    logger.log("Calculated Compile size {d}", .{count}, .debug);
+    return count;
 }
 
 /// Compiles the given path to the byte array
 /// Can use `calculateCompileSize` to get the max required, or pass a larger than expected size
-pub export fn compile(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, log_ptr: usize, log_severity: u8) callconv(.C) usize {
+pub export fn compile(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, log_ptr: usize, log_severity: u8) callconv(.c) usize {
     const logger = ExportLogger{ .on_log = @ptrFromInt(log_ptr), .severity = @enumFromInt(log_severity), .allocator = alloc };
-    var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
-    writeBytecode(std.mem.sliceTo(path_ptr, 0), &fbs, logger);
-    logger.log("Compiled size {d} / {d}", .{ fbs.pos, max }, .debug);
-    return fbs.pos;
+    var fixed = std.io.Writer.fixed(out_ptr[0..max]);
+    const size = writeBytecode(std.mem.sliceTo(path_ptr, 0), &fixed, logger);
+    logger.log("Compiled size {d} / {d}", .{ size, max }, .debug);
+    return size;
 }
 
-fn writeBytecode(path: []const u8, seekable: anytype, logger: ExportLogger) void {
-    var arena = std.heap.ArenaAllocator.init(alloc);
-    defer arena.deinit();
-    const comp_alloc = arena.allocator();
-
+fn createModule(path: []const u8, logger: ExportLogger) ?*Module {
     const full_path = alloc.dupe(u8, path) catch |err| {
         logger.log("Could not allocate file full_path: {s}", .{@errorName(err)}, .err);
-        return;
+        return null;
     };
     defer alloc.free(full_path);
-    var mod = Module{
-        .arena = arena,
-        .allocator = comp_alloc,
-        .entry = undefined,
-        .includes = std.StringArrayHashMap(*File).init(comp_alloc),
+
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    const arena_alloc = arena.allocator();
+    var mod = alloc.create(Module) catch |err| {
+        logger.log("Could not allocate module: {s}", .{@errorName(err)}, .err);
+        return null;
     };
-    const file = File.create(&mod, full_path) catch |err| {
+    mod.* = Module{
+        .arena = arena,
+        .allocator = alloc,
+        .entry = undefined,
+        .includes = std.StringArrayHashMap(*File).init(arena_alloc),
+    };
+    const file = File.create(mod, full_path) catch |err| {
         logger.log("Could not create Module File: {s}", .{@errorName(err)}, .err);
-        return;
+        return null;
     };
     mod.entry = file;
     mod.includes.putNoClobber(file.path, file) catch unreachable;
-    defer mod.deinit();
-    file.loadSource() catch |err| {
+
+    mod.entry.loadSource() catch |err| {
         logger.log("Could not load file source: {s}", .{@errorName(err)}, .err);
-        return;
+        return null;
     };
 
-    var output_log = std.ArrayList(u8).init(alloc);
-    defer output_log.deinit();
-    const output_writer = output_log.writer();
-
-    file.buildTree() catch |err| {
+    mod.entry.buildTree() catch |err| {
+        var output_log: std.Io.Writer.Allocating = .init(mod.allocator);
+        defer output_log.deinit();
+        const output_writer = &output_log.writer;
         mod.writeErrors(output_writer) catch |e| {
             logger.log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
-            return;
+            return null;
         };
-        logger.log("Could not parse file '{s}': {s}\n{s}", .{ full_path, @errorName(err), output_log.items }, .err);
-        return;
+        logger.log("Could not parse file '{s}': {s}\n{s}", .{ mod.entry.path, @errorName(err), output_log.written() }, .err);
+        return null;
     };
+    return mod;
+}
 
-    var compiler = Compiler.init(comp_alloc, &mod) catch |err| {
+fn createBytecode(mod: *Module, logger: ExportLogger) ?Bytecode {
+    var compiler = Compiler.init(mod.allocator, &mod.*) catch |err| {
         logger.log("Could not create compiler: {s}", .{@errorName(err)}, .err);
-        return;
+        return null;
     };
     defer compiler.deinit();
 
     compiler.compile() catch |err| {
+        var output_log: std.Io.Writer.Allocating = .init(mod.allocator);
+        defer output_log.deinit();
+        const output_writer = &output_log.writer;
+
         mod.writeErrors(output_writer) catch |e| {
             logger.log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
-            return;
+            return null;
         };
-        logger.log("Could not compile file '{s}': {s}\n{s}", .{ full_path, @errorName(err), output_log.items }, .err);
-        return;
-    };
-    var bytecode = compiler.bytecode() catch |err| {
-        logger.log("Could not create bytecode: {s}", .{@errorName(err)}, .err);
-        return;
+        logger.log("Could not compile file '{s}': {s}\n{s}", .{ mod.entry.path, @errorName(err), output_log.written() }, .err);
+        return null;
     };
 
-    bytecode.serialize(seekable) catch |err| {
+    return compiler.bytecode() catch |err| {
+        logger.log("Could not create bytecode: {s}", .{@errorName(err)}, .err);
+        return null;
+    };
+}
+
+fn writeBytecode(path: []const u8, writer: *std.io.Writer, logger: ExportLogger) usize {
+    const mod = createModule( path, logger);
+    if (mod == null) return 0;
+    defer mod.?.deinit();
+
+    var bytecode = createBytecode(mod.?, logger);
+    if (bytecode == null) return 0;
+
+    return bytecode.?.serialize(alloc, writer) catch |err| {
         logger.log("Could not serialize bytecode: {s}", .{@errorName(err)}, .err);
-        return;
+        return 0;
     };
 }
 
 /// Start of the vm dialogue
-pub export fn start(vm_ptr: usize, path_ptr: [*:0]const u8) callconv(.C) void {
+pub export fn start(vm_ptr: usize, path_ptr: [*:0]const u8) callconv(.c) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
     const logger = runner.logger;
@@ -126,7 +157,7 @@ pub export fn start(vm_ptr: usize, path_ptr: [*:0]const u8) callconv(.C) void {
     vm.start(path) catch |err| logger.log("Could not start vm: {any}", .{err}, .err);
 }
 
-pub export fn run(vm_ptr: usize) callconv(.C) void {
+pub export fn run(vm_ptr: usize) callconv(.c) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     vm.run() catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
@@ -137,54 +168,54 @@ pub export fn run(vm_ptr: usize) callconv(.C) void {
     };
 }
 
-pub export fn canContinue(vm_ptr: usize) callconv(.C) bool {
+pub export fn canContinue(vm_ptr: usize) callconv(.c) bool {
     const vm: *Vm = @ptrFromInt(vm_ptr);
     return vm.can_continue;
 }
 
-pub export fn isWaiting(vm_ptr: usize) callconv(.C) bool {
+pub export fn isWaiting(vm_ptr: usize) callconv(.c) bool {
     const vm: *Vm = @ptrFromInt(vm_ptr);
     return vm.is_waiting;
 }
 
-pub export fn selectContinue(vm_ptr: usize) callconv(.C) void {
+pub export fn selectContinue(vm_ptr: usize) callconv(.c) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
     runner.logger.log("Selecting continue", .{}, .debug);
     vm.selectContinue();
 }
 
-pub export fn selectChoice(vm_ptr: usize, index: usize) callconv(.C) void {
+pub export fn selectChoice(vm_ptr: usize, index: usize) callconv(.c) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
     runner.logger.log("Selecting choice {}", .{index}, .debug);
     vm.selectChoice(index) catch runner.logger.log("Invalid choice", .{}, .err);
 }
 
-pub export fn setExtern(vm_ptr: usize, name_ptr: [*:0]const u8, exp_value: ExportValue, free_ptr: usize) callconv(.C) void {
+pub export fn setExtern(vm_ptr: usize, name_ptr: [*:0]const u8, exp_value: ExportValue, free_ptr: usize) callconv(.c) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
     const logger = runner.logger;
     const name = std.mem.sliceTo(name_ptr, 0);
     const value = exp_value.toValue(vm, @ptrFromInt(free_ptr)) catch |err| {
-        logger.log("Could not create Value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
+        logger.log("Could not create Value \"{s}\": {t}", .{ name, err }, .err);
         return;
     };
-    logger.log("Setting {s} to {s}", .{ name, value }, .debug);
+    logger.log("Setting {s} to {f}", .{ name, value }, .debug);
 
     vm.setExtern(name, value) catch |err| {
-        logger.log("Could not set Export value \"{s}\": {s}", .{ name, @errorName(err) }, .err);
+        logger.log("Could not set Export value \"{s}\": {t}", .{ name, err }, .err);
     };
 }
 
-pub export fn setExternFunc(vm_ptr: usize, name_ptr: [*:0]const u8, value_ptr: usize, arity: u8, free_ptr: usize) callconv(.C) void {
+pub export fn setExternFunc(vm_ptr: usize, name_ptr: [*:0]const u8, value_ptr: usize, arity: u8, free_ptr: usize) callconv(.c) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
     const logger = runner.logger;
     const name = std.mem.sliceTo(name_ptr, 0);
     logger.log("Setting extern function \"{s}\"", .{name}, .info);
     const wrapper = alloc.create(ExportFunction) catch |err| {
-        logger.log("Could not allocate ExportFunction '{s}': {s}", .{ name, @errorName(err) }, .err);
+        logger.log("Could not allocate ExportFunction '{s}': {t}", .{ name, err }, .err);
         return;
     };
     wrapper.* = ExportFunction.create(vm, @ptrFromInt(value_ptr), @ptrFromInt(free_ptr));
@@ -194,15 +225,15 @@ pub export fn setExternFunc(vm_ptr: usize, name_ptr: [*:0]const u8, value_ptr: u
         .context_ptr = @intFromPtr(wrapper),
         .destroy = ExportFunction.destroy,
     } }) catch |err| {
-        logger.log("Could not create function value '{s}': {s}", .{ name, @errorName(err) }, .err);
+        logger.log("Could not create function value '{s}': {t}", .{ name, err }, .err);
         return;
     };
     vm.setExtern(name, val) catch |err| {
-        logger.log("Could not set Export value '{s}': {s}", .{ name, @errorName(err) }, .err);
+        logger.log("Could not set Export value '{s}': {t}", .{ name, err }, .err);
     };
 }
 
-pub export fn subscribe(vm_ptr: usize, name_ptr: [*:0]const u8) callconv(.C) bool {
+pub export fn subscribe(vm_ptr: usize, name_ptr: [*:0]const u8) callconv(.c) bool {
     var vm: *Vm = @ptrFromInt(vm_ptr);
 
     const name = std.mem.sliceTo(name_ptr, 0);
@@ -213,21 +244,21 @@ pub export fn subscribe(vm_ptr: usize, name_ptr: [*:0]const u8) callconv(.C) boo
     };
 }
 
-pub export fn unsubscribe(vm_ptr: usize, name_ptr: [*:0]const u8) callconv(.C) bool {
+pub export fn unsubscribe(vm_ptr: usize, name_ptr: [*:0]const u8) callconv(.c) bool {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const name = std.mem.sliceTo(name_ptr, 0);
     return vm.unusbscribeToValueChange(name);
 }
 
-pub export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_ptr: usize, on_choice_ptr: usize, on_value_changed_ptr: usize, log_ptr: usize, log_severity: u8) callconv(.C) usize {
+pub export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_ptr: usize, on_choice_ptr: usize, on_value_changed_ptr: usize, log_ptr: usize, log_severity: u8) callconv(.c) usize {
     const on_dialogue: ExportRunner.OnLine = @ptrFromInt(on_dialogue_ptr);
     const on_choices: ExportRunner.OnChoices = @ptrFromInt(on_choice_ptr);
     const on_value_changed: ExportRunner.OnValueChanged = @ptrFromInt(on_value_changed_ptr);
     const logger = ExportLogger{ .on_log = @ptrFromInt(log_ptr), .severity = @enumFromInt(log_severity), .allocator = alloc };
 
-    var fbs = std.io.fixedBufferStream(source_ptr[0..source_len]);
+    var fixed = std.Io.Reader.fixed(source_ptr[0..source_len]);
     logger.log("Deserializing bytecode", .{}, .info);
-    const bytecode = Bytecode.deserialize(alloc, fbs.reader()) catch |err| {
+    const bytecode = Bytecode.deserialize(alloc, &fixed) catch |err| {
         logger.log("Could not deserialize bytecode: {s}", .{@errorName(err)}, .err);
         return 0;
     };
@@ -240,12 +271,12 @@ pub export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_
     logger.log("Initializing ExportRunner", .{}, .info);
     extern_runner.* = ExportRunner.init(alloc, on_dialogue, on_choices, on_value_changed, logger);
 
-    logger.log("Creating VM", .{}, .info);
+    logger.log("Creating Vm", .{}, .info);
     const vm = alloc.create(Vm) catch {
         logger.log("Could not allocate vm", .{}, .err);
         return 0;
     };
-    logger.log("Initializing VM", .{}, .info);
+    logger.log("Initializing Vm, globals: {}", .{bytecode.global_symbols.len}, .info);
     vm.* = Vm.init(alloc, bytecode, &extern_runner.runner) catch {
         logger.log("Could not initialize Vm", .{}, .err);
         return 0;
@@ -256,7 +287,7 @@ pub export fn createVm(source_ptr: [*c]const u8, source_len: usize, on_dialogue_
 pub export fn destroyVm(vm_ptr: usize) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
-    runner.logger.log("Destroying VM", .{}, .info);
+    runner.logger.log("Destroying Vm", .{}, .info);
     alloc.destroy(runner);
     vm.deinit();
     alloc.destroy(vm);
@@ -278,7 +309,10 @@ pub export fn saveStateFile(vm_ptr: usize, path_ptr: [*:0]u8) void {
         return;
     };
     defer file.close();
-    State.serialize(vm, file.writer()) catch |err| {
+    var buf: [1024]u8 = undefined;
+    var file_writer = file.writer(&buf);
+    const writer = &file_writer.interface;
+    State.serialize(vm, writer) catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
         runner.logger.log("Could not serialize state: {s}", .{@errorName(err)}, .err);
     };
@@ -286,13 +320,13 @@ pub export fn saveStateFile(vm_ptr: usize, path_ptr: [*:0]u8) void {
 
 pub export fn saveState(vm_ptr: usize, out_ptr: [*:0]u8, max: usize) usize {
     const vm: *Vm = @ptrFromInt(vm_ptr);
-    var fbs = std.io.fixedBufferStream(out_ptr[0..max]);
-    State.serialize(vm, fbs.writer()) catch |err| {
+    var fbs = std.Io.Writer.fixed(out_ptr[0..max]);
+    State.serialize(vm, &fbs) catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
         runner.logger.log("Could not serialize state: {s}", .{@errorName(err)}, .err);
         return 0;
     };
-    return fbs.pos;
+    return fbs.end;
 }
 
 pub export fn loadStateFile(vm_ptr: usize, path_ptr: [*:0]u8) void {
@@ -304,7 +338,10 @@ pub export fn loadStateFile(vm_ptr: usize, path_ptr: [*:0]u8) void {
         return;
     };
     defer file.close();
-    State.deserialize(vm, file.reader()) catch |err| {
+    var buf: [1024]u8 = undefined;
+    var reader = file.reader(&buf);
+    const read = &reader.interface;
+    State.deserialize(vm, read) catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
         runner.logger.log("Could not deserialize data: {s}", .{@errorName(err)}, .err);
     };
@@ -312,8 +349,8 @@ pub export fn loadStateFile(vm_ptr: usize, path_ptr: [*:0]u8) void {
 
 pub export fn loadState(vm_ptr: usize, json_str: [*]const u8, json_len: usize) void {
     const vm: *Vm = @ptrFromInt(vm_ptr);
-    var fbs = std.io.fixedBufferStream(json_str[0..json_len]);
-    State.deserialize(vm, fbs.reader()) catch |err| {
+    var fbs = std.Io.Reader.fixed(json_str[0..json_len]);
+    State.deserialize(vm, &fbs) catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
         runner.logger.log("Could not deserialize data: {s}", .{@errorName(err)}, .err);
     };

@@ -117,8 +117,8 @@ pub const Value = union(Type) {
             instance: Class.Instance,
         };
 
-        pub const MapType = std.ArrayHashMap(Value, Value, Adapter, true);
-        pub const SetType = std.ArrayHashMap(Value, void, Adapter, true);
+        pub const MapType = std.ArrayHashMapUnmanaged(Value, Value, Adapter, true);
+        pub const SetType = std.ArrayHashMapUnmanaged(Value, void, Adapter, true);
 
         pub fn destroy(allocator: std.mem.Allocator, obj: *Obj) void {
             switch (obj.data) {
@@ -128,12 +128,12 @@ pub const Value = union(Type) {
                     for (e.values) |val| allocator.free(val);
                     allocator.free(e.values);
                 },
-                .list => |l| l.deinit(),
-                .map => obj.data.map.deinit(),
-                .set => obj.data.set.deinit(),
+                .list => obj.data.list.deinit(allocator),
+                .map => obj.data.map.deinit(allocator),
+                .set => obj.data.set.deinit(allocator),
                 .function => |f| {
                     allocator.free(f.instructions);
-                    for (f.debug_info) |d| d.deinit(allocator);
+                    for (f.debug_info) |*d| d.*.deinit();
                     allocator.free(f.debug_info);
                 },
                 .ext_function => |e| {
@@ -241,13 +241,13 @@ pub const Value = union(Type) {
     }
 
     // used for constant values only
-    pub fn serialize(self: Value, writer: anytype) !void {
+    pub fn serialize(self: Value, writer: *std.Io.Writer) !void {
         try writer.writeByte(@intFromEnum(@as(Type, self)));
         switch (self) {
             .bool => |b| try writer.writeByte(if (b) '1' else '0'),
             .number => |n| {
                 var buf: [128]u8 = undefined;
-                var fbs = std.io.fixedBufferStream(buf[0..]);
+                var fbs = std.Io.fixedBufferStream(buf[0..]);
                 try fbs.writer().print("{d:.5}", .{n});
                 try writer.writeInt(u8, @as(u8, @intCast(fbs.pos)), .little);
                 try writer.writeAll(fbs.getWritten());
@@ -291,42 +291,42 @@ pub const Value = union(Type) {
     }
 
     // used for constant values only
-    pub fn deserialize(reader: anytype, allocator: std.mem.Allocator) !Value {
-        const value_type: Type = @enumFromInt(try reader.readByte());
+    pub fn deserialize(reader: *std.Io.Reader, allocator: std.mem.Allocator) !Value {
+        const value_type: Type = @enumFromInt(try reader.takeByte());
         return switch (value_type) {
             .nil => Nil,
-            .bool => if (try reader.readByte() == '1') True else False,
+            .bool => if (try reader.takeByte() == '1') True else False,
             .number => {
-                const length = try reader.readInt(u8, .little);
+                const length = try reader.takeInt(u8, .little);
                 const buf = try allocator.alloc(u8, length);
                 defer allocator.free(buf);
-                try reader.readNoEof(buf);
+                try reader.readSliceAll(buf);
                 return .{ .number = try std.fmt.parseFloat(f32, buf) };
             },
             .visit => {
-                return .{ .visit = try reader.readInt(u32, .little) };
+                return .{ .visit = try reader.takeInt(u32, .little) };
             },
             .obj => {
-                const data_type: Obj.DataType = @enumFromInt(try reader.readByte());
+                const data_type: Obj.DataType = @enumFromInt(try reader.takeByte());
                 var id: UUID.ID = undefined;
-                try reader.readNoEof(id[0..]);
+                try reader.readSliceAll(id[0..]);
                 switch (data_type) {
                     .string => {
-                        const length = try reader.readInt(u16, .little);
+                        const length = try reader.takeInt(u16, .little);
                         const buf = try allocator.alloc(u8, length);
-                        try reader.readNoEof(buf);
+                        try reader.readSliceAll(buf);
                         const obj = try allocator.create(Value.Obj);
                         obj.* = .{ .id = id, .data = .{ .string = buf } };
                         return .{ .obj = obj };
                     },
                     .function => {
-                        const arity = try reader.readByte();
-                        const is_method = if ((try reader.readByte()) == 1) true else false;
-                        const locals_count = try reader.readInt(u16, .little);
-                        const instructions_count = try reader.readInt(u16, .little);
+                        const arity = try reader.takeByte();
+                        const is_method = if ((try reader.takeByte()) == 1) true else false;
+                        const locals_count = try reader.takeInt(u16, .little);
+                        const instructions_count = try reader.takeInt(u16, .little);
                         const buf = try allocator.alloc(u8, instructions_count);
-                        try reader.readNoEof(buf);
-                        const debug_info_count = try reader.readInt(u32, .little);
+                        try reader.readSliceAll(buf);
+                        const debug_info_count = try reader.takeInt(u32, .little);
                         var debug_info = try allocator.alloc(DebugInfo, debug_info_count);
                         for (0..debug_info_count) |i| {
                             debug_info[i] = try DebugInfo.deserialize(reader, allocator);
@@ -344,17 +344,17 @@ pub const Value = union(Type) {
                         return .{ .obj = obj };
                     },
                     .@"enum" => {
-                        const name_length = try reader.readByte();
+                        const name_length = try reader.takeByte();
                         const name_buf = try allocator.alloc(u8, name_length);
-                        try reader.readNoEof(name_buf);
-                        const is_seq = try reader.readByte() == 1;
-                        const values_length = try reader.readByte();
+                        try reader.readSliceAll(name_buf);
+                        const is_seq = try reader.takeByte() == 1;
+                        const values_length = try reader.takeByte();
                         const obj = try allocator.create(Value.Obj);
                         obj.* = .{ .id = id, .data = .{ .@"enum" = .{ .name = name_buf, .values = try allocator.alloc([]const u8, values_length), .is_seq = is_seq } } };
                         for (0..values_length) |i| {
-                            const value_name_length = try reader.readByte();
+                            const value_name_length = try reader.takeByte();
                             const value_name_buf = try allocator.alloc(u8, value_name_length);
-                            try reader.readNoEof(value_name_buf);
+                            try reader.readSliceAll(value_name_buf);
                             obj.data.@"enum".values[i] = value_name_buf;
                         }
                         return .{ .obj = obj };
@@ -366,18 +366,16 @@ pub const Value = union(Type) {
         };
     }
 
-    pub fn format(
-        self: Value,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        return self.print(writer, null);
+    pub fn format(self: Value, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        return self.print(writer, null) catch |err| {
+            std.debug.print("Could not print value {t}",.{err});
+            return std.Io.Writer.Error.WriteFailed;
+        };
     }
 
     /// Prints value to writer
     /// Optional AutoArrayHashMap can be passed in to detect circular references
-    pub fn print(self: Value, writer: anytype, set: ?*std.AutoArrayHashMap(UUID.ID, void)) !void {
+    pub fn print(self: Value, writer: *std.Io.Writer, set: ?*std.AutoArrayHashMap(UUID.ID, void)) !void {
         switch (self) {
             .number => |n| try writer.print("{d:.5}", .{n}),
             .bool => |b| try writer.print("{}", .{b}),

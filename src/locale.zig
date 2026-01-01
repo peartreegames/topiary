@@ -27,60 +27,60 @@ pub const Locale = struct {
         return validateFile(mod.entry, allocator);
     }
 
-    pub fn validateFile(file: *module.File, allocator: std.mem.Allocator) ![]const u8 {
+    pub fn validateFile(file: *module.File, alloc: std.mem.Allocator) ![]const u8 {
         if (!file.source_loaded) return error.FileSourceNotLoaded;
         if (!file.tree_loaded) return error.FileTreeNotLoaded;
-        var buf = std.ArrayList(u8).init(allocator);
-        defer buf.deinit();
-        try buf.writer().writeAll(file.source);
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(alloc);
+        try buf.writer(alloc).writeAll(file.source);
         var count: usize = 0;
 
         for (file.tree.root) |stmt| {
-            try localizeStatement(stmt, &count, &buf);
+            try localizeStatement(alloc, stmt, &count, &buf);
         }
-        return buf.toOwnedSlice();
+        return buf.toOwnedSlice(alloc);
     }
 
-    pub fn localizeStatement(stmt: Statement, count: *usize, buf: *std.ArrayList(u8)) !void {
+    pub fn localizeStatement(alloc: std.mem.Allocator, stmt: Statement, count: *usize, buf: *std.ArrayList(u8)) !void {
         switch (stmt.type) {
             .block => |b| {
-                for (b) |s| try localizeStatement(s, count, buf);
+                for (b) |s| try localizeStatement(alloc, s, count, buf);
             },
             .bough => |b| {
-                for (b.body) |s| try localizeStatement(s, count, buf);
+                for (b.body) |s| try localizeStatement(alloc, s, count, buf);
             },
             .choice => |c| {
-                try localizeExpr(&stmt, count, buf);
-                for (c.body) |s| try localizeStatement(s, count, buf);
+                try localizeExpr(alloc, &stmt, count, buf);
+                for (c.body) |s| try localizeStatement(alloc, s, count, buf);
             },
-            .dialogue => try localizeExpr(&stmt, count, buf),
+            .dialogue => try localizeExpr(alloc, &stmt, count, buf),
             .@"for" => |f| {
-                for (f.body) |s| try localizeStatement(s, count, buf);
+                for (f.body) |s| try localizeStatement(alloc, s, count, buf);
             },
             .fork => |f| {
-                for (f.body) |s| try localizeStatement(s, count, buf);
+                for (f.body) |s| try localizeStatement(alloc, s, count, buf);
             },
             .@"if" => |i| {
-                for (i.then_branch) |s| try localizeStatement(s, count, buf);
+                for (i.then_branch) |s| try localizeStatement(alloc, s, count, buf);
                 if (i.else_branch) |e| {
-                    for (e) |s| try localizeStatement(s, count, buf);
+                    for (e) |s| try localizeStatement(alloc, s, count, buf);
                 }
             },
             .@"while" => |w| {
-                for (w.body) |s| try localizeStatement(s, count, buf);
+                for (w.body) |s| try localizeStatement(alloc, s, count, buf);
             },
             .@"switch" => |s| {
-                for (s.prongs) |p| try localizeStatement(p, count, buf);
+                for (s.prongs) |p| try localizeStatement(alloc, p, count, buf);
             },
             .switch_prong => |sp| {
-                for (sp.body) |b| try localizeStatement(b, count, buf);
+                for (sp.body) |b| try localizeStatement(alloc, b, count, buf);
             },
             else => {},
         }
     }
 
     // very error prone and modifying the source isn't great, but works for now
-    fn localizeExpr(stmt: *const Statement, count: *usize, buf: *std.ArrayList(u8)) Error!void {
+    fn localizeExpr(alloc: std.mem.Allocator, stmt: *const Statement, count: *usize, buf: *std.ArrayList(u8)) Error!void {
         const id: UUID.ID = switch (stmt.type) {
             .choice => |c| c.id,
             .dialogue => |d| d.id,
@@ -102,16 +102,16 @@ pub const Locale = struct {
                 var end: usize = start;
                 while (buf.items[end] != ' ' and buf.items[end] != 0 and buf.items[end] != '\n') : (end += 1) {}
                 const len = end - start;
-                try buf.replaceRange(start, len, &tmp);
+                try buf.replaceRange(alloc, start, len, &tmp);
                 count.* += UUID.Size + 1 - len;
             } else {
-                try buf.insertSlice(start, &tmp);
+                try buf.insertSlice(alloc, start, &tmp);
                 count.* += UUID.Size + 1;
             }
         }
     }
 
-    pub fn exportFileAtPath(full_path: []const u8, writer: anytype, allocator: std.mem.Allocator) !void {
+    pub fn exportFileAtPath(full_path: []const u8, writer: *std.Io.Writer, allocator: std.mem.Allocator) !void {
         var mod = try Module.init(allocator, full_path);
         mod.allow_includes = false;
         defer mod.deinit();
@@ -124,14 +124,14 @@ pub const Locale = struct {
     // Ideally this would check for existing ids already in the file
     // and only update the raw/base values, rather than replace the entire file
     // base language should be configurable as well
-    pub fn exportFile(file: *File, writer: anytype) !void {
+    pub fn exportFile(file: *File, writer: *std.Io.Writer) !void {
         try writer.writeAll("\"id\",\"speaker\",\"raw\",\"en\"\n");
         for (file.tree.root) |stmt| {
             try exportStatement(stmt, writer);
         }
     }
 
-    fn exportStatement(stmt: Statement, writer: anytype) !void {
+    fn exportStatement(stmt: Statement, writer: *std.Io.Writer) !void {
         switch (stmt.type) {
             .block => |b| {
                 for (b) |s| try exportStatement(s, writer);

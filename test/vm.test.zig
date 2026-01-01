@@ -18,9 +18,19 @@ pub fn initTestVm(source: []const u8, mod: *Module, debug: bool) !Vm {
     var bytecode = try compileSource(source, mod);
     errdefer bytecode.free(allocator);
     if (debug) {
-        try bytecode.print(std.io.getStdErr().writer());
+        var buffer: [1024]u8 = undefined;
+        var writer = std.fs.File.stderr().writer(&buffer);
+        const stderr = &writer.interface;
+        try bytecode.print(stderr);
     }
     return Vm.init(allocator, bytecode, &test_runner.runner);
+}
+
+fn printErr(vm: *Vm) void {
+    var buffer: [1024]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&buffer);
+    const stderr = &writer.interface;
+    vm.err.print(stderr);
 }
 
 test "Basics" {
@@ -524,13 +534,15 @@ test "Builtin Functions" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
-            vm.err.print(std.io.getStdErr().writer());
+            printErr(&vm);
             return err;
         };
-        const writer = std.io.getStdErr().writer();
+        var buffer: [1024]u8 = undefined;
+        var writer = std.fs.File.stderr().writer(&buffer);
+        const stderr = &writer.interface;
         const value = vm.stack.previous();
-        try value.print(writer, null);
-        try writer.writeAll("\n");
+        try value.print(stderr, null);
+        try stderr.writeAll("\n");
         try testing.expect(value == .number);
     }
 }
@@ -704,7 +716,7 @@ test "While and For Loops" {
         defer vm.bytecode.free(testing.allocator);
         errdefer std.log.warn("Error Case: {s}", .{case.input});
         vm.interpret() catch |err| {
-            vm.err.print(std.io.getStdErr().writer());
+            printErr(&vm);
             return err;
         };
         const value = vm.stack.previous();
@@ -727,7 +739,7 @@ test "Classes" {
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
     vm.interpret() catch |err| {
-        vm.err.print(std.io.getStdErr().writer());
+        printErr(&vm);
         return err;
     };
 }
@@ -754,7 +766,7 @@ test "Class Runtime Error" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         const err = vm.interpret() catch |err| blk: {
-            vm.err.print(std.io.getStdErr().writer());
+            printErr(&vm);
             break :blk err;
         };
         try std.testing.expectError(error.RuntimeError, err);
@@ -826,7 +838,7 @@ test "Instance" {
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
     vm.interpret() catch |err| {
-        vm.err.print(std.io.getStdErr().writer());
+        printErr(&vm);
         return err;
     };
 }
@@ -873,7 +885,7 @@ test "Enums" {
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
     vm.interpret() catch |err| {
-        vm.err.print(std.io.getStdErr().writer());
+        printErr(&vm);
         return err;
     };
 }
@@ -1026,7 +1038,7 @@ test "Boughs" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
-            vm.err.print(std.io.getStdErr().writer());
+            printErr(&vm);
             return err;
         };
     }
@@ -1061,7 +1073,7 @@ test "Bough Nested Starts with Backups" {
     try vm.start("START.OUTER.INNER");
     while (vm.can_continue) {
         vm.run() catch |err| {
-            vm.err.print(std.io.getStdErr().writer());
+            printErr(&vm);
             return err;
         };
     }
@@ -1092,7 +1104,7 @@ test "Bough Loops" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
-            vm.err.print(std.io.getStdErr().writer());
+            printErr(&vm);
             return err;
         };
         const value = vm.stack.previous();
@@ -1184,7 +1196,7 @@ test "Forks" {
         .{
             .input =
             \\ === START {
-            \\     :speaker: "Question"
+            \\    :speaker: "Question"
             \\    fork {
             \\        ~ "Answer one" #one #of #many #tags #here {
             \\            :speaker: "You chose one"
@@ -1199,7 +1211,7 @@ test "Forks" {
         .{
             .input =
             \\ === START {
-            \\     :speaker: "Question"
+            \\    :speaker: "Question"
             \\    var count = 0
             \\    fork NAMED {
             \\        ~ "Answer one" {
@@ -1208,12 +1220,12 @@ test "Forks" {
             \\                count += 1
             \\                => NAMED
             \\            }
-            \\            => DONE
+            \\            else => DONE
             \\        }
             \\    }
             \\ }
             \\ === DONE {
-            \\     :speaker: "Done"
+            \\    :speaker: "Done"
             \\ }
             ,
         },
@@ -1223,7 +1235,7 @@ test "Forks" {
         std.debug.print("\n======\n", .{});
         var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        var vm = try initTestVm(case.input, mod, false);
+        var vm = try initTestVm(case.input, mod, true);
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         try vm.interpret();
@@ -1466,7 +1478,7 @@ test "Jump Code" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
-            vm.err.print(std.io.getStdErr().writer());
+            printErr(&vm);
             return err;
         };
     }
@@ -1487,7 +1499,7 @@ test "Circular References" {
     defer vm.deinit();
     defer vm.bytecode.free(testing.allocator);
     vm.interpret() catch |err| {
-        vm.err.print(std.io.getStdErr().writer());
+        printErr(&vm);
         return err;
     };
 }
@@ -1603,7 +1615,7 @@ test "Switch" {
         defer vm.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
-            vm.err.print(std.io.getStdErr().writer());
+            printErr(&vm);
             return err;
         };
     }
@@ -1664,13 +1676,13 @@ test "Save and Load State" {
     defer mod.deinit();
     var vm = try initTestVm(test_case, mod, false);
     defer vm.deinit();
-    defer vm.bytecode.free(testing.allocator);
+    defer vm.bytecode.free(alloc);
     try vm.interpret();
 
-    var data = std.ArrayList(u8).init(alloc);
-    defer data.deinit();
-    try State.serialize(&vm, data.writer());
-    std.debug.print("{s}\n", .{data.items});
+    // Serialize initial state after interpret
+    var data1: std.io.Writer.Allocating = .init(alloc);
+    defer data1.deinit();
+    try State.serialize(&vm, &data1.writer);
 
     const second_case =
         \\ var value = 10
@@ -1689,20 +1701,23 @@ test "Save and Load State" {
     var vm2 = try initTestVm(second_case, mod2, false);
     defer vm2.deinit();
     defer vm2.bytecode.free(testing.allocator);
-    var data_fbs = std.io.fixedBufferStream(data.items);
-    try State.deserialize(&vm2, data_fbs.reader());
+    // Write data from initial state into new vm
+    var data_reader = std.Io.Reader.fixed(data1.written());
+    try State.deserialize(&vm2, &data_reader);
     try testing.expectEqual(vm2.globals[0].number, 1);
     try testing.expectEqualSlices(u8, vm2.globals[1].obj.data.list.items[0].obj.data.list.items[0].obj.data.string, "changed");
     try testing.expectEqual(vm2.globals[2].obj.data.instance.fields[1].number, 2);
+
+    // run new vm
     try vm2.interpret();
     try testing.expectEqual(vm2.globals[0].number, 6);
 
-    var data2 = std.ArrayList(u8).init(alloc);
+    // serialize new vm state
+    var data2 = std.Io.Writer.Allocating.init(alloc);
     defer data2.deinit();
     const size = try State.calculateSize(&vm2);
-    try testing.expectEqual(size, 677);
-    try State.serialize(&vm2, data2.writer());
-    std.debug.print("{s}\n", .{data2.items});
+    try State.serialize(&vm2, &data2.writer);
+    try testing.expectEqual( 677, size);
 }
 
 test "Includes" {
@@ -1741,7 +1756,9 @@ test "Includes" {
     test1_file.close();
     test2_file.close();
 
-    const err_writer = std.io.getStdIn().writer();
+    var buffer: [1024]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&buffer);
+    const err_writer = &writer.interface;
     const entry_path = try std.fs.cwd().realpathAlloc(std.testing.allocator, "main.topi");
     defer std.testing.allocator.free(entry_path);
     var mod = try Module.init(std.testing.allocator, entry_path);

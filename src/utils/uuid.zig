@@ -1,6 +1,6 @@
 const std = @import("std");
 
-var rnd: ?std.rand.DefaultPrng = null;
+var rnd: ?std.Random.DefaultPrng = null;
 pub const UUID = struct {
     pub const ID = [Size]u8;
     pub const Empty: ID = [_]u8{ '0', '0', '0', '0', '0', '0', '0', '0', '-', '0', '0', '0', '0', '0', '0', '0', '0' };
@@ -10,12 +10,12 @@ pub const UUID = struct {
     const chars: []const u8 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
     pub fn new() ID {
-        if (rnd == null) rnd = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+        if (rnd == null) rnd = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
         return create(rnd.?.random().int(u64));
     }
 
     pub fn create(seed: u64) ID {
-        var r = std.rand.DefaultPrng.init(seed);
+        var r = std.Random.DefaultPrng.init(seed);
         var id: ID = undefined;
 
         var i: usize = 0;

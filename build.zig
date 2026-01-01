@@ -21,11 +21,13 @@ pub fn build(b: *std.Build) void {
     });
     topi_export.addImport("topi", topi);
 
-    const topilib = b.addSharedLibrary(.{
+    const topilib = b.addLibrary(.{
         .name = name,
-        .root_source_file = b.path("src/export/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/export/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     topilib.root_module.addImport("topi", topi);
 
@@ -34,9 +36,11 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = name,
-        .root_source_file = b.path("src/cli/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/main.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
     });
     exe.root_module.addOptions("build", build_options);
     exe.root_module.addImport("topi", topi);
@@ -53,12 +57,15 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    const filter = b.option([]const u8, "filter", "Filter strings for tests");
+    const filter = b.option([]const []const u8, "filter", "Filter strings for tests") orelse &[_][]const u8{};
+
     const tests = b.addTest(.{
-        .root_source_file = b.path("test/index.zig"),
-        .target = target,
-        .optimize = optimize,
-        .filter = filter,
+        .filters = filter,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/index.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     tests.root_module.addImport("topi", topi);

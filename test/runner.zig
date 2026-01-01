@@ -40,7 +40,7 @@ pub const TestRunner = struct {
             std.debug.print("    ID:{s}\n", .{choice.id});
         }
 
-        var rnd = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
+        var rnd = std.Random.DefaultPrng.init(std.crypto.random.int(u64));
         const index = rnd.random().intRangeAtMost(usize, 0, choices.len - 1);
         vm.selectChoice(index) catch |err| {
             std.debug.print("Error: {}", .{err});
@@ -49,6 +49,9 @@ pub const TestRunner = struct {
 
     pub fn onValueChanged(_: *Runner, _: *Vm, name: []const u8, value: Value) void {
         std.debug.print("Value Changed Callback: {s}\n", .{name});
-        value.print(std.io.getStdErr().writer(), null) catch unreachable;
+        var buffer: [1024]u8 = undefined;
+        var writer = std.fs.File.stderr().writer(&buffer);
+        const stderr = &writer.interface;
+        value.print(stderr, null) catch unreachable;
     }
 };

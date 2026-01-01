@@ -31,37 +31,36 @@ const Command = enum {
 };
 
 fn usage(comptime msg: []const u8) !void {
-    var out = std.io.getStdErr().writer();
-    try out.print("topi - command line topiary processor\n", .{});
-    try out.print("Usage:\n", .{});
-    try out.print("   topi version                  Print version\n", .{});
-    try out.print("   topi run <file>               Run dialogue in terminal\n", .{});
-    try out.print("       -a, --auto                Automatically continue to the next line\n", .{});
-    try out.print("       -b, --bough <name>        Starting bough\n", .{});
-    try out.print("       -k, --language-key <key>  Localization language key\n", .{});
-    try out.print("       -l, --load <file>         Read save from file on start\n", .{});
-    try out.print("       -s, --save <file>         Write save to file on end\n", .{});
-    try out.print("       -v, --verbose\n", .{});
-    try out.print("   topi test <file> <count>      Run dialogue <count> times, selecting random choices\n", .{});
-    try out.print("       -q, --quiet               Do not output visit tree on end\n", .{});
-    try out.print("       -v, --verbose\n", .{});
-    try out.print("   topi compile <file>           Compile dialogue to bytecode\n", .{});
-    try out.print("       -d, --dry                 Do not write to file on end\n", .{});
-    try out.print("       -o, --output <file>       Write to file on end\n", .{});
-    try out.print("       -l, --localize            Include localization in compiled bytecode\n", .{});
-    try out.print("       -v, --verbose\n", .{});
-    try out.print("   topi loc validate <file>      Validate dialogue localization ids\n", .{});
-    try out.print("       -d, --dry                 Do not write to file on end\n", .{});
-    try out.print("       -v, --verbose\n", .{});
-    try out.print("   topi loc export <file>        Export dialogue localization to csv\n", .{});
-    try out.print("       -d, --dry                 Do not write to file on end\n", .{});
-    try out.print("       -o, --output <file>       Write to file on end\n", .{});
-    try out.print("       -v, --verbose\n", .{});
-    try out.print("\n", .{});
+    try print("topi - command line topiary processor\n", .{});
+    try print("Usage:\n", .{});
+    try print("   topi version                  Print version\n", .{});
+    try print("   topi run <file>               Run dialogue in terminal\n", .{});
+    try print("       -a, --auto                Automatically continue to the next line\n", .{});
+    try print("       -b, --bough <name>        Starting bough\n", .{});
+    try print("       -k, --language-key <key>  Localization language key\n", .{});
+    try print("       -l, --load <file>         Read save from file on start\n", .{});
+    try print("       -s, --save <file>         Write save to file on end\n", .{});
+    try print("       -v, --verbose\n", .{});
+    try print("   topi test <file> <count>      Run dialogue <count> times, selecting random choices\n", .{});
+    try print("       -q, --quiet               Do not output visit tree on end\n", .{});
+    try print("       -v, --verbose\n", .{});
+    try print("   topi compile <file>           Compile dialogue to bytecode\n", .{});
+    try print("       -d, --dry                 Do not write to file on end\n", .{});
+    try print("       -o, --output <file>       Write to file on end\n", .{});
+    try print("       -l, --localize            Include localization in compiled bytecode\n", .{});
+    try print("       -v, --verbose\n", .{});
+    try print("   topi loc validate <file>      Validate dialogue localization ids\n", .{});
+    try print("       -d, --dry                 Do not write to file on end\n", .{});
+    try print("       -v, --verbose\n", .{});
+    try print("   topi loc export <file>        Export dialogue localization to csv\n", .{});
+    try print("       -d, --dry                 Do not write to file on end\n", .{});
+    try print("       -o, --output <file>       Write to file on end\n", .{});
+    try print("       -v, --verbose\n", .{});
+    try print("\n", .{});
     if (!std.mem.eql(u8, msg, "")) {
-        try out.print("Error: ", .{});
-        try out.print(msg, .{});
-        try out.print("\n", .{});
+        try print("Error: ", .{});
+        try print(msg, .{});
+        try print("\n", .{});
     }
     return error.InvalidArguments;
 }
@@ -163,8 +162,19 @@ const TestArgs = struct {
     }
 };
 
+pub fn print(comptime msg: []const u8, args: anytype) !void {
+    var buffer: [1024]u8 = undefined;
+    var writer = std.fs.File.stdout().writer(&buffer);
+    const stdout = &writer.interface;
+    stdout.print(msg, args) catch {
+        std.debug.print("Could not print message", .{});
+    };
+    try stdout.flush();
+}
+
 pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    var arena = std.heap.ArenaAllocator.init(da.allocator());
     defer arena.deinit();
     var iter = try std.process.argsWithAllocator(arena.allocator());
     _ = iter.skip();
@@ -176,9 +186,7 @@ pub fn main() !void {
 
     switch (cmd.?) {
         .version => {
-            const out = std.io.getStdOut();
-            try out.writeAll(version);
-            try out.writeAll("\n");
+            try print("{s}\n", .{version});
         },
         .run => {
             var args = RunArgs{};
@@ -213,7 +221,7 @@ pub fn main() !void {
 
 fn createModule(alloc: std.mem.Allocator, args: anytype) !*Module {
     const full_path = std.fs.cwd().realpathAlloc(alloc, args.file.?) catch |err| {
-        try std.io.getStdErr().writer().print("Could not find file at {s}", .{args.file.?});
+        try print("Could not find file at {s}\n", .{args.file.?});
         return err;
     };
     return Module.init(alloc, full_path);
@@ -221,13 +229,13 @@ fn createModule(alloc: std.mem.Allocator, args: anytype) !*Module {
 
 fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
     var mod = createModule(alloc, args) catch |err| {
-        try std.io.getStdErr().writeAll("Could not create module");
+        try print("Could not create module\n", .{});
         return if (args.verbose) err else {};
     };
     errdefer mod.deinit();
 
     var bytecode = mod.generateBytecode(alloc) catch |err| {
-        try std.io.getStdErr().writeAll("Could not generate bytecode");
+        try print("Could not generate bytecode\n", .{});
         return if (args.verbose) err else {};
     };
     mod.deinit();
@@ -235,15 +243,18 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
 
     var cli_runner = CliRunner.init(args.auto);
     var vm = Vm.init(alloc, bytecode, &cli_runner.runner) catch |err| {
-        try std.io.getStdErr().writeAll("Could not initialize Vm");
+        try print("Could not initialize Vm\n", .{});
         return if (args.verbose) err else {};
     };
 
     if (args.load) |file_path| {
         const file = try if (std.fs.path.isAbsolute(file_path)) std.fs.openFileAbsolute(file_path, .{}) else std.fs.cwd().openFile(file_path, .{});
+        var buf: [1024]u8 = undefined;
+        var reader = file.reader(&buf);
+        const read = &reader.interface;
         defer file.close();
-        State.deserialize(&vm, file.reader()) catch |err| {
-            try std.io.getStdErr().writeAll("Could not load state\n");
+        State.deserialize(&vm, read) catch |err| {
+            try print("Could not load state\n", .{});
             return if (args.verbose) err else {};
         };
     }
@@ -252,7 +263,10 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
     try vm.setLocale(args.language);
     while (vm.can_continue) {
         vm.run() catch {
-            vm.err.print(std.io.getStdErr().writer());
+            var buffer: [1024]u8 = undefined;
+            var writer = std.fs.File.stdout().writer(&buffer);
+            const stdout = &writer.interface;
+            vm.err.print(stdout);
             break;
         };
     }
@@ -263,9 +277,12 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
             try dir.makePath(dir_name);
         }
         var file = try dir.createFile(file_path, .{});
+        var buf : [1024]u8 = undefined;
+        var file_writer = file.writer(&buf);
+        const writer = &file_writer.interface;
         defer file.close();
-        State.serialize(&vm, file.writer()) catch |err| {
-            try std.io.getStdErr().writeAll("Could not save state\n");
+        State.serialize(&vm, writer) catch |err| {
+            try print("Could not save state\n", .{});
             return if (args.verbose) err else {};
         };
     }
@@ -273,21 +290,20 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
 
 fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
     var mod = createModule(alloc, args) catch |err| {
-        try std.io.getStdErr().writeAll("Could not create module");
+        try print("Could not create module", .{});
         return if (args.verbose) err else {};
     };
     errdefer mod.deinit();
     mod.use_loc = args.loc;
     var bytecode = mod.generateBytecode(alloc) catch |err| {
-        try std.io.getStdErr().writeAll("Could not generate bytecode");
+        try print("Could not generate bytecode", .{});
         return if (args.verbose) err else {};
     };
     mod.deinit();
     defer bytecode.free(alloc);
 
     if (args.dry) {
-        var out = std.io.getStdOut().writer();
-        try out.writeAll("Success\n");
+        try print("Success\n", .{});
         return;
     }
     const dir = std.fs.cwd();
@@ -296,8 +312,10 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
     }
     var file = try dir.createFile(args.output.?, .{});
     defer file.close();
-    bytecode.serialize(&file) catch |err| {
-        try std.io.getStdErr().writeAll("Could not serialize bytecode");
+    var buf: [1024]u8 = undefined;
+    var file_writer = file.writer(&buf);
+    bytecode.serialize(alloc, &file_writer) catch |err| {
+        try print("Could not serialize bytecode\n", .{});
         return if (args.verbose) err else {};
     };
 }
@@ -322,7 +340,10 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
         var vm = try Vm.init(alloc, bytecode, &auto_runner.runner);
         defer vm.deinit();
         vm.interpret() catch {
-            vm.err.print(std.io.getStdErr().writer());
+            var buffer: [1024]u8 = undefined;
+            var writer = std.fs.File.stdout().writer(&buffer);
+            const stdout = &writer.interface;
+            vm.err.print(stdout);
             return;
         };
         if (args.quiet) continue;
@@ -335,25 +356,27 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
             // all visits are first so we can break
         }
     }
-    const out = std.io.getStdOut().writer();
     if (args.quiet) {
-        try out.writeAll("Success\n");
+        try print("Success\n", .{});
     }
     var it = visit_counts.iterator();
     while (it.next()) |entry| {
-        try out.print("{s} = {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+        try print("{s} = {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
     }
 }
 
 fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
     const full_path = std.fs.cwd().realpathAlloc(alloc, args.file.?) catch |err| {
-        try std.io.getStdErr().writer().print("Could not find file at {s}", .{args.file.?});
+        try print("Could not find file at {s}", .{args.file.?});
         return if (args.verbose) err else {};
     };
     switch (args.command) {
         .@"export" => {
             if (args.dry) {
-                Locale.exportFileAtPath(full_path, std.io.getStdOut().writer(), alloc) catch |err| {
+                var buffer: [1024]u8 = undefined;
+                var writer = std.fs.File.stdout().writer(&buffer);
+                const stdout = &writer.interface;
+                Locale.exportFileAtPath(full_path, stdout, alloc) catch |err| {
                     if (args.verbose) return err;
                     return;
                 };
@@ -364,7 +387,11 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                 }
                 const file = try dir.createFile(args.output.?, .{});
                 defer file.close();
-                Locale.exportFileAtPath(full_path, file.writer(), alloc) catch |err| {
+
+                var buffer: [1024]u8 = undefined;
+                var file_writer = file.writer(&buffer);
+                const writer = &file_writer.interface;
+                Locale.exportFileAtPath(full_path, writer, alloc) catch |err| {
                     if (args.verbose) return err;
                     return;
                 };
@@ -377,7 +404,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
             };
             defer alloc.free(validated);
             if (args.dry) {
-                try std.io.getStdOut().writeAll(validated);
+                try print("{s}\n", .{validated});
             } else {
                 const new_file = try std.fs.createFileAbsolute(full_path, .{});
                 defer new_file.close();

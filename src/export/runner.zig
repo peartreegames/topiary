@@ -5,6 +5,7 @@ const Vm = topi.runtime.Vm;
 const Runner = topi.runtime.Runner;
 const Line = topi.runtime.Line;
 const Choice = topi.runtime.Choice;
+const fmt = topi.utils.fmt;
 
 const Value = topi.types.Value;
 const Nil = topi.types.Nil;
@@ -37,7 +38,7 @@ pub const ExportLogger = struct {
     severity: Severity,
     allocator: std.mem.Allocator,
 
-    pub const OnLog = *const fn (msg: ExportString, severity: Severity) callconv(.C) void;
+    pub const OnLog = *const fn (msg: ExportString, severity: Severity) callconv(.c) void;
     pub const Severity = enum(u8) {
         debug,
         info,
@@ -47,13 +48,13 @@ pub const ExportLogger = struct {
 
     pub fn log(self: ExportLogger, comptime msg: []const u8, args: anytype, severity: Severity) void {
         if (@intFromEnum(severity) < @intFromEnum(self.severity)) return;
-        const fmt = std.fmt.allocPrint(self.allocator, msg, args) catch |err| {
+        const buf = std.fmt.allocPrint(self.allocator, msg, args) catch |err| {
             std.log.err("Error fmt: {}", .{err});
             self.on_log(.{ .ptr = msg.ptr, .len = msg.len }, severity);
             return;
         };
-        defer self.allocator.free(fmt);
-        self.on_log(.{ .ptr = fmt.ptr, .len = fmt.len }, severity);
+        defer self.allocator.free(buf);
+        self.on_log(.{ .ptr = buf.ptr, .len = buf.len }, severity);
     }
 };
 
@@ -62,8 +63,8 @@ pub const ExportFunction = struct {
     free: Free,
     vm: *Vm,
 
-    pub const Free = *const fn (ptr: usize) callconv(.C) void;
-    pub const Delegate = *const fn (vm_ptr: usize, args: [*c]ExportValue, args_len: u8) callconv(.C) ExportValue;
+    pub const Free = *const fn (ptr: usize) callconv(.c) void;
+    pub const Delegate = *const fn (vm_ptr: usize, args: [*c]ExportValue, args_len: u8) callconv(.c) ExportValue;
 
     pub fn create(vm: *Vm, func: Delegate, free: Free) ExportFunction {
         return .{
@@ -79,7 +80,7 @@ pub const ExportFunction = struct {
 
     pub fn call(context_ptr: usize, args: []Value) Value {
         var self: *ExportFunction = @ptrFromInt(context_ptr);
-        var arena = std.heap.ArenaAllocator.init(self.vm.allocator);
+        var arena = std.heap.ArenaAllocator.init(self.vm.alloc);
         const arenaAlloc = arena.allocator();
         defer arena.deinit();
         const runner: *ExportRunner = @fieldParentPtr("runner", self.vm.runner);
@@ -112,9 +113,9 @@ pub const ExportRunner = struct {
     tags: [512]ExportString,
     dialogue: ExportLine = undefined,
 
-    pub const OnValueChanged = *const fn (vm_ptr: usize, name_ptr: [*c]const u8, name_len: usize, value: ExportValue) callconv(.C) void;
-    pub const OnLine = *const fn (vm_ptr: usize, dialogue: *ExportLine) callconv(.C) void;
-    pub const OnChoices = *const fn (vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) callconv(.C) void;
+    pub const OnValueChanged = *const fn (vm_ptr: usize, name_ptr: [*c]const u8, name_len: usize, value: ExportValue) callconv(.c) void;
+    pub const OnLine = *const fn (vm_ptr: usize, dialogue: *ExportLine) callconv(.c) void;
+    pub const OnChoices = *const fn (vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) callconv(.c) void;
 
     pub fn init(allocator: std.mem.Allocator, on_line: OnLine, on_choices: OnChoices, on_value_changed: OnValueChanged, logger: ExportLogger) ExportRunner {
         return .{
@@ -146,7 +147,7 @@ pub const ExportRunner = struct {
             .tags = &self.tags,
             .tags_length = @intCast(dialogue.tags.len),
         };
-        self.logger.log("Line:{s}: {s} #{s}", .{ dialogue.speaker orelse "", dialogue.content, dialogue.tags }, .debug);
+        self.logger.log("Line:{s}: {s} {f}", .{ dialogue.speaker orelse "", dialogue.content, fmt.tags("#{s}",dialogue.tags) }, .debug);
         self.on_line(@intFromPtr(vm), &self.dialogue);
     }
 
@@ -166,7 +167,7 @@ pub const ExportRunner = struct {
             }
             t_count += t;
 
-            self.logger.log("Choice: {s} #{s}", .{ choices[i].content, choices[i].tags }, .debug);
+            self.logger.log("Choice: {s} {f}", .{choices[i].content, fmt.tags("#{s}", choices[i].tags)}, .debug);
             const content = choices[i].content;
             result[i] = .{
                 .content = .{ .ptr = content.ptr, .len = content.len },
@@ -183,8 +184,8 @@ pub const ExportRunner = struct {
 
     pub fn onValueChanged(runner: *Runner, vm: *Vm, name: []const u8, value: Value) void {
         var self: *ExportRunner = @fieldParentPtr("runner", runner);
-        const exp_value = ExportValue.fromValue(value, vm.allocator);
-        defer exp_value.deinit(vm.allocator);
+        const exp_value = ExportValue.fromValue(value, vm.alloc);
+        defer exp_value.deinit(vm.alloc);
         self.on_value_changed(@intFromPtr(vm), name.ptr, name.len, exp_value);
     }
 };

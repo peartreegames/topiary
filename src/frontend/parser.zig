@@ -71,10 +71,9 @@ pub const Parser = struct {
 
     inline fn allocate(self: Parser, value: anytype) !*@TypeOf(value) {
         const T = @TypeOf(value);
-        std.debug.assert(@typeInfo(T) != .Pointer);
+        std.debug.assert(@typeInfo(T) != .pointer);
         const ptr = try self.allocator.create(T);
         ptr.* = value;
-        std.debug.assert(std.meta.eql(ptr.*, value));
         return ptr;
     }
 
@@ -115,6 +114,7 @@ pub const Parser = struct {
             .colon => try self.dialogueStatement(),
             .tilde => try self.choiceStatement(),
             .fork => try self.forkStatement(),
+            .@"fn" => try self.functionDeclaration(),
             .@"for" => try self.forStatement(),
             .fin => .{ .token = self.current_token, .type = .fin },
             .@"if" => try self.ifStatement(),
@@ -155,7 +155,7 @@ pub const Parser = struct {
             };
         }
 
-        if (std.mem.eql(u8, self.file.path, "")) return self.fail("Cannot include as current file path not set", start, .{});
+        if (self.file.path.len == 0) return self.fail("Cannot include. Current file path not set", start, .{});
         const full_path = try std.fs.path.resolve(self.allocator, &.{ self.file.dir_name, path });
         defer self.allocator.free(full_path);
 
@@ -196,34 +196,46 @@ pub const Parser = struct {
         const start = self.current_token;
         self.next();
         const name = try self.consumeIdentifier();
-        try self.expectCurrent(.equal);
-        self.next();
         try self.expectCurrent(.left_brace);
         self.next();
 
-        var field_names = std.ArrayList([]const u8).init(self.allocator);
-        var fields = std.ArrayList(Expression).init(self.allocator);
-        errdefer field_names.deinit();
-        errdefer fields.deinit();
-        while (!self.currentIs(.right_brace)) {
-            try field_names.append(try self.consumeIdentifier());
-            try self.expectCurrent(.equal);
-            self.next();
-            var field = try self.expression(.lowest);
-            if (field.type == .function) field.type.function.is_method = true;
-            try fields.append(field);
-            self.next();
-            if (self.currentIs(.comma)) self.next();
+        var names = std.ArrayList([]const u8).empty;
+        var fields = std.ArrayList(Expression).empty;
+        var methods = std.ArrayList(Statement).empty;
+        errdefer {
+            names.deinit(self.allocator);
+            fields.deinit(self.allocator);
+            methods.deinit(self.allocator);
         }
+
+        while (!self.currentIs(.right_brace)) {
+            if (self.currentIs(.@"fn")) {
+                var method = try self.functionDeclaration();
+                method.type.function.is_method = true;
+                try methods.append(self.allocator, method);
+            } else {
+                try names.append(self.allocator, try self.consumeIdentifier());
+                try self.expectCurrent(.equal);
+                self.next();
+                const field = try self.expression(.lowest);
+                try fields.append(self.allocator, field);
+                self.next();
+            }
+
+            if (self.currentIs(.comma)) self.next();
+            if (self.currentIs(.eof)) return self.fail("Unterminated class body", start, .{});
+        }
+
         try self.expectCurrent(.right_brace);
-        if (field_names.items.len != fields.items.len) return self.fail("Missing field assignment value", self.current_token, .{});
+        if (names.items.len != fields.items.len) return self.fail("Missing field assignment value", self.current_token, .{});
         return .{
             .token = start,
             .type = .{
                 .class = .{
                     .name = name,
-                    .field_names = try field_names.toOwnedSlice(),
-                    .fields = try fields.toOwnedSlice(),
+                    .field_names = try names.toOwnedSlice(self.allocator),
+                    .fields = try fields.toOwnedSlice(self.allocator),
+                    .methods = try methods.toOwnedSlice(self.allocator)
                 },
             },
         };
@@ -234,14 +246,12 @@ pub const Parser = struct {
         const is_seq = start.token_type == .enumseq;
         self.next();
         const name = try self.consumeIdentifier();
-        try self.expectCurrent(.equal);
-        self.next();
         try self.expectCurrent(.left_brace);
         self.next();
-        var values = std.ArrayList([]const u8).init(self.allocator);
-        errdefer values.deinit();
+        var values = std.ArrayList([]const u8).empty;
+        errdefer values.deinit(self.allocator);
         while (!self.currentIs(.right_brace)) {
-            try values.append(try self.consumeIdentifier());
+            try values.append(self.allocator, try self.consumeIdentifier());
             if (self.currentIs(.comma)) self.next();
         }
         return .{
@@ -250,25 +260,7 @@ pub const Parser = struct {
                 .@"enum" = .{
                     .is_seq = is_seq,
                     .name = name,
-                    .values = try values.toOwnedSlice(),
-                },
-            },
-        };
-    }
-
-    fn fieldDeclaration(self: *Parser) Error!Statement {
-        const start = self.current_token;
-        const name = try self.consumeIdentifier();
-        try self.expectPeek(.equal);
-        self.next();
-        return .{
-            .token = start,
-            .type = .{
-                .variable = .{
-                    .name = name,
-                    .initializer = try self.expression(.lowest),
-                    .is_mutable = true,
-                    .is_extern = false,
+                    .values = try values.toOwnedSlice(self.allocator),
                 },
             },
         };
@@ -286,11 +278,7 @@ pub const Parser = struct {
         const name = try self.consumeIdentifier();
         try self.expectCurrent(.equal);
         self.next();
-        var expr = try self.expression(.lowest);
-        if (expr.type == .function) {
-            // used for recursive calls
-            expr.type.function.name = name;
-        }
+        const expr = try self.expression(.lowest);
         return .{
             .token = start_token,
             .type = .{
@@ -299,6 +287,36 @@ pub const Parser = struct {
                     .initializer = expr,
                     .is_mutable = is_mutable,
                     .is_extern = is_extern,
+                },
+            },
+        };
+    }
+
+    fn functionDeclaration(self: *Parser) Error!Statement {
+        const start = self.current_token;
+        self.next();
+        const name = try self.consumeIdentifier();
+        var list = std.ArrayList([]const u8).empty;
+        errdefer list.deinit(self.allocator);
+
+        try self.expectCurrent(.left_paren);
+        self.next();
+        if (self.currentIs(.identifier)) {
+            try list.append(self.allocator, try self.consumeIdentifier());
+        }
+        while (self.currentIs(.comma)) {
+            self.next();
+            try list.append(self.allocator, try self.consumeIdentifier());
+        }
+        try self.expectCurrent(.right_paren);
+        self.next();
+        return .{
+            .token = start,
+            .type = .{
+                .function = .{
+                    .name = name,
+                    .parameters = try list.toOwnedSlice(self.allocator),
+                    .body = try self.block(),
                 },
             },
         };
@@ -402,7 +420,6 @@ pub const Parser = struct {
             .map => try self.mapExpression(),
             .set => try self.setExpression(),
             .new => try self.instanceExpression(),
-            .pipe => try self.functionExpression(),
             .nil => .{ .token = self.current_token, .type = .nil },
             else => return self.fail("Unexpected token in expression: {}", self.current_token, .{self.current_token.token_type}),
         };
@@ -457,45 +474,23 @@ pub const Parser = struct {
         return left;
     }
 
-    fn functionExpression(self: *Parser) Error!Expression {
-        const start = self.current_token;
-        var list = std.ArrayList([]const u8).init(self.allocator);
-        errdefer list.deinit();
-        self.next();
-        while (!self.currentIs(.pipe)) {
-            try list.append(try self.consumeIdentifier());
-            if (self.currentIs(.comma) or self.peekIs(.pipe)) self.next();
-        }
-
-        self.next();
-        return .{
-            .token = start,
-            .type = .{
-                .function = .{
-                    .parameters = try list.toOwnedSlice(),
-                    .body = try self.block(),
-                },
-            },
-        };
-    }
-
     // if no braces used will parse a single statement into a list
     fn block(self: *Parser) Error![]const Statement {
-        var list = std.ArrayList(Statement).init(self.allocator);
+        var list = std.ArrayList(Statement).empty;
         const has_brace = self.currentIs(.left_brace);
         if (!has_brace) {
-            try list.append(try self.statement());
-            return try list.toOwnedSlice();
+            try list.append(self.allocator, try self.statement());
+            return try list.toOwnedSlice(self.allocator);
         }
         self.next();
         while (!self.currentIsOneOf([2]TokenType{ .right_brace, .eof })) {
-            try list.append(try self.statement());
+            try list.append(self.allocator, try self.statement());
             self.next();
         }
         if (has_brace and self.currentIs(.eof)) {
             return self.fail("Missing closing brace", self.current_token, .{});
         }
-        return try list.toOwnedSlice();
+        return try list.toOwnedSlice(self.allocator);
     }
 
     fn instanceExpression(self: *Parser) Error!Expression {
@@ -505,17 +500,17 @@ pub const Parser = struct {
         try self.expectCurrent(.left_brace);
         self.next();
 
-        var field_names = std.ArrayList([]const u8).init(self.allocator);
-        var fields = std.ArrayList(Expression).init(self.allocator);
-        errdefer field_names.deinit();
-        errdefer fields.deinit();
+        var field_names = std.ArrayList([]const u8).empty;
+        var fields = std.ArrayList(Expression).empty;
+        errdefer field_names.deinit(self.allocator);
+        errdefer fields.deinit(self.allocator);
         while (!self.currentIs(.right_brace)) {
-            try field_names.append(try self.consumeIdentifier());
+            try field_names.append(self.allocator, try self.consumeIdentifier());
             try self.expectCurrent(.equal);
             self.next();
-            var field = try self.expression(.lowest);
-            if (field.type == .function) field.type.function.is_method = true;
-            try fields.append(field);
+            const field = try self.expression(.lowest);
+            // if (field.type == .function) field.type.function.is_method = true;
+            try fields.append(self.allocator, field);
             self.next();
             if (self.currentIs(.comma)) self.next();
         }
@@ -527,8 +522,8 @@ pub const Parser = struct {
             .type = .{
                 .instance = .{
                     .name = name,
-                    .field_names = try field_names.toOwnedSlice(),
-                    .fields = try fields.toOwnedSlice(),
+                    .field_names = try field_names.toOwnedSlice(self.allocator),
+                    .fields = try fields.toOwnedSlice(self.allocator),
                 },
             },
         };
@@ -540,9 +535,9 @@ pub const Parser = struct {
         var depth: usize = 0;
         var start: usize = token.start;
 
-        var exprs = std.ArrayList(Expression).init(self.allocator);
+        var exprs = std.ArrayList(Expression).empty;
         var expr_index: usize = 0;
-        errdefer exprs.deinit();
+        errdefer exprs.deinit(self.allocator);
         for (self.file.source[token.start..token.end], 0..) |char, i| {
             if (char == '{') {
                 if (depth == 0) {
@@ -567,7 +562,7 @@ pub const Parser = struct {
                 .string = .{
                     .raw = try self.allocator.dupe(u8, self.file.source[token.start..token.end]),
                     .value = value,
-                    .expressions = try exprs.toOwnedSlice(),
+                    .expressions = try exprs.toOwnedSlice(self.allocator),
                 },
             },
         };
@@ -585,36 +580,36 @@ pub const Parser = struct {
         };
 
         while (!parser.currentIs(.eof)) : (parser.next()) {
-            try exprs.append(try parser.expression(.lowest));
+            try exprs.append(self.allocator, try parser.expression(.lowest));
         }
     }
 
     fn listExpression(self: *Parser) Error!Expression {
         const start_token = self.current_token;
         try self.expectPeek(.left_brace);
-        var list = std.ArrayList(Expression).init(self.allocator);
-        errdefer list.deinit();
+        var list = std.ArrayList(Expression).empty;
+        errdefer list.deinit(self.allocator);
         self.next();
         if (self.currentIs(.right_brace)) {
             return .{
                 .token = start_token,
                 .type = .{
-                    .list = try list.toOwnedSlice(),
+                    .list = try list.toOwnedSlice(self.allocator),
                 },
             };
         }
-        try list.append(try self.expression(.lowest));
+        try list.append(self.allocator, try self.expression(.lowest));
         while (self.peekIs(.comma)) {
             self.next();
             self.next();
-            try list.append(try self.expression(.lowest));
+            try list.append(self.allocator, try self.expression(.lowest));
         }
         self.next();
         try self.expectCurrent(.right_brace);
         return .{
             .token = start_token,
             .type = .{
-                .list = try list.toOwnedSlice(),
+                .list = try list.toOwnedSlice(self.allocator),
             },
         };
     }
@@ -641,53 +636,53 @@ pub const Parser = struct {
     fn mapExpression(self: *Parser) Error!Expression {
         const start_token = self.current_token;
         try self.expectPeek(.left_brace);
-        var list = std.ArrayList(Expression).init(self.allocator);
-        errdefer list.deinit();
+        var list = std.ArrayList(Expression).empty;
+        errdefer list.deinit(self.allocator);
         self.next();
 
         if (self.currentIs(.right_brace)) {
-            return .{ .token = start_token, .type = .{ .map = try list.toOwnedSlice() } };
+            return .{ .token = start_token, .type = .{ .map = try list.toOwnedSlice(self.allocator) } };
         }
 
         const first = try self.mapPairSetKey();
         self.next();
         if (self.currentIs(.comma)) self.next();
-        try list.append(first);
+        try list.append(self.allocator, first);
         while (!self.currentIs(.right_brace)) {
             const item = try self.mapPairSetKey();
             if (item.type != .map_pair)
                 return self.fail("Item type '{s}' cannot be added to map", item.token, .{@tagName(item.type)});
-            try list.append(item);
+            try list.append(self.allocator, item);
             self.next();
             if (self.currentIs(.comma) or self.peekIs(.right_brace)) self.next();
         }
-        return .{ .token = start_token, .type = .{ .map = try list.toOwnedSlice() } };
+        return .{ .token = start_token, .type = .{ .map = try list.toOwnedSlice(self.allocator) } };
     }
 
     fn setExpression(self: *Parser) Error!Expression {
         const start_token = self.current_token;
         try self.expectPeek(.left_brace);
-        var list = std.ArrayList(Expression).init(self.allocator);
-        errdefer list.deinit();
+        var list = std.ArrayList(Expression).empty;
+        errdefer list.deinit(self.allocator);
         self.next();
 
         if (self.currentIs(.right_brace)) {
-            return .{ .token = start_token, .type = .{ .set = try list.toOwnedSlice() } };
+            return .{ .token = start_token, .type = .{ .set = try list.toOwnedSlice(self.allocator) } };
         }
 
         const first = try self.mapPairSetKey();
         self.next();
         if (self.currentIs(.comma)) self.next();
-        try list.append(first);
+        try list.append(self.allocator, first);
         while (!self.currentIs(.right_brace)) {
             const item = try self.mapPairSetKey();
             if (item.type == .map_pair)
                 return self.fail("Item type '{s}' cannot be added set", item.token, .{@tagName(item.type)});
-            try list.append(item);
+            try list.append(self.allocator, item);
             self.next();
             if (self.currentIs(.comma) or self.peekIs(.right_brace)) self.next();
         }
-        return .{ .token = start_token, .type = .{ .set = try list.toOwnedSlice() } };
+        return .{ .token = start_token, .type = .{ .set = try list.toOwnedSlice(self.allocator) } };
     }
 
     fn ifExpression(self: *Parser) Error!Expression {
@@ -747,16 +742,16 @@ pub const Parser = struct {
     fn divertStatement(self: *Parser) Error!Statement {
         const start_token = self.current_token;
         // TODO: Perhaps this should just be an expression and indexers used
-        var list = std.ArrayList([]const u8).init(self.allocator);
-        errdefer list.deinit();
+        var list = std.ArrayList([]const u8).empty;
+        errdefer list.deinit(self.allocator);
 
         try self.expectPeek(.identifier);
 
-        try list.append(try self.getStringValue());
+        try list.append(self.allocator, try self.getStringValue());
         while (self.peekIs(.dot)) {
             self.next();
             self.next();
-            try list.append(try self.getStringValue());
+            try list.append(self.allocator, try self.getStringValue());
         }
         var is_backup: bool = false;
         if (self.peekIs(.caret)) {
@@ -768,7 +763,7 @@ pub const Parser = struct {
             .token = start_token,
             .type = .{
                 .divert = .{
-                    .path = try list.toOwnedSlice(),
+                    .path = try list.toOwnedSlice(self.allocator),
                     .is_backup = is_backup,
                 },
             },
@@ -838,13 +833,13 @@ pub const Parser = struct {
     }
 
     fn getTagsList(self: *Parser) Error![][]const u8 {
-        var tags = std.ArrayList([]const u8).init(self.allocator);
+        var tags = std.ArrayList([]const u8).empty;
         while (self.peekIs(.hash)) {
             self.next();
             const tag = try self.getStringValue();
-            try tags.append(tag);
+            try tags.append(self.allocator, tag);
         }
-        return tags.toOwnedSlice();
+        return tags.toOwnedSlice(self.allocator);
     }
 
     fn dialogueStatement(self: *Parser) Error!Statement {
@@ -882,25 +877,25 @@ pub const Parser = struct {
     }
 
     fn arguments(self: *Parser) Error![]Expression {
-        var list = std.ArrayList(Expression).init(self.allocator);
-        errdefer list.deinit();
+        var list = std.ArrayList(Expression).empty;
+        errdefer list.deinit(self.allocator);
 
         // no arguments
         if (self.peekIs(.right_paren)) {
             self.next();
-            return list.toOwnedSlice();
+            return list.toOwnedSlice(self.allocator);
         }
 
         self.next();
-        try list.append(try self.expression(.lowest));
+        try list.append(self.allocator, try self.expression(.lowest));
 
         while (self.peekIs(.comma)) {
             self.next();
             self.next();
-            try list.append(try self.expression(.lowest));
+            try list.append(self.allocator, try self.expression(.lowest));
         }
         try self.expectPeek(.right_paren);
-        return list.toOwnedSlice();
+        return list.toOwnedSlice(self.allocator);
     }
 
     fn callExpression(self: *Parser, func: Expression) Error!Expression {
@@ -1007,16 +1002,17 @@ pub const Parser = struct {
         const capture = try self.expression(.lowest);
 
         try self.expectPeek(.left_brace);
-        var prongs = std.ArrayList(Statement).init(self.allocator);
+        var prongs = std.ArrayList(Statement).empty;
+        errdefer prongs.deinit(self.allocator);
 
         self.next();
-        try prongs.append(try self.switchProng());
+        try prongs.append(self.allocator, try self.switchProng());
 
         while (self.peekIs(.comma)) {
             self.next();
             if (self.peekIs(.right_brace)) break;
             self.next();
-            try prongs.append(try self.switchProng());
+            try prongs.append(self.allocator, try self.switchProng());
         }
 
         try self.expectPeek(.right_brace);
@@ -1026,7 +1022,7 @@ pub const Parser = struct {
             .type = .{
                 .@"switch" = .{
                     .capture = capture,
-                    .prongs = try prongs.toOwnedSlice(),
+                    .prongs = try prongs.toOwnedSlice(self.allocator),
                 },
             },
         };
@@ -1034,15 +1030,15 @@ pub const Parser = struct {
 
     fn switchProng(self: *Parser) Error!Statement {
         const start_token = self.current_token;
-        var values = std.ArrayList(Expression).init(self.allocator);
-        errdefer values.deinit();
+        var values = std.ArrayList(Expression).empty;
+        errdefer values.deinit(self.allocator);
         const is_else = start_token.token_type == .@"else";
         if (!is_else) {
-            try values.append(try self.expression(.lowest));
+            try values.append(self.allocator, try self.expression(.lowest));
             while (self.peekIs(.comma)) {
                 self.next();
                 self.next();
-                try values.append(try self.expression(.lowest));
+                try values.append(self.allocator, try self.expression(.lowest));
             }
         }
 
@@ -1052,7 +1048,7 @@ pub const Parser = struct {
             .token = start_token,
             .type = .{
                 .switch_prong = .{
-                    .values = if (is_else) null else try values.toOwnedSlice(),
+                    .values = if (is_else) null else try values.toOwnedSlice(self.allocator),
                     .body = try self.block(),
                 },
             },

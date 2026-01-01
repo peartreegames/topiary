@@ -444,11 +444,11 @@ Braces are optional if only one line is used.
 **Functions cannot contain Boughs or Jumps, only logic.**
 
 ```topi
-const sum = |x, y| return x + y
+fn sum(x, y) return x + y
 
-const fib = |n| {
-  if (n < 2) return n
-  return fib(n - 1) + fib(n - 2)
+fn fib(n) {
+    if (n < 2) return n
+    return fib(n - 1) + fib(n - 2)
 }
 ```
 
@@ -467,7 +467,7 @@ const early = || {
 Enums are pretty standard
 
 ```topi
-enum Cardinal = {
+enum Cardinal {
     North,
     East,
     South,
@@ -493,7 +493,7 @@ Enum Sequences (`enumseq`) are special enums, they are the same except they cann
 If attempted, topi will ignore the assignment and remain at the current value.
 
 ```topi
-enumseq QuestGiver = {
+enumseq QuestGiver {
 	None,
 	LearnedOfQuestGiver,
 	MetQuestGiver,
@@ -523,7 +523,7 @@ Any field not initialized will use the default value.
 
 
 ```topi
-class Person = {
+class Person {
     age = 25,
     name = ""
 }
@@ -532,19 +532,21 @@ var john = new Person {
     name = "John Doe"
 }
 
-print(john) // person{name = "John Doe", age = 25}
+print(john) // Person{name = "John Doe", age = 25}
 ```
 
 Classes can also have functions as fields, 
 references to its own fields can be achieved with `self`
 
 ```topi
-class Person = {
+class Person {
     age = 0,
     firstName = "",
     lastName = "",
-    fullName = || return self.firstName + " " + self.lastName,
-    increaseAge = |amount| {
+    
+    fn fullName() return self.firstName + " " + self.lastName 
+    
+    fn increaseAge(amount) {
         self.age += amount
     }
 }

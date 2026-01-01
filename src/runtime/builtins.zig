@@ -11,7 +11,7 @@ const UUID = utils.UUID;
 
 const Vm = @import("vm.zig").Vm;
 pub const Builtin = *const fn (vm: *Vm, args: []Value) Value;
-var r: ?std.rand.DefaultPrng = null;
+var r: ?std.Random.DefaultPrng = null;
 
 pub const functions = std.StaticStringMap(Value).initComptime(.{ .{
     "rnd",
@@ -60,7 +60,7 @@ pub const methods = std.StaticStringMap(Value).initComptime(.{ .{
 } });
 
 fn create(name: []const u8, arity: u8, is_method: bool, backing: *const fn (vm: *Vm, args: []Value) Value) Value {
-    var obj = .{
+    const obj = Value.Obj{
         .data = .{
             .builtin = .{
                 .backing = backing,
@@ -70,18 +70,18 @@ fn create(name: []const u8, arity: u8, is_method: bool, backing: *const fn (vm: 
             },
         },
     };
-    return .{ .obj = &obj };
+    return .{ .obj = @constCast(&obj) };
 }
 
 fn rnd(_: *Vm, args: []Value) Value {
-    if (r == null) r = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
+    if (r == null) r = std.Random.DefaultPrng.init(std.crypto.random.int(u64));
     const start = @as(i32, @intFromFloat(args[0].number));
     const end = @as(i32, @intFromFloat(args[1].number));
     return .{ .number = @as(f32, @floatFromInt(r.?.random().intRangeAtMost(i32, start, end))) };
 }
 
 fn rnd01(_: *Vm, args: []Value) Value {
-    if (r == null) r = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
+    if (r == null) r = std.Random.DefaultPrng.init(std.crypto.random.int(u64));
     _ = args;
     return .{ .number = r.?.random().float(f32) };
 }
@@ -95,11 +95,14 @@ fn abs(_: *Vm, args: []Value) Value {
 }
 
 fn print(vm: *Vm, args: []Value) Value {
-    const writer = std.io.getStdErr().writer();
-    var arr = std.AutoArrayHashMap(UUID.ID, void).init(vm.allocator);
+    var stderr_buffer: [1024]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
+    var arr = std.AutoArrayHashMap(UUID.ID, void).init(vm.alloc);
     defer arr.deinit();
-    args[0].print(writer, &arr) catch unreachable;
-    writer.print("\n", .{}) catch unreachable;
+    args[0].print(stderr, &arr) catch unreachable;
+    stderr.print("\n", .{}) catch unreachable;
+    stderr.flush() catch unreachable;
     return Void;
 }
 
@@ -131,8 +134,8 @@ fn count_method(_: *Vm, args: []Value) Value {
 fn add_method(vm: *Vm, args: []Value) Value {
     const item = args[1];
     switch (args[0].obj.data) {
-        .list => args[0].obj.data.list.append(item) catch {},
-        .set => args[0].obj.data.set.put(item, {}) catch {},
+        .list => args[0].obj.data.list.append(vm.alloc, item) catch {},
+        .set => args[0].obj.data.set.put(vm.alloc, item, {}) catch {},
         else => unreachable,
     }
     if (args[0].obj.index) |i| {
@@ -145,7 +148,7 @@ fn addmap_method(vm: *Vm, args: []Value) Value {
     const key = args[1];
     const item = args[2];
     switch (args[0].obj.data) {
-        .map => args[0].obj.data.map.put(key, item) catch {},
+        .map => args[0].obj.data.map.put(vm.alloc, key, item) catch {},
         else => unreachable,
     }
     if (args[0].obj.index) |i| {
@@ -199,9 +202,9 @@ fn has_method(_: *Vm, args: []Value) Value {
 fn clear_method(vm: *Vm, args: []Value) Value {
     var data = args[0].obj.data;
     switch (data) {
-        .list => data.list.clearAndFree(),
-        .map => data.map.clearAndFree(),
-        .set => data.set.clearAndFree(),
+        .list => data.list.clearAndFree(vm.alloc),
+        .map => data.map.clearAndFree(vm.alloc),
+        .set => data.set.clearAndFree(vm.alloc),
         else => unreachable,
     }
     if (args[0].obj.index) |i| {

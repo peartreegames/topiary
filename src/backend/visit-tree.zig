@@ -20,16 +20,16 @@ pub const VisitTree = struct {
                 .parent = parent,
                 .name = try allocator.dupe(u8, name),
                 .index = index,
-                .children = std.ArrayList(*Node).init(allocator),
+                .children = .empty,
             };
             return node;
         }
 
-        pub fn destroy(self: *const Node, allocator: std.mem.Allocator) void {
+        pub fn destroy(self: *Node, allocator: std.mem.Allocator) void {
             for (self.children.items) |child| {
                 child.destroy(allocator);
             }
-            self.children.deinit();
+            self.children.deinit(allocator);
             allocator.free(self.name);
             allocator.destroy(self);
         }
@@ -46,12 +46,12 @@ pub const VisitTree = struct {
             return null;
         }
 
-        pub fn writePath(self: *const Node, writer: anytype) !void {
+        pub fn writePath(self: *const Node, alloc: std.mem.Allocator, writer: *std.Io.Writer) !void {
             var node: ?*const Node = self;
-            var list = std.ArrayList(*const Node).init(std.heap.page_allocator);
-            defer list.deinit();
+            var list: std.ArrayList(*const Node) = .empty;
+            defer list.deinit(alloc);
             while (node) |n| {
-                try list.append(node.?);
+                try list.append(alloc, node.?);
                 node = n.parent;
             }
             std.mem.reverse(*const Node, list.items);
@@ -61,13 +61,13 @@ pub const VisitTree = struct {
             }
         }
 
-        pub fn print(self: *const Node, writer: anytype, depth: usize) void {
-            writer.print("\n", .{});
+        pub fn print(self: *const Node, writer: *std.Io.Writer, depth: usize) void {
+            writer.print("\n", .{}) catch unreachable;
             var d: usize = 0;
             while (d < depth) : (d += 1) {
-                writer.print("  ", .{});
+                writer.print("  ", .{}) catch unreachable;
             }
-            writer.print("{s}", .{self.name});
+            writer.print("{s}", .{self.name}) catch unreachable;
             for (self.children.items) |c| c.print(writer, depth + 1);
         }
     };
@@ -78,13 +78,13 @@ pub const VisitTree = struct {
             .allocator = allocator,
             .root = root,
             .current = root,
-            .list = std.ArrayList([]const u8).init(allocator),
+            .list = .empty,
         };
     }
 
     pub fn push(self: *VisitTree, name: []const u8, index: u32) !void {
         const node = try Node.create(self.allocator, name, index, self.current);
-        try self.current.children.append(node);
+        try self.current.children.append(self.allocator, node);
         self.current = node;
     }
 
@@ -95,13 +95,14 @@ pub const VisitTree = struct {
     }
 
     pub fn deinit(self: *VisitTree) void {
-        self.list.deinit();
+        self.list.deinit(self.allocator);
         self.root.destroy(self.allocator);
     }
 
-    pub fn print(self: *VisitTree, writer: anytype) void {
+    pub fn print(self: *VisitTree, writer: *std.Io.Writer) void {
         self.root.print(writer, 0);
-        writer.print("\n", .{});
+        writer.print("\n", .{}) catch unreachable;
+        writer.flush() catch unreachable;
     }
 
     pub fn reset(self: *VisitTree) void {

@@ -50,6 +50,7 @@ test "Update File Localization Ids" {
     const file_name = "test_locale.topi";
     var file = try std.fs.cwd().createFile(file_name, .{ .read = true });
     defer std.fs.cwd().deleteFile(file_name) catch {};
+    defer file.close();
     try file.writeAll(input);
     const full_path = try std.fs.cwd().realpathAlloc(std.testing.allocator, file_name);
     defer std.testing.allocator.free(full_path);
@@ -58,14 +59,7 @@ test "Update File Localization Ids" {
     try file.seekTo(0);
     try file.writeAll(validated);
 
-    var buf_reader = std.io.bufferedReader(file.reader());
-    const reader = buf_reader.reader();
-
-    const out = std.io.getStdErr().writer();
-
-    while (true) {
-        reader.streamUntilDelimiter(out, '\n', null) catch break;
-    }
+    try std.testing.expectEqual(606,(try file.stat()).size);
 }
 
 test "Export Localization CSV Tree" {
@@ -91,6 +85,8 @@ test "Export Localization CSV Tree" {
     const mod = try parser_test.parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    const writer = std.io.getStdErr().writer();
-    try Locale.exportFile(file, writer);
+    var buffer: [1024]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&buffer);
+    const stderr = &writer.interface;
+    try Locale.exportFile(file, stderr);
 }

@@ -22,16 +22,16 @@ pub const JumpTree = struct {
             node.* = .{
                 .parent = parent,
                 .name = name,
-                .children = std.ArrayList(*Node).init(allocator),
+                .children = .empty,
             };
             return node;
         }
 
-        pub fn destroy(self: *const Node, allocator: std.mem.Allocator) void {
+        pub fn destroy(self: *Node, allocator: std.mem.Allocator) void {
             for (self.children.items) |child| {
                 child.destroy(allocator);
             }
-            self.children.deinit();
+            self.children.deinit(allocator);
             allocator.destroy(self);
         }
 
@@ -49,12 +49,13 @@ pub const JumpTree = struct {
             return error.SymbolNotFound;
         }
 
-        pub fn writePath(self: *const Node, writer: anytype) !void {
+        pub fn writePath(self: *const Node, allocator: std.mem.Allocator, writer: *std.Io.Writer) !void {
             var node: ?*const Node = self;
-            var list = std.ArrayList(*const Node).init(std.heap.page_allocator);
-            defer list.deinit();
+            const NodeArray = std.ArrayList(*const Node);
+            var list: NodeArray = .empty;
+            defer list.deinit(allocator);
             while (node) |n| {
-                try list.append(node.?);
+                try list.append(allocator, node.?);
                 node = n.parent;
             }
             std.mem.reverse(*const Node, list.items);
@@ -65,7 +66,7 @@ pub const JumpTree = struct {
             }
         }
 
-        pub fn print(self: *const Node, writer: anytype, depth: usize) void {
+        pub fn print(self: *const Node, writer: *std.Io.Writer, depth: usize) void {
             var i: usize = depth;
             while (i > 0) : (i -= 1) {
                 writer.print("    ", .{});
@@ -96,7 +97,7 @@ pub const JumpTree = struct {
         self.root.destroy(self.allocator);
     }
 
-    pub fn print(self: *JumpTree, writer: anytype) void {
+    pub fn print(self: *JumpTree, writer: *std.Io.Writer) void {
         self.root.print(writer, 0);
     }
 

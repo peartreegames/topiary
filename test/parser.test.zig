@@ -25,10 +25,21 @@ pub fn parseSource(source: []const u8) !*Module {
         .source_loaded = true,
         .errors = Errors.init(mod.arena.allocator()),
     };
+    try file.errors.add("Unexpected token '{s}'\n", .{
+        .start = 0,
+        .end = 1,
+        .token_type = .identifier,
+        .line = 1,
+        .column = 1,
+        .file_index = 0,
+    }, .err, .{"test"});
     mod.entry = file;
+
+    var buffer: [1024]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&buffer);
+    const stderr = &writer.interface;
     file.buildTree() catch |err| {
-        const errWriter = std.io.getStdErr().writer();
-        try file.errors.write("N/A", source, errWriter);
+        try file.errors.write("N/A", source, stderr);
         return err;
     };
     return mod;
@@ -44,11 +55,11 @@ test "Parse Declaration" {
     const t =
         \\ const intValue = 5
         \\ var mutableValue = 1.2
-        \\ class ClassType = {
+        \\ class ClassType {
         \\     intField = 0
         \\ }
         \\ var classValue = new ClassType{}
-        \\ enum EnumType = {
+        \\ enum EnumType {
         \\     one,
         \\     two,
         \\ }
@@ -81,8 +92,8 @@ test "Parse Declaration" {
 
 test "Parse Function Declaration" {
     const t =
-        \\ const sum = |x, y| return x + y
-        \\ const str = |value, count| {
+        \\ fn sum(x, y) return x + y
+        \\ fn str(value, count) {
         \\    var result = "This is a string"
         \\    return result    
         \\ }
@@ -92,15 +103,14 @@ test "Parse Function Declaration" {
     const file = mod.entry;
     const tree = file.tree;
     try testing.expect(tree.root.len == 2);
-    try testing.expect(!tree.root[0].type.variable.is_mutable);
-    try testing.expectEqualStrings("x", tree.root[0].type.variable.initializer.type.function.parameters[0]);
-    try testing.expectEqualStrings("y", tree.root[0].type.variable.initializer.type.function.parameters[1]);
-    try testing.expect(tree.root[0].type.variable.initializer.type.function.body.len == 1);
+    try testing.expectEqualStrings("x", tree.root[0].type.function.parameters[0]);
+    try testing.expectEqualStrings("y", tree.root[0].type.function.parameters[1]);
+    try testing.expect(tree.root[0].type.function.body.len == 1);
 }
 
 test "Parse Function Arguments" {
     const t =
-        \\ const sum = |x, y| return x + y
+        \\ fn sum(x, y) return x + y
         \\ sum(1, 2) + sum(3, 4)
     ;
     const mod = try parseSource(t);
@@ -120,7 +130,7 @@ test "Parse Function Arguments" {
 
 test "Parse Enums" {
     const t =
-        \\ enum Test = {
+        \\ enum Test {
         \\    one,
         \\    two  
         \\ }
@@ -220,12 +230,12 @@ test "Parse Extern" {
 
 test "Parse Enum" {
     const input =
-        \\ enum E = {
+        \\ enum E {
         \\     one,
         \\     two,
         \\ }
         \\
-        \\ enum En = {
+        \\ enum En {
         \\     three,
         \\     four
         \\ }

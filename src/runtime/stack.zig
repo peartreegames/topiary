@@ -49,7 +49,7 @@ pub fn Stack(comptime T: type) type {
             return self.backing[self.count];
         }
 
-        pub fn print(self: *Self, writer: anytype) void {
+        pub fn print(self: *Self, writer: *std.Io.Writer) void {
             var i: usize = self.count;
             while (i > 0) {
                 i -= 1;

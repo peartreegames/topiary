@@ -15,16 +15,15 @@ pub const Scope = struct {
     tag: Tag,
 
     count: u32 = 0,
-    symbols: std.StringArrayHashMap(*Symbol),
+    symbols: std.StringArrayHashMapUnmanaged(*Symbol),
     free_symbols: std.ArrayList(*Symbol),
 
     pub const Tag = union(enum(u4)) {
-        global,
         builtin,
-        closure,
-        function,
-        free,
+        constant,
+        global,
         local,
+        free,
     };
 
     pub fn create(allocator: std.mem.Allocator, parent: ?*Scope, tag: Tag) !*Scope {
@@ -32,8 +31,8 @@ pub const Scope = struct {
         scope.* = .{
             .allocator = allocator,
             .parent = parent,
-            .symbols = std.StringArrayHashMap(*Symbol).init(allocator),
-            .free_symbols = std.ArrayList(*Symbol).init(allocator),
+            .symbols = .empty,
+            .free_symbols = .empty,
             .tag = tag,
         };
         return scope;
@@ -44,8 +43,8 @@ pub const Scope = struct {
             self.allocator.free(s.name);
             self.allocator.destroy(s);
         }
-        self.symbols.deinit();
-        self.free_symbols.deinit();
+        self.symbols.deinit(self.allocator);
+        self.free_symbols.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
@@ -64,7 +63,7 @@ pub const Scope = struct {
             .is_extern = is_extern,
         };
         self.count += 1;
-        try self.symbols.putNoClobber(name_copy, symbol);
+        try self.symbols.putNoClobber(self.allocator, name_copy, symbol);
         return symbol;
     }
 
@@ -78,13 +77,13 @@ pub const Scope = struct {
             .is_mutable = false,
             .is_extern = false,
         };
-        try self.symbols.putNoClobber(name_copy, symbol);
+        try self.symbols.putNoClobber(self.allocator, name_copy, symbol);
         return symbol;
     }
 
     pub fn defineFree(self: *Scope, original: *Symbol) !*Symbol {
         const index = @as(u32, @intCast(self.free_symbols.items.len));
-        try self.free_symbols.append(original);
+        try self.free_symbols.append(self.allocator, original);
 
         const symbol = try self.allocator.create(Symbol);
         const name = try self.allocator.dupe(u8, original.name);
@@ -95,7 +94,7 @@ pub const Scope = struct {
             .is_mutable = original.is_mutable,
             .is_extern = original.is_extern,
         };
-        try self.symbols.putNoClobber(symbol.name, symbol);
+        try self.symbols.putNoClobber(self.allocator, symbol.name, symbol);
         return symbol;
     }
 
@@ -114,7 +113,7 @@ pub const Scope = struct {
         return null;
     }
 
-    pub fn print(self: *Scope, writer: anytype) void {
+    pub fn print(self: *Scope, writer: *std.Io.Writer) void {
         writer.print("==SCOPE==\n", .{});
         for (self.symbols.keys()) |k| {
             writer.print("{s}\n", .{k});

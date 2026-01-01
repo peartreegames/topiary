@@ -685,160 +685,20 @@ test "Index" {
     }
 }
 
-test "Functions" {
+test "Compile Functions" {
     const test_cases = .{
         .{
-            .input = "|| return 5 + 10",
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
-                2 + cl,
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{ 5, 10 },
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),
-                    0 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.constant),
-                    1 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input = "|| 5 + 10",
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
-                2 + cl,
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{ 5, 10 },
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),
-                    0 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.constant),
-                    1 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.pop),
-                    @intFromEnum(OpCode.return_void),
-                },
-            },
-        },
-        .{
-            .input = "|| { 5 + 10 return void }",
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
-                2 + cl,
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{ 5, 10 },
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),
-                    0 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.constant),
-                    1 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.pop),
-                    @intFromEnum(OpCode.return_void),
-                },
-            },
-        },
-        .{
-            .input = "|| {}",
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
-                0 + cl,
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{ 0, 0, 0 },
-            .functions = [_][]const u8{
-                &[_]u8{
-                    @intFromEnum(OpCode.return_void),
-                },
-            },
-        },
-        .{
-            .input = "|| { return 5 }()",
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
-                1 + cl,
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.call),
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{5},
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),
-                    0 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
             .input =
-            \\ const five = || return 5
+            \\ fn five() { return 5 }
             \\ five()
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
+                @intFromEnum(OpCode.constant), // Load the function object
                 1 + cl,
                 0,
                 0,
                 0,
-                0,
-                @intFromEnum(OpCode.decl_global),
+                @intFromEnum(OpCode.decl_global), // Declare "five"
                 0,
                 0,
                 0,
@@ -867,13 +727,12 @@ test "Functions" {
         },
         .{
             .input =
-            \\ const two = || return 2
+            \\ fn two() { return 2 }
             \\ two() + two()
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
+                @intFromEnum(OpCode.constant),
                 1 + cl,
-                0,
                 0,
                 0,
                 0,
@@ -914,13 +773,12 @@ test "Functions" {
         },
         .{
             .input =
-            \\ const value = |a| return a
+            \\ fn value(a) { return a }
             \\ value(1) + value(1)
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
+                @intFromEnum(OpCode.constant),
                 0 + cl,
-                0,
                 0,
                 0,
                 0,
@@ -966,13 +824,12 @@ test "Functions" {
         },
         .{
             .input =
-            \\ const oneArg = |a| { return a }
+            \\ fn oneArg(a) { return a }
             \\ oneArg(24)
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
+                @intFromEnum(OpCode.constant),
                 0 + cl,
-                0,
                 0,
                 0,
                 0,
@@ -1005,13 +862,12 @@ test "Functions" {
         },
         .{
             .input =
-            \\ const multiArg = |a, b, c| { a b return c }
-            \\ multiArg(24,25,26)
+            \\ fn multiArg(a, b, c) { a b return c }
+            \\ multiArg(24, 25, 26)
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
+                @intFromEnum(OpCode.constant),
                 0 + cl,
-                0,
                 0,
                 0,
                 0,
@@ -1063,6 +919,7 @@ test "Functions" {
             },
         },
     };
+    // ... existing code ...
 
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
@@ -1669,10 +1526,15 @@ test "Serialize" {
     var file = try std.fs.cwd().createFile("tmp.topi.byte", .{ .read = true });
     defer std.fs.cwd().deleteFile("tmp.topi.byte") catch {};
     defer file.close();
-    try bytecode.serialize(&file);
+    var buf: [1024]u8 = undefined;
+    var file_writer = file.writer(&buf);
+    _ = try bytecode.serialize(allocator, &file_writer.interface);
+    std.log.info("Serialized bytecode size: {}", .{(try file.stat()).size});
 
     try file.seekTo(0);
-    var deserialized = try Bytecode.deserialize(allocator, file.reader());
+    var file_reader = file.reader(&buf);
+    const reader = &file_reader.interface;
+    var deserialized = try Bytecode.deserialize(allocator, reader);
     defer deserialized.free(allocator);
     try testing.expectEqualSlices(u8, bytecode.instructions, deserialized.instructions);
     for (bytecode.constants, 0..) |constant, i| {

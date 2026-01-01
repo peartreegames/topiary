@@ -1,4 +1,5 @@
 const std = @import("std");
+const print = @import("main.zig").print;
 
 const topi = @import("topi");
 const Vm = topi.runtime.Vm;
@@ -23,46 +24,47 @@ pub const CliRunner = struct {
         };
     }
 
-    pub fn print(_: *CliRunner, comptime msg: []const u8, args: anytype) void {
-        const stdout = std.io.getStdOut().writer();
-        stdout.print(msg, args) catch {
-            std.debug.print("Could not print message", .{});
-        };
-    }
-
     pub fn onLine(runner: *Runner, vm: *Vm, dialogue: Line) void {
-        const stdin = std.io.getStdIn().reader();
+        var stdin_buffer: [1024]u8 = undefined;
+        var stdin_reader = std.fs.File.stdin().reader(&stdin_buffer);
+        const stdin = &stdin_reader.interface;
+
         const self: *CliRunner = @fieldParentPtr("runner", runner);
-        self.print(":", .{});
+        print(":", .{}) catch {};
         if (dialogue.speaker) |speaker| {
-            self.print("{s}", .{speaker});
+            print("{s}", .{speaker}) catch {};
         }
-        self.print(": ", .{});
-        self.print("{s}", .{dialogue.content});
+        print(": ", .{}) catch {};
+        print("{s}", .{dialogue.content}) catch {};
         if (self.is_auto) {
-            self.print("\n", .{});
+            print("\n", .{}) catch {};
             vm.selectContinue();
         } else {
-            var buf: [2]u8 = undefined;
-            if (stdin.readUntilDelimiterOrEof(&buf, '\n') catch &buf) |_| {
+            while (stdin.takeDelimiterExclusive('\n')) |_| {
                 vm.selectContinue();
+            } else |err| {
+                print("Unknown error {s}", .{@errorName(err)}) catch {};
             }
         }
     }
 
-    pub fn onChoices(runner: *Runner, vm: *Vm, choices: []Choice) void {
-        const stdin = std.io.getStdIn().reader();
-        const stderr = std.io.getStdErr().writer();
-        const self: *CliRunner = @fieldParentPtr("runner", runner);
+    pub fn onChoices(_: *Runner, vm: *Vm, choices: []Choice) void {
+        var stdin_buffer: [1024]u8 = undefined;
+        var stdin_reader = std.fs.File.stdin().reader(&stdin_buffer);
+        const stdin = &stdin_reader.interface;
+
+        var stdout_buffer: [1024]u8 = undefined;
+        var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+        const stderr = &stdout_writer.interface;
+
         var index: ?usize = null;
         while (index == null) {
             for (choices, 0..) |choice, i| {
-                self.print("[{d}] {s}\n", .{ i, choice.content });
+                print("[{d}] {s}\n", .{ i, choice.content }) catch {};
             }
-            var buf: [10]u8 = undefined;
-            if (stdin.readUntilDelimiterOrEof(&buf, '\n') catch &buf) |user_input| {
-                const input = std.mem.trim(u8, user_input, "\r\n");
-                index = std.fmt.parseInt(usize, input, 10) catch |err| blk: {
+
+            while (stdin.takeDelimiterExclusive('\n')) |line| {
+                index = std.fmt.parseInt(usize, line, 10) catch |err| blk: {
                     stderr.print("Invalid value: {}.\n", .{err}) catch {};
                     break :blk null;
                 };
@@ -70,9 +72,17 @@ pub const CliRunner = struct {
                     index = null;
                     stderr.print("Invalid value.\n", .{}) catch {};
                 }
+            } else |err| switch (err) {
+                error.EndOfStream => {},
+                error.StreamTooLong => {
+                    stderr.print("Input too long\n", .{}) catch {};
+                },
+                error.ReadFailed => {
+                    stderr.print("Read failed\n", .{}) catch {};
+                }
             }
         }
-        vm.selectChoice(index.?) catch |err| self.print("Error: {}", .{err});
+        vm.selectChoice(index.?) catch |err| print("Error: {}", .{err}) catch {};
     }
 
     pub fn onValueChanged(_: *Runner, _: *Vm, _: []const u8, _: Value) void {}
@@ -80,11 +90,11 @@ pub const CliRunner = struct {
 
 pub const AutoTestRunner = struct {
     runner: Runner,
-    rnd: std.rand.Xoshiro256,
+    rnd: std.Random.Xoshiro256,
 
     pub fn init() AutoTestRunner {
         return .{
-            .rnd = std.rand.DefaultPrng.init(std.crypto.random.int(u64)),
+            .rnd = std.Random.DefaultPrng.init(std.crypto.random.int(u64)),
             .runner = .{
                 .on_line = onLine,
                 .on_choices = onChoices,

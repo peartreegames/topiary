@@ -1,11 +1,10 @@
 const std = @import("std");
+
 const types = @import("../types/index.zig");
 const Value = types.Value;
-
 const utils = @import("../utils/index.zig");
 const UUID = utils.UUID;
 const C = utils.C;
-
 const DebugInfo = @import("debug.zig").DebugInfo;
 const OpCode = @import("opcode.zig").OpCode;
 
@@ -19,7 +18,8 @@ pub const Bytecode = struct {
     boughs: []BoughJump,
     loc: []const u8,
 
-    const sectionCount = 7;
+    const section_count = 7;
+    const header_size = section_count * @sizeOf(u64);
     pub const BoughJump = struct { name: []const u8, ip: C.JUMP };
 
     pub const GlobalSymbol = struct {
@@ -31,7 +31,7 @@ pub const Bytecode = struct {
 
     pub fn free(self: *const Bytecode, allocator: std.mem.Allocator) void {
         allocator.free(self.instructions);
-        for (self.debug_info) |debug| debug.deinit(allocator);
+        for (self.debug_info) |*d| d.*.deinit();
         allocator.free(self.debug_info);
         for (self.constants) |item| {
             if (item == .obj) {
@@ -47,18 +47,7 @@ pub const Bytecode = struct {
         allocator.free(self.loc);
     }
 
-    pub fn serialize(self: *Bytecode, seekable: anytype) !void {
-        std.debug.assert(@hasDecl(@TypeOf(seekable.*), "writer"));
-        var writer = seekable.writer();
-        const isSeekable = @hasDecl(@TypeOf(seekable.*), "getPos");
-        const headerPos = if (isSeekable) try seekable.getPos() else 0;
-        var section: u8 = 0;
-        // globals, boughs, instructions, debug info, constants, uuids, loc
-        while (section < sectionCount) : (section += 1) {
-                try writer.writeInt(u64, 0, .little); // Placeholder for section offset
-        }
-
-        const globalPos = if (isSeekable) try seekable.getPos() else 0;
+    fn writeGlobals(self: *Bytecode, writer: *std.Io.Writer) !void {
         try writer.writeInt(u64, @as(u64, @intCast(self.global_symbols.len)), .little);
         for (self.global_symbols) |sym| {
             try writer.writeInt(u8, @as(u8, @intCast(sym.name.len)), .little);
@@ -67,63 +56,93 @@ pub const Bytecode = struct {
             try writer.writeByte(if (sym.is_extern) 1 else 0);
             try writer.writeByte(if (sym.is_mutable) 1 else 0);
         }
+    }
 
-        const boughPos = if (isSeekable) try seekable.getPos() else 0;
+    fn writeBoughs(self: *Bytecode, writer: *std.Io.Writer) !void {
         try writer.writeInt(u64, @as(u64, @intCast(self.boughs.len)), .little);
         for (self.boughs) |bough| {
             try writer.writeInt(u16, @as(u16, @intCast(bough.name.len)), .little);
             try writer.writeAll(bough.name);
             try writer.writeInt(C.JUMP, bough.ip, .little);
         }
-
-        const instPos = if (isSeekable) try seekable.getPos() else 0;
-        try writer.writeInt(u64, @as(u64, @intCast(self.instructions.len)), .little);
-        try writer.writeAll(self.instructions);
-
-        const debugPos = if (isSeekable) try seekable.getPos() else 0;
-        try writer.writeInt(u16, @as(u16, @intCast(self.debug_info.len)), .little);
-        for (self.debug_info) |debug| try debug.serialize(writer);
-
-        const constPos = if (isSeekable) try seekable.getPos() else 0;
-        try writer.writeInt(u64, @as(u64, @intCast(self.constants.len)), .little);
-        for (self.constants) |constant| try constant.serialize(writer);
-
-        const uuidPos = if (isSeekable) try seekable.getPos() else 0;
-        try writer.writeInt(u64, @as(u64, @intCast(self.uuids.len)), .little);
-        for (self.uuids) |uuid| try writer.writeAll(&uuid);
-
-        const locPos = if (isSeekable) try seekable.getPos() else 0;
-        try writer.writeInt(u128, @as(u128, @intCast(self.loc.len)), .little);
-        try writer.writeAll(self.loc);
-
-        if (isSeekable) {
-            const end = try seekable.getPos();
-            try seekable.seekTo(headerPos);
-            try writer.writeInt(u64, globalPos, .little);
-            try writer.writeInt(u64, boughPos, .little);
-            try writer.writeInt(u64, instPos, .little);
-            try writer.writeInt(u64, debugPos, .little);
-            try writer.writeInt(u64, constPos, .little);
-            try writer.writeInt(u64, uuidPos, .little);
-            try writer.writeInt(u64, locPos, .little);
-            try seekable.seekTo(end);
-        }
     }
 
-    pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !Bytecode {
+    fn writeInstructions(self: *Bytecode, writer: *std.Io.Writer) !void {
+        try writer.writeInt(u64, @as(u64, @intCast(self.instructions.len)), .little);
+        try writer.writeAll(self.instructions);
+    }
+
+    fn writeDebug(self: *Bytecode, writer: *std.Io.Writer) !void {
+        try writer.writeInt(u16, @as(u16, @intCast(self.debug_info.len)), .little);
+        for (self.debug_info) |debug| try debug.serialize(writer);
+    }
+
+    fn writeConstants(self: *Bytecode, writer: *std.Io.Writer) !void {
+        try writer.writeInt(u64, @as(u64, @intCast(self.constants.len)), .little);
+        for (self.constants) |constant| try constant.serialize(writer);
+    }
+
+    fn writeUuids(self: *Bytecode, writer: *std.Io.Writer) !void {
+        try writer.writeInt(u64, @as(u64, @intCast(self.uuids.len)), .little);
+        for (self.uuids) |uuid| try writer.writeAll(&uuid);
+    }
+
+    fn writeLocalization(self: *Bytecode, writer: *std.Io.Writer) !void {
+        try writer.writeInt(u128, @as(u128, @intCast(self.loc.len)), .little);
+        try writer.writeAll(self.loc);
+    }
+
+    pub fn serialize(self: *Bytecode, alloc: std.mem.Allocator, writer: *std.io.Writer) !usize {
+        var allocating = std.io.Writer.Allocating.init(alloc);
+        defer allocating.deinit();
+        const alloc_writer = &allocating.writer;
+
+        var offsets: [section_count]u64 = undefined;
+
+        offsets[0] = header_size + allocating.written().len;
+        try self.writeGlobals(alloc_writer);
+
+        offsets[1] = header_size + allocating.written().len;
+        try self.writeBoughs(alloc_writer);
+
+        offsets[2] = header_size + allocating.written().len;
+        try self.writeInstructions(alloc_writer);
+
+        offsets[3] = header_size + allocating.written().len;
+        try self.writeDebug(alloc_writer);
+
+        offsets[4] = header_size + allocating.written().len;
+        try self.writeConstants(alloc_writer);
+
+        offsets[5] = header_size + allocating.written().len;
+        try self.writeUuids(alloc_writer);
+
+        offsets[6] = header_size + allocating.written().len;
+        try self.writeLocalization(alloc_writer);
+
+        const result = header_size + allocating.written().len;
+        for (offsets) |offset| {
+            try writer.writeInt(u64, offset, .little);
+        }
+        try writer.writeAll(allocating.written());
+        try writer.flush();
+        return result;
+    }
+
+    pub fn deserialize(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Bytecode {
         // skip headers
-        try reader.skipBytes(sectionCount * @sizeOf(u64), .{});
-        const globals_count = try reader.readInt(u64, .little);
+        try reader.discardAll(header_size);
+        const globals_count = try reader.takeInt(u64, .little);
         var global_symbols = try allocator.alloc(GlobalSymbol, globals_count);
         var count: usize = 0;
         while (count < globals_count) : (count += 1) {
-            const length = try reader.readInt(u8, .little);
+            const length = try reader.takeInt(u8, .little);
             const buf = try allocator.alloc(u8, length);
             errdefer allocator.free(buf);
-            try reader.readNoEof(buf);
-            const index = try reader.readInt(C.GLOBAL, .little);
-            const is_extern = if (try reader.readByte() == 1) true else false;
-            const is_mutable = if (try reader.readByte() == 1) true else false;
+            try reader.readSliceAll(buf);
+            const index = try reader.takeInt(C.GLOBAL, .little);
+            const is_extern = if (try reader.takeByte() == 1) true else false;
+            const is_mutable = if (try reader.takeByte() == 1) true else false;
             global_symbols[count] = GlobalSymbol{
                 .name = buf,
                 .index = index,
@@ -132,49 +151,49 @@ pub const Bytecode = struct {
             };
         }
 
-        const bough_count = try reader.readInt(u64, .little);
+        const bough_count = try reader.takeInt(u64, .little);
         var boughs = try allocator.alloc(BoughJump, bough_count);
         errdefer allocator.free(boughs);
         count = 0;
         while (count < bough_count) : (count += 1) {
-            const length = try reader.readInt(u16, .little);
+            const length = try reader.takeInt(u16, .little);
             const buf = try allocator.alloc(u8, length);
             errdefer allocator.free(buf);
-            try reader.readNoEof(buf);
+            try reader.readSliceAll(buf);
             boughs[count] = BoughJump{
                 .name = buf,
-                .ip = try reader.readInt(C.JUMP, .little),
+                .ip = try reader.takeInt(C.JUMP, .little),
             };
         }
 
-        const instruction_count = try reader.readInt(u64, .little);
+        const instruction_count = try reader.takeInt(u64, .little);
         const instructions = try allocator.alloc(u8, instruction_count);
         errdefer allocator.free(instructions);
-        try reader.readNoEof(instructions);
+        try reader.readSliceAll(instructions);
 
-        const debug_info_count = try reader.readInt(u16, .little);
+        const debug_info_count = try reader.takeInt(u16, .little);
         var debug_info = try allocator.alloc(DebugInfo, debug_info_count);
         errdefer allocator.free(debug_info);
         for (0..debug_info_count) |i| {
             debug_info[i] = try DebugInfo.deserialize(reader, allocator);
         }
 
-        const constant_count = try reader.readInt(u64, .little);
+        const constant_count = try reader.takeInt(u64, .little);
         var constants = try allocator.alloc(Value, constant_count);
         errdefer allocator.free(constants);
         for (0..constant_count) |i| {
             constants[i] = try Value.deserialize(reader, allocator);
         }
-        const uuid_count = try reader.readInt(u64, .little);
+        const uuid_count = try reader.takeInt(u64, .little);
         var uuids = try allocator.alloc(UUID.ID, uuid_count);
         count = 0;
         while (count < uuid_count) : (count += 1) {
-            try reader.readNoEof(&uuids[count]);
+            try reader.readSliceAll(&uuids[count]);
         }
 
-        const loc_len = try reader.readInt(u128, .little);
+        const loc_len = try reader.takeInt(u128, .little);
         const loc = try allocator.alloc(u8, @intCast(loc_len));
-        try reader.readNoEof(loc);
+        try reader.readSliceAll(loc);
         return .{
             .instructions = instructions,
             .debug_info = debug_info,
@@ -187,14 +206,15 @@ pub const Bytecode = struct {
         };
     }
 
-    pub fn print(code: *Bytecode, writer: anytype) !void {
+    pub fn print(code: *Bytecode, writer: *std.Io.Writer) !void {
         try writer.print("\n==BYTECODE==\n", .{});
         try printInstructions(writer, code.instructions);
+        try writer.flush();
         // try writer.print("\n==DEBUG==\n", .{});
         // try printDebugInfo(writer, code.debug_info);
     }
 
-    pub fn printDebugInfo(writer: anytype, debug: []DebugInfo) !void {
+    pub fn printDebugInfo(writer: *std.Io.Writer, debug: []DebugInfo) !void {
         for (debug) |info| {
             try writer.print("{s}\n", .{info.file});
             for (info.ranges.items) |r| {
@@ -203,7 +223,7 @@ pub const Bytecode = struct {
         }
     }
 
-    pub fn printInstructions(writer: anytype, instructions: []const u8) !void {
+    pub fn printInstructions(writer: *std.Io.Writer, instructions: []const u8) !void {
         var i: usize = 0;
         while (i < instructions.len) {
             try writer.print("{d:0>4} ", .{i});
@@ -287,7 +307,7 @@ pub const Bytecode = struct {
                     const tag_count = instructions[i];
                     i += 1;
                     try writer.print("{d: >8}", .{dest});
-                    try writer.print(" unique: {}, tags: {d}", .{is_unique, tag_count});
+                    try writer.print(" unique: {}, tags: {d}", .{ is_unique, tag_count });
                 },
                 .string, .closure => {
                     const index = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);

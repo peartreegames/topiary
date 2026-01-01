@@ -93,12 +93,12 @@ pub const ExportValue = extern struct {
             .number => .{ .number = self.data.number },
             .@"enum" => {
                 const e = self.data.@"enum";
-                const name = try vm.allocator.dupe(u8, e.name.ptr[0..e.name.len]);
+                const name = try vm.alloc.dupe(u8, e.name.ptr[0..e.name.len]);
                 free(@intFromPtr(e.name.ptr));
-                errdefer vm.allocator.free(name);
-                const value = try vm.allocator.dupe(u8, e.value.ptr[0..e.value.len]);
+                errdefer vm.alloc.free(name);
+                const value = try vm.alloc.dupe(u8, e.value.ptr[0..e.value.len]);
                 free(@intFromPtr(e.value.ptr));
-                errdefer vm.allocator.free(value);
+                errdefer vm.alloc.free(value);
 
                 for (vm.bytecode.constants) |c| {
                     if (c == .obj and c.obj.data == .@"enum" and std.mem.eql(u8, name, c.obj.data.@"enum".name)) {
@@ -114,77 +114,79 @@ pub const ExportValue = extern struct {
                 return error.EnumNotFound;
             },
             .string => {
-                const str = try vm.allocator.dupe(u8, self.data.string.ptr[0..self.data.string.len]);
+                const str = try vm.alloc.dupe(u8, self.data.string.ptr[0..self.data.string.len]);
                 free(@intFromPtr(self.data.string.ptr));
                 return vm.gc.create(vm, .{ .string = str });
             },
             .list => {
-                var list = std.ArrayList(Value).init(vm.allocator);
+                var list: std.ArrayList(Value) = .empty;
                 for (0..self.data.list.count) |i| {
                     const item: *ExportValue = @ptrCast(&self.data.list.items[i]);
-                    try list.append(try item.toValue(vm, free));
+                    try list.append(vm.alloc, try item.toValue(vm, free));
                 }
                 free(@intFromPtr(self.data.list.items));
                 return vm.gc.create(vm, .{ .list = list });
             },
             .set => {
-                var set = Value.Obj.SetType.initContext(vm.allocator, Value.adapter);
+                var set = Value.Obj.SetType.empty;
                 const length = self.data.list.count;
                 var i: usize = 0;
                 while (i < length) : (i += 1) {
                     const item: *ExportValue = @ptrCast(&self.data.list.items[i]);
-                    try set.put(try item.toValue(vm, free), {});
+                    const value = try item.toValue(vm, free);
+                    try set.putContext(vm.alloc, value, {}, Value.adapter);
                 }
+
                 free(@intFromPtr(self.data.list.items));
                 return vm.gc.create(vm, .{ .set = set });
             },
             .map => {
-                var map = Value.Obj.MapType.initContext(vm.allocator, Value.adapter);
+                var map = Value.Obj.MapType.empty;
                 const length = self.data.list.count;
                 var i: usize = 0;
                 while (i < length) : (i += 2) {
                     const key: *ExportValue = @ptrCast(&self.data.list.items[i]);
                     const value: *ExportValue = @ptrCast(&self.data.list.items[i + 1]);
-                    try map.put(try key.toValue(vm, free), try value.toValue(vm, free));
+                    try map.put(vm.alloc, try key.toValue(vm, free), try value.toValue(vm, free));
                 }
                 free(@intFromPtr(self.data.list.items));
                 return vm.gc.create(vm, .{ .map = map });
             },
         };
     }
-    pub fn print(self: ExportValue, writer: anytype) void {
+    pub fn print(self: ExportValue, writer: *std.Io.Writer) !void {
         switch (self.tag) {
-            .nil => writer.print("nil", .{}),
-            .bool => writer.print("{}", .{self.data.bool}),
-            .number => writer.print("{d:.5}", .{self.data.number}),
-            .@"enum" => writer.print("{s}.{s}", .{ self.data.@"enum".name.ptr[0..self.data.@"enum".name.len], self.data.@"enum".value.ptr[0..self.data.@"enum".value.len] }),
-            .string => writer.print("{s}", .{self.data.string.ptr[0..self.data.string.len]}),
+            .nil => try writer.print("nil", .{}),
+            .bool => try writer.print("{}", .{self.data.bool}),
+            .number => try writer.print("{d:.5}", .{self.data.number}),
+            .@"enum" => try writer.print("{s}.{s}", .{ self.data.@"enum".name.ptr[0..self.data.@"enum".name.len], self.data.@"enum".value.ptr[0..self.data.@"enum".value.len] }),
+            .string => try writer.print("{s}", .{self.data.string.ptr[0..self.data.string.len]}),
             .list => {
-                writer.print("List{{", .{});
+                try writer.print("List{{", .{});
                 for (0..self.data.list.count) |i| {
-                    self.data.list.items[i].print(writer);
-                    if (i < self.data.list.count - 1) writer.print(", ", .{});
+                    try self.data.list.items[i].print(writer);
+                    if (i < self.data.list.count - 1) try writer.print(", ", .{});
                 }
-                writer.print("}}", .{});
+                try writer.print("}}", .{});
             },
             .set => {
-                writer.print("Set{{", .{});
+                try writer.print("Set{{", .{});
                 for (0..self.data.list.count) |i| {
-                    self.data.list.items[i].print(writer);
-                    if (i < self.data.list.count - 1) writer.print(", ", .{});
+                    try self.data.list.items[i].print(writer);
+                    if (i < self.data.list.count - 1) try writer.print(", ", .{});
                 }
-                writer.print("}}", .{});
+                try writer.print("}}", .{});
             },
             .map => {
-                writer.print("Map{{", .{});
+                try writer.print("Map{{", .{});
                 var i: usize = 0;
                 while (i < self.data.list.count) : (i += 2) {
-                    self.data.list.items[i].print(writer);
-                    writer.print(":", .{});
-                    self.data.list.items[i + 1].print(writer);
-                    if (i < self.data.list.count - 2) writer.print(", ", .{});
+                    try self.data.list.items[i].print(writer);
+                    try writer.print(":", .{});
+                    try self.data.list.items[i + 1].print(writer);
+                    if (i < self.data.list.count - 2) try writer.print(", ", .{});
                 }
-                writer.print("}}", .{});
+                try writer.print("}}", .{});
             },
         }
     }

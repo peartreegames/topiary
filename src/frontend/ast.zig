@@ -6,7 +6,7 @@ const UUID = utils.UUID;
 pub const Tree = struct {
     root: []const Statement,
 
-    pub fn print(self: *const Tree, writer: anytype) void {
+    pub fn print(self: *const Tree, writer: *std.Io.Writer) void {
         writer.print("\n===TREE===", .{});
         for (self.root) |state| {
             state.print(writer, "", 0);
@@ -43,12 +43,6 @@ pub const Expression = struct {
             field_names: [][]const u8,
             fields: []const Expression,
         },
-        function: struct {
-            is_method: bool = false,
-            name: ?[]const u8 = null,
-            parameters: [][]const u8,
-            body: []const Statement,
-        },
         list: []const Expression,
         set: []const Expression,
         map: []const Expression, // map_pair
@@ -76,7 +70,7 @@ pub const Expression = struct {
             else_value: *Expression,
         },
     };
-    pub fn print(self: Expression, writer: anytype, prefix: []const u8, depth: usize) void {
+    pub fn print(self: Expression, writer: *std.Io.Writer, prefix: []const u8, depth: usize) void {
         writer.print("\n", .{});
         var d: usize = 0;
         while (d < depth) : (d += 1) {
@@ -160,6 +154,12 @@ pub const Statement = struct {
             body: []const Statement,
             is_backup: bool,
         },
+        function: struct {
+            is_method: bool = false,
+            name: []const u8,
+            parameters: [][]const u8,
+            body: []const Statement,
+        },
         @"if": struct {
             condition: *Expression,
             then_branch: []const Statement,
@@ -180,6 +180,7 @@ pub const Statement = struct {
             name: []const u8,
             field_names: [][]const u8,
             fields: []const Expression,
+            methods: []const Statement,
         },
         variable: struct {
             name: []const u8,
@@ -204,7 +205,7 @@ pub const Statement = struct {
         },
     };
 
-    pub fn print(self: Statement, writer: anytype, prefix: []const u8, depth: usize) void {
+    pub fn print(self: Statement, writer: *std.Io.Writer, prefix: []const u8, depth: usize) void {
         writer.print("\n", .{});
         var d: usize = 0;
         while (d < depth) : (d += 1) {
