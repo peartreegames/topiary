@@ -44,20 +44,18 @@ pub const State = struct {
             if (value == .void) continue;
             if (value == .visit and value.visit == 0) continue;
 
-            var is_func = false;
             var is_str = false;
             const is_mut = s.is_mutable;
             const is_obj = value == .obj;
             if (is_obj) {
-                const is_builtin = value.obj.data == .builtin or value.obj.data == .ext_function;
-                if (is_builtin) continue;
-                is_func = value.obj.data == .closure or value.obj.data == .function;
-                is_str = value.obj.data == .string;
+                const is_func = value.obj.data == .builtin or value.obj.data == .ext_function or value.obj.data == .function;
+                if (is_func) continue;
+                is_str = value.obj.data == .string or value == .const_string;
             }
             // we don't need to save 'const' values (except visits)
             if (!is_mut and !is_obj and value != .visit) continue;
             // or 'const' strings and functions;
-            if (!is_mut and (is_func or is_str)) continue;
+            if (!is_mut and is_str) continue;
 
             try stream.objectField(s.name);
             try serializeValue(vm.alloc, value, &stream, &references);
@@ -141,20 +139,6 @@ pub const State = struct {
                 try stream.write(f.is_method);
                 try stream.endObject();
             },
-            .closure => |c| {
-                try stream.beginObject();
-                try stream.objectField("function");
-
-                const obj: *Value.Obj = @fieldParentPtr("data", c.data);
-                try serializeValue(allocator, .{ .obj = obj }, stream, references);
-
-                try stream.objectField("free_values");
-                try stream.beginArray();
-                for (c.free_values) |v| try serializeValue(allocator, v, stream, references);
-                try stream.endArray();
-
-                try stream.endObject();
-            },
             .class => |c| {
                 try stream.beginObject();
                 try stream.objectField("name");
@@ -170,6 +154,18 @@ pub const State = struct {
                     try stream.endObject();
                 }
                 try stream.endArray();
+
+                try stream.objectField("methods");
+                try stream.beginArray();
+                for (c.methods) |m| {
+                    try stream.beginObject();
+                    try stream.objectField("name");
+                    try stream.write(m.name);
+                    try stream.objectField("value");
+                    try serializeValue(allocator, m.value, stream, references);
+                    try stream.endObject();
+                }
+                try stream.endArray();
                 try stream.endObject();
             },
             .instance => |i| {
@@ -182,7 +178,7 @@ pub const State = struct {
                 try stream.endArray();
                 try stream.endObject();
             },
-            else => try stream.write("NOT IMPL"),
+            else => return error.NotImplemented,
         }
         try stream.endObject();
     }
@@ -190,6 +186,7 @@ pub const State = struct {
     fn serializeValue(allocator: std.mem.Allocator, value: Value, stream: anytype, references: *std.ArrayList(Value)) !void {
         try stream.beginObject();
         switch (value) {
+            .const_string => try stream.objectField(@tagName(.string)),
             .obj => |o| switch (o.data) {
                 .string => try stream.objectField(@tagName(.string)),
                 else => try stream.objectField(@tagName(.ref)),
@@ -210,6 +207,7 @@ pub const State = struct {
                 try stream.write(e.index);
                 try stream.endObject();
             },
+            .const_string => |s| try stream.write(s),
             .ref => |r| try stream.write(&r),
             .obj => |o| {
                 switch (o.data) {
@@ -220,7 +218,7 @@ pub const State = struct {
                     },
                 }
             },
-            else => try stream.write("NOT IMPl"),
+            else => return error.NotImplemented,
         }
         try stream.endObject();
     }
@@ -316,6 +314,7 @@ pub const State = struct {
                     .name = try vm.alloc.dupe(u8, v.object.get("name").?.string),
                     .is_seq = v.object.get("is_seq").?.bool,
                     .values = vals,
+                    .is_gc_managed = true,
                 },
             });
             result.obj.id = id.?;
@@ -362,15 +361,23 @@ pub const State = struct {
         if (entry.object.get("class")) |v| {
             const name = try vm.alloc.dupe(u8, v.object.get("name").?.string);
             const ser_fields = v.object.get("fields").?.array.items;
-            var fields = try vm.alloc.alloc(Class.Field, ser_fields.len);
+            var fields = try vm.alloc.alloc(Class.Member, ser_fields.len);
             for (ser_fields, 0..) |f, i| {
                 fields[i].name = try vm.alloc.dupe(u8, f.object.get("name").?.string);
                 fields[i].value = try deserializeEntry(vm, root, f.object.get("value").?, refs, null);
+            }
+            const ser_methods = v.object.get("methods").?.array.items;
+            var methods = try vm.alloc.alloc(Class.Member, ser_methods.len);
+            for (ser_methods, 0..) |m, i| {
+                methods[i].name = try vm.alloc.dupe(u8, m.object.get("name").?.string);
+                methods[i].value = try deserializeEntry(vm, root, m.object.get("value").?, refs, null);
             }
             var result = try vm.gc.create(vm, .{ .class = .{
                 .allocator = vm.alloc,
                 .name = name,
                 .fields = fields,
+                .methods = methods,
+                .is_gc_managed = true,
             } });
             result.obj.id = id.?;
             try refs.put(vm.alloc, id.?, result);

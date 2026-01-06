@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn tags(
+pub fn array(
     comptime fmt: []const u8,
     s: anytype,
 ) struct {

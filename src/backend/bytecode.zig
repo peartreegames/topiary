@@ -15,12 +15,10 @@ pub const Bytecode = struct {
     uuids: []UUID.ID,
     locals_count: usize,
     debug_info: []DebugInfo,
-    boughs: []BoughJump,
     loc: []const u8,
 
-    const section_count = 7;
+    const section_count = 6;
     const header_size = section_count * @sizeOf(u64);
-    pub const BoughJump = struct { name: []const u8, ip: C.JUMP };
 
     pub const GlobalSymbol = struct {
         name: []const u8,
@@ -34,16 +32,12 @@ pub const Bytecode = struct {
         for (self.debug_info) |*d| d.*.deinit();
         allocator.free(self.debug_info);
         for (self.constants) |item| {
-            if (item == .obj) {
-                Value.Obj.destroy(allocator, item.obj);
-            }
+            item.destroy(allocator);
         }
         allocator.free(self.constants);
         allocator.free(self.uuids);
         for (self.global_symbols) |s| allocator.free(s.name);
         allocator.free(self.global_symbols);
-        for (self.boughs) |b| allocator.free(b.name);
-        allocator.free(self.boughs);
         allocator.free(self.loc);
     }
 
@@ -55,15 +49,6 @@ pub const Bytecode = struct {
             try writer.writeInt(C.GLOBAL, @as(C.GLOBAL, @intCast(sym.index)), .little);
             try writer.writeByte(if (sym.is_extern) 1 else 0);
             try writer.writeByte(if (sym.is_mutable) 1 else 0);
-        }
-    }
-
-    fn writeBoughs(self: *Bytecode, writer: *std.Io.Writer) !void {
-        try writer.writeInt(u64, @as(u64, @intCast(self.boughs.len)), .little);
-        for (self.boughs) |bough| {
-            try writer.writeInt(u16, @as(u16, @intCast(bough.name.len)), .little);
-            try writer.writeAll(bough.name);
-            try writer.writeInt(C.JUMP, bough.ip, .little);
         }
     }
 
@@ -103,21 +88,18 @@ pub const Bytecode = struct {
         try self.writeGlobals(alloc_writer);
 
         offsets[1] = header_size + allocating.written().len;
-        try self.writeBoughs(alloc_writer);
-
-        offsets[2] = header_size + allocating.written().len;
         try self.writeInstructions(alloc_writer);
 
-        offsets[3] = header_size + allocating.written().len;
+        offsets[2] = header_size + allocating.written().len;
         try self.writeDebug(alloc_writer);
 
-        offsets[4] = header_size + allocating.written().len;
+        offsets[3] = header_size + allocating.written().len;
         try self.writeConstants(alloc_writer);
 
-        offsets[5] = header_size + allocating.written().len;
+        offsets[4] = header_size + allocating.written().len;
         try self.writeUuids(alloc_writer);
 
-        offsets[6] = header_size + allocating.written().len;
+        offsets[5] = header_size + allocating.written().len;
         try self.writeLocalization(alloc_writer);
 
         const result = header_size + allocating.written().len;
@@ -148,21 +130,6 @@ pub const Bytecode = struct {
                 .index = index,
                 .is_extern = is_extern,
                 .is_mutable = is_mutable,
-            };
-        }
-
-        const bough_count = try reader.takeInt(u64, .little);
-        var boughs = try allocator.alloc(BoughJump, bough_count);
-        errdefer allocator.free(boughs);
-        count = 0;
-        while (count < bough_count) : (count += 1) {
-            const length = try reader.takeInt(u16, .little);
-            const buf = try allocator.alloc(u8, length);
-            errdefer allocator.free(buf);
-            try reader.readSliceAll(buf);
-            boughs[count] = BoughJump{
-                .name = buf,
-                .ip = try reader.takeInt(C.JUMP, .little),
             };
         }
 
@@ -197,7 +164,6 @@ pub const Bytecode = struct {
         return .{
             .instructions = instructions,
             .debug_info = debug_info,
-            .boughs = boughs,
             .constants = constants,
             .global_symbols = global_symbols,
             .uuids = uuids,
@@ -209,9 +175,19 @@ pub const Bytecode = struct {
     pub fn print(code: *Bytecode, writer: *std.Io.Writer) !void {
         try writer.print("\n==BYTECODE==\n", .{});
         try printInstructions(writer, code.instructions);
+        try writer.print("\n==DEBUG==\n", .{});
+        try printDebugInfo(writer, code.debug_info);
+        try writer.print("\n==GLOBALS==\n", .{});
+        for(code.global_symbols) |g| {
+            try writer.print("{d} {s}", .{g.index, g.name});
+            try writer.print("\n", .{});
+        }
+        try writer.print("\n==CONSTANTS==\n", .{});
+        for (code.constants) |value| {
+            try value.print(writer, null);
+            try writer.print("\n", .{});
+        }
         try writer.flush();
-        // try writer.print("\n==DEBUG==\n", .{});
-        // try printDebugInfo(writer, code.debug_info);
     }
 
     pub fn printDebugInfo(writer: *std.Io.Writer, debug: []DebugInfo) !void {
@@ -244,17 +220,9 @@ pub const Bytecode = struct {
                     i += 4;
                 },
                 .divert => {
-                    var count = instructions[i];
-                    i += 1;
                     const dest = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
                     i += 4;
-                    count -= 1;
                     try writer.print("{d: >8} ", .{dest});
-                    while (count > 0) : (count -= 1) {
-                        const next = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
-                        try writer.print(" {d}", .{next});
-                        i += 4;
-                    }
                 },
                 .get_local,
                 .set_local,
@@ -266,12 +234,16 @@ pub const Bytecode = struct {
                     try writer.print("{d: >8}", .{dest});
                     i += 2;
                 },
+                .get_upvalue,
+                .set_upvalue, => {
+                    const frames_up = instructions[i];
+                    i += 1;
+                    const index = std.mem.readVarInt(C.LOCAL, instructions[i..(i + 2)], .little);
+                    i += 2;
+                    try writer.print("{d: >8} {d}", .{frames_up, index});
+                },
                 .call,
-                .class,
                 .instance,
-                .get_builtin,
-                .get_free,
-                .set_free,
                 => {
                     const dest = instructions[i];
                     try writer.print("{d: >8}", .{dest});
@@ -309,12 +281,11 @@ pub const Bytecode = struct {
                     try writer.print("{d: >8}", .{dest});
                     try writer.print(" unique: {}, tags: {d}", .{ is_unique, tag_count });
                 },
-                .string, .closure => {
+                .string => {
                     const index = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);
                     i += 4;
                     try writer.print("{d: >8}", .{index});
                     i += 1;
-                    try writer.print("   = ", .{});
                 },
                 .prong => {
                     const index = std.mem.readVarInt(u32, instructions[i..(i + 4)], .little);

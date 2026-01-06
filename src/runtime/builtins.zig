@@ -34,10 +34,7 @@ pub const functions = std.StaticStringMap(Value).initComptime(.{ .{
 }, .{
     "mstime",
     create("mstime", 0, false, mstime),
-}, .{
-    "ustime",
-    create("ustime", 0, false, ustime),
-} });
+}});
 
 pub const methods = std.StaticStringMap(Value).initComptime(.{ .{
     "count",
@@ -107,10 +104,7 @@ fn print(vm: *Vm, args: []Value) Value {
 }
 
 fn mstime(_: *Vm, _: []Value) Value {
-    return .{ .number = @floatFromInt(std.time.milliTimestamp()) };
-}
-fn ustime(_: *Vm, _: []Value) Value {
-    return .{ .number = @floatFromInt(std.time.microTimestamp()) };
+    return .{ .timestamp = std.time.milliTimestamp() };
 }
 
 fn assert(_: *Vm, args: []Value) Value {

@@ -159,6 +159,7 @@ pub const Statement = struct {
             name: []const u8,
             parameters: [][]const u8,
             body: []const Statement,
+            is_extern: bool,
         },
         @"if": struct {
             condition: *Expression,
@@ -186,7 +187,6 @@ pub const Statement = struct {
             name: []const u8,
             initializer: Expression,
             is_mutable: bool = false,
-            is_extern: bool = false,
         },
         @"while": struct {
             condition: Expression,

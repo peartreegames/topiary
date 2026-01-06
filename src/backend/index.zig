@@ -13,7 +13,6 @@ const Symbol = scope.Symbol;
 
 const compiler = @import("compiler.zig");
 pub const Compiler = compiler.Compiler;
-pub const initial_constants = compiler.initial_constants;
 
 const debug = @import("debug.zig");
 pub const DebugInfo = debug.DebugInfo;

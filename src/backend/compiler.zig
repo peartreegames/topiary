@@ -8,6 +8,7 @@ const Token = frontend.Token;
 const utils = @import("../utils/index.zig");
 const UUID = utils.UUID;
 const C = utils.C;
+const fmt = utils.fmt;
 
 const builtins = @import("../runtime/index.zig").builtins;
 
@@ -23,8 +24,6 @@ const Symbol = scope.Symbol;
 const DebugInfo = @import("debug.zig").DebugInfo;
 const CompilerErrors = @import("error.zig").CompilerErrors;
 const Bytecode = @import("bytecode.zig").Bytecode;
-const JumpTree = @import("jump-tree.zig").JumpTree;
-const VisitTree = @import("visit-tree.zig").VisitTree;
 const OpCode = @import("opcode.zig").OpCode;
 
 const BREAK_HOLDER = 9000;
@@ -36,15 +35,7 @@ const PRONG_HOLDER = 9005;
 const SWITCH_END_HOLDER = 9006;
 const JUMP_HOLDER = 9999;
 
-pub const initial_constants = [_]Value{
-    .{ .number = 0 },
-    .{ .number = 1 },
-    .{ .bool = false },
-    .{ .bool = true },
-    .{ .visit = 0 },
-};
-
-fn arrayOfTypeContains(comptime T: type, haystack: []const []const T, needle: []const T) bool {
+fn arrayContains(comptime T: type, haystack: []const []const T, needle: []const T) bool {
     for (haystack) |element| {
         if (std.mem.eql(T, element, needle)) return true;
     }
@@ -52,23 +43,20 @@ fn arrayOfTypeContains(comptime T: type, haystack: []const []const T, needle: []
 }
 pub const Compiler = struct {
     alloc: std.mem.Allocator,
-    builtins: *Scope,
     constants: std.ArrayList(Value),
+    constants_map: std.StringHashMapUnmanaged(C.CONSTANT),
+    literal_cache: std.ArrayHashMapUnmanaged(Value, C.CONSTANT, Value.Adapter, true),
     uuids: std.ArrayList(UUID.ID),
     err: *CompilerErrors,
     scope: *Scope,
     root_scope: *Scope,
-    identifier_cache: std.StringHashMapUnmanaged(C.CONSTANT),
     chunk: *Chunk,
     locals_count: usize = 0,
     use_loc: bool = false,
 
     module: *Module,
-    jump_tree: JumpTree,
-    divert_log: std.ArrayList(JumpTree.Entry),
-    visit_tree: VisitTree,
-
-    types: std.StringHashMapUnmanaged(Statement),
+    path_stack: std.ArrayList([]const u8),
+    anon_counters: std.ArrayList(usize),
 
     pub const Chunk = struct {
         instructions: std.ArrayList(u8),
@@ -161,20 +149,17 @@ pub const Compiler = struct {
         if (!module.entry.tree_loaded) return error.CompilerError;
         const root_chunk = try Compiler.Chunk.init(alloc, null, module);
         const root_scope = try Scope.create(alloc, null, .global);
-        const root_builtins = try Scope.create(alloc, null, .builtin);
         return .{
             .alloc = alloc,
-            .builtins = root_builtins,
             .constants = .empty,
+            .constants_map = .empty,
+            .literal_cache = .empty,
             .uuids = .empty,
-            .identifier_cache = .empty,
             .chunk = root_chunk,
             .scope = root_scope,
             .root_scope = root_scope,
-            .jump_tree = try JumpTree.init(alloc),
-            .visit_tree = try VisitTree.init(alloc),
-            .divert_log = .empty,
-            .types = .empty,
+            .path_stack = .empty,
+            .anon_counters = .empty,
             .err = &module.entry.errors,
             .module = module,
         };
@@ -182,19 +167,25 @@ pub const Compiler = struct {
 
     pub fn deinit(self: *Compiler) void {
         self.chunk.deinit();
-        self.root_scope.destroy();
-        self.jump_tree.deinit();
-        self.visit_tree.deinit();
-        for (self.constants.items) |item| {
-            if (item == .obj) {
-                Value.Obj.destroy(self.alloc, item.obj);
-            }
+        var current_scope: ?*Scope = self.scope;
+        while (current_scope) |s| {
+            current_scope = s.parent;
+            s.destroy();
         }
+        for (self.constants.items) |item| {
+            item.destroy(self.alloc);
+        }
+        var iter = self.constants_map.keyIterator();
+        while (iter.next()) |name| {
+            self.alloc.free(name.*);
+        }
+
+        self.constants_map.deinit(self.alloc);
+        self.literal_cache.deinit(self.alloc);
         self.constants.deinit(self.alloc);
-        self.divert_log.deinit(self.alloc);
-        self.identifier_cache.deinit(self.alloc);
-        self.builtins.destroy();
-        self.types.deinit(self.alloc);
+        self.path_stack.deinit(self.alloc);
+        self.anon_counters.deinit(self.alloc);
+        self.uuids.deinit(self.alloc);
     }
 
     fn fail(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype) Error {
@@ -218,30 +209,6 @@ pub const Compiler = struct {
                 .is_mutable = s.is_mutable,
             };
         }
-        var boughs: std.ArrayList(Bytecode.BoughJump) = .empty;
-        errdefer boughs.deinit(self.alloc);
-        var stack: std.ArrayList(*const JumpTree.Node) = .empty;
-        defer stack.deinit(self.alloc);
-        // reverse iterate so we keep the order when popping off stack
-        var i: usize = self.jump_tree.root.children.items.len;
-        while (i > 0) {
-            i -= 1;
-            try stack.append(self.alloc, self.jump_tree.root.children.items[i]);
-        }
-        while (stack.pop()) |node| {
-            var aw: std.Io.Writer.Allocating = .init(self.alloc);
-            try node.writePath(self.alloc, &aw.writer);
-            try boughs.append(self.alloc, .{
-                .name = try aw.toOwnedSlice(),
-                .ip = node.dest_ip,
-            });
-            var child_i: usize = node.children.items.len;
-            while (child_i > 0) {
-                child_i -= 1;
-                try stack.append(self.alloc, node.children.items[child_i]);
-            }
-        }
-
         var loc: std.ArrayList(u8) = .empty;
         defer loc.deinit(self.alloc);
         if (self.use_loc) {
@@ -255,7 +222,6 @@ pub const Compiler = struct {
         }
         return .{
             .instructions = try self.chunk.instructions.toOwnedSlice(self.alloc),
-            .boughs = try boughs.toOwnedSlice(self.alloc),
             .debug_info = try self.chunk.debugInfo(self.alloc),
             .constants = try self.constants.toOwnedSlice(self.alloc),
             .global_symbols = global_symbols,
@@ -268,26 +234,18 @@ pub const Compiler = struct {
     pub fn compile(self: *Compiler) Error!void {
         const tree = self.module.entry.tree;
         for (builtins.keys()) |name| {
-            _ = try self.builtins.define(name, false, false);
+            const obj = try self.alloc.create(Value.Obj);
+            obj.* = .{ .data = builtins.get(name).?.obj.data };
+            try self.addNamedConstant(name, .{ .obj = obj });
         }
-
-        try self.initializeConstants();
-
         for (tree.root) |stmt| {
-            // We first get a list of all boughs and named forks,
-            // then we'll switch out all the divert jump locations
-            // to the appropriate places.
-            // Alternatively, maybe it'd be better to store boughs and named forks
-            // as constant values, then just fetch the ip location as needed.
-            try self.precompileJumps(stmt, self.jump_tree.root);
+            try self.prepass(stmt);
         }
-        self.visit_tree.reset();
 
         for (tree.root) |stmt| {
             try self.compileStatement(stmt);
         }
 
-        try self.replaceDiverts();
         // Add one final fin at the end of file to grab the initial jump_request
         if (self.chunk.debug_markers.items.len > 0) {
             const dupe = self.chunk.debug_markers.items[self.chunk.debug_markers.items.len - 1];
@@ -318,7 +276,7 @@ pub const Compiler = struct {
         old_scope.destroy();
     }
 
-    pub fn precompileJumps(self: *Compiler, stmt: Statement, node: *JumpTree.Node) Error!void {
+    pub fn prepass(self: *Compiler, stmt: Statement) Error!void {
         switch (stmt.type) {
             .include => |i| {
                 const tmp = self.err;
@@ -327,55 +285,76 @@ pub const Compiler = struct {
                 } else {
                     return self.fail("Unknown include file {s}", stmt.token, .{i.path});
                 }
-                for (i.contents) |s| try self.precompileJumps(s, node);
+                for (i.contents) |s| try self.prepass(s);
                 self.err = tmp;
             },
+            .function => |f| {
+                const full_name = try self.getQualifiedName(f.name);
+                defer self.alloc.free(full_name);
+                _ = try self.addNamedConstant(full_name, .nil);
+            },
+            .class => |c| {
+                const full_name = try self.getQualifiedName(c.name);
+                defer self.alloc.free(full_name);
+                _ = try self.addNamedConstant(full_name, .nil);
+            },
+            .@"enum" => |e| {
+                const full_name = try self.getQualifiedName(e.name);
+                defer self.alloc.free(full_name);
+                _ = try self.addNamedConstant(full_name, .nil);
+            },
             .bough => |b| {
-                try self.compileVisitDecl(b.name, stmt.token);
-                defer _ = self.visit_tree.list.pop();
-                defer self.visit_tree.pop();
-
-                const bough_node = try JumpTree.Node.create(self.alloc, b.name, node);
-                for (b.body) |s| try self.precompileJumps(s, bough_node);
-                try node.children.append(self.alloc, bough_node);
+                const full_name = try self.getQualifiedName(b.name);
+                self.registerAnchor(full_name) catch |err| return self.fail("Could not register anchor {s}: {t}", stmt.token, .{ b.name, err });
+                try self.path_stack.append(self.alloc, b.name);
+                try self.anon_counters.append(self.alloc, 0);
+                defer _ = self.path_stack.pop();
+                defer _ = self.anon_counters.pop();
+                for (b.body) |s| try self.prepass(s);
             },
             .fork => |f| {
-                var v_node = self.visit_tree.current;
-                const fork_count = try std.fmt.allocPrint(self.alloc, "_{d}", .{v_node.anon_count});
-                defer self.alloc.free(fork_count);
-                v_node.anon_count += 1;
-
-                try self.compileVisitDecl(f.name orelse fork_count, stmt.token);
-                defer _ = self.visit_tree.list.pop();
-                defer self.visit_tree.pop();
-
+                var fork_name: []const u8 = undefined;
                 if (f.name) |name| {
-                    const fork_node = try JumpTree.Node.create(self.alloc, name, node);
-                    for (f.body) |s| try self.precompileJumps(s, fork_node);
-                    try node.children.append(self.alloc, fork_node);
+                    fork_name = try self.alloc.dupe(u8, name);
                 } else {
-                    for (f.body) |s| try self.precompileJumps(s, node);
+                    const current_depth = self.anon_counters.items.len - 1;
+                    const count = self.anon_counters.items[current_depth];
+                    fork_name = try std.fmt.allocPrint(self.alloc, "_{d}", .{count});
+                    self.anon_counters.items[current_depth] += 1;
                 }
+
+                defer self.alloc.free(fork_name);
+
+                const full_name = try self.getQualifiedName(fork_name);
+                self.registerAnchor(full_name) catch |err| return self.fail("Could not register anchor {s}: {t}", stmt.token, .{ fork_name, err });
+                try self.path_stack.append(self.alloc, fork_name);
+                try self.anon_counters.append(self.alloc, 0);
+                defer _ = self.path_stack.pop();
+                defer _ = self.anon_counters.pop();
+
+                for (f.body) |s| try self.prepass(s);
             },
             .choice => |c| {
                 const name = c.name orelse &c.id;
-                try self.compileVisitDecl(name, stmt.token);
-                defer _ = self.visit_tree.list.pop();
-                defer self.visit_tree.pop();
-
-                for (c.body) |s| try self.precompileJumps(s, node);
+                const full_name = try self.getQualifiedName(name);
+                self.registerAnchor(full_name) catch |err| return self.fail("Could not register anchor {s}: {t}", stmt.token, .{ name, err });
+                try self.path_stack.append(self.alloc, name);
+                try self.anon_counters.append(self.alloc, 0);
+                defer _ = self.path_stack.pop();
+                defer _ = self.anon_counters.pop();
+                for (c.body) |s| try self.prepass(s);
             },
             .@"if" => |i| {
-                for (i.then_branch) |s| try self.precompileJumps(s, node);
+                for (i.then_branch) |s| try self.prepass(s);
                 if (i.else_branch) |e| {
-                    for (e) |s| try self.precompileJumps(s, node);
+                    for (e) |s| try self.prepass(s);
                 }
             },
             .@"while" => |w| {
-                for (w.body) |s| try self.precompileJumps(s, node);
+                for (w.body) |s| try self.prepass(s);
             },
             .@"for" => |f| {
-                for (f.body) |s| try self.precompileJumps(s, node);
+                for (f.body) |s| try self.prepass(s);
             },
             else => {},
         }
@@ -414,48 +393,10 @@ pub const Compiler = struct {
                 try self.replaceValue(jumpPos, C.JUMP, self.instructionPos());
             },
             .function => |f| {
-                try self.enterScope(.local);
-                try self.enterChunk();
-
-                var length = f.parameters.len;
-                if (f.is_method) {
-                    length += 1;
-                    _ = try self.scope.define("self", false, false);
-                }
-
-                for (f.parameters) |param| {
-                    _ = try self.scope.define(param, true, false);
-                }
-
-                try self.compileBlock(f.body);
-                if (!(try self.lastIs(.return_value)) and !(try self.lastIs(.return_void))) {
-                    try self.writeOp(.return_void, token);
-                }
-
-                const chunk = try self.exitChunk();
-                defer chunk.deinit();
-                const count = self.scope.count;
-
-                try self.exitScope();
-                const obj = try self.alloc.create(Value.Obj);
-
-                obj.* = .{
-                    .id = UUID.new(),
-                    .data = .{
-                        .function = .{
-                            .is_method = f.is_method,
-                            .instructions = try chunk.instructions.toOwnedSlice(self.alloc),
-                            .debug_info = try chunk.debugInfo(self.alloc),
-                            .locals_count = count,
-                            .arity = @as(u8, @intCast(length)),
-                        },
-                    },
-                };
-                const i = try self.addConstant(.{ .obj = obj });
-
-                const symbol = try self.scope.define(f.name, false, false);
-                symbol.tag = .constant;
-                symbol.index = i;
+                const obj = try self.compileFunctionObj(stmt, token);
+                const full_name = try self.getQualifiedName(f.name);
+                defer self.alloc.free(full_name);
+                try self.replaceConstant(full_name, .{ .obj = obj }, token);
             },
             .@"switch" => |s| {
                 const start = self.instructionPos();
@@ -573,7 +514,7 @@ pub const Compiler = struct {
                 try self.writeOp(.pop, token);
             },
             .variable => |v| {
-                if (self.builtins.symbols.contains(v.name))
+                if (builtins.has(v.name))
                     return self.failError("'{s}' is a builtin function and cannot be used as a variable name", stmt.token, .{v.name}, Error.IllegalOperation);
                 if (self.scope.parent != null and v.is_extern)
                     return self.failError("Only global variables can be extern.", token, .{}, Error.IllegalOperation);
@@ -581,27 +522,44 @@ pub const Compiler = struct {
                     return self.fail("'{s}' is already declared", token, .{v.name});
                 };
                 try self.compileExpression(&v.initializer);
-                try self.setSymbol(symbol, token, true);
+                try self.setSymbol(v.name, symbol, token, true);
             },
             .class => |c| {
-                try self.types.putNoClobber(self.alloc, c.name, stmt);
-                try self.enterScope(.local);
-                for (c.fields, 0..) |field, i| {
-                    try self.compileExpression(&field);
-                    try self.getOrSetIdentifierConstant(c.field_names[i], token);
-                }
-                try self.exitScope();
+                var fields = try self.alloc.alloc(types.Class.Member, c.fields.len);
+                errdefer self.alloc.free(fields);
 
-                try self.getOrSetIdentifierConstant(c.name, token);
-                try self.writeOp(.class, token);
-                _ = try self.writeInt(C.FIELDS, @as(C.FIELDS, @intCast(c.fields.len)), token);
-                const symbol = self.scope.define(c.name, false, false) catch {
-                    return self.fail("'{s}' is already declared", token, .{c.name});
+                for (c.fields, 0..) |field_expr, i| {
+                    fields[i] = .{
+                        .name = try self.alloc.dupe(u8, c.field_names[i]),
+                        .value = try self.evaluateLiteral(&field_expr),
+                    };
+                }
+                var methods = try self.alloc.alloc(types.Class.Member, c.methods.len);
+                errdefer self.alloc.free(methods);
+
+                for (c.methods, 0..) |method_stmt, i| {
+                    const func = method_stmt.type.function;
+                    const name = func.name;
+
+                    const func_obj = try self.compileFunctionObj(method_stmt, method_stmt.token);
+
+                    methods[i] = .{
+                        .name = try self.alloc.dupe(u8, name),
+                        .value = .{ .obj = func_obj },
+                    };
+                }
+                const class_data = try types.Class.init(self.alloc, try self.alloc.dupe(u8, c.name), fields, methods);
+                const obj = try self.alloc.create(Value.Obj);
+                obj.* = .{
+                    .id = UUID.new(),
+                    .data = .{ .class = class_data },
                 };
-                try self.setSymbol(symbol, token, true);
+
+                const full_name = try self.getQualifiedName(c.name);
+                defer self.alloc.free(full_name);
+                try self.replaceConstant(full_name, .{ .obj = obj }, token);
             },
             .@"enum" => |e| {
-                try self.types.putNoClobber(self.alloc, e.name, stmt);
                 var values = try self.alloc.alloc([]const u8, e.values.len);
                 const obj = try self.alloc.create(Value.Obj);
 
@@ -619,47 +577,41 @@ pub const Compiler = struct {
                         },
                     },
                 };
-                const i = try self.addConstant(.{ .obj = obj });
-                try self.writeOp(.constant, token);
-                _ = try self.writeInt(C.CONSTANT, i, token);
 
-                const symbol = try self.scope.define(e.name, false, false);
-                try self.setSymbol(symbol, token, true);
+                const full_name = try self.getQualifiedName(e.name);
+                defer self.alloc.free(full_name);
+                try self.replaceConstant(full_name, .{ .obj = obj }, token);
             },
             .fork => |f| {
-                const anon_count = self.visit_tree.current.anon_count;
-                const fork_count = try std.fmt.allocPrint(self.alloc, "_{d}", .{anon_count});
-                defer self.alloc.free(fork_count);
-
-                self.visit_tree.current.anon_count += 1;
-                const cur = if (self.visit_tree.current.getChild(f.name orelse fork_count)) |n| n else {
-                    var buffer: [1024]u8 = undefined;
-                    var writer = std.fs.File.stderr().writer(&buffer);
-                    const stderr = &writer.interface;
-                    self.visit_tree.print(stderr);
-                    return self.fail("Could not find '{s}' in visit tree node '{s}'", token, .{ f.name orelse fork_count, self.visit_tree.current.name });
-                };
-                self.visit_tree.current = cur;
-                defer self.visit_tree.current = cur.parent.?;
-
-                try self.visit_tree.list.append(self.alloc, f.name orelse fork_count);
-                defer _ = self.visit_tree.list.pop();
-
-                const path = try std.mem.join(self.alloc, ".", self.visit_tree.list.items);
-                defer self.alloc.free(path);
-                const symbol = try self.root_scope.resolve(path);
-                try self.compileVisit(symbol, path, token);
-
+                var fork_name: []const u8 = undefined;
                 if (f.name) |name| {
-                    self.jump_tree.current = try self.jump_tree.current.getChild(name);
-                    self.jump_tree.current.*.dest_ip = self.instructionPos();
+                    fork_name = try self.alloc.dupe(u8, name);
+                } else {
+                    const current_depth = self.anon_counters.items.len - 1;
+                    const count = self.anon_counters.items[current_depth];
+                    fork_name = try std.fmt.allocPrint(self.alloc, "_{d}", .{count});
+                    self.anon_counters.items[current_depth] += 1;
                 }
+                defer self.alloc.free(fork_name);
+
+                const path = try self.getQualifiedName(fork_name);
+                defer self.alloc.free(path);
+
+                try self.path_stack.append(self.alloc, fork_name);
+                try self.anon_counters.append(self.alloc, 0);
+                defer _ = self.path_stack.pop();
+                defer _ = self.anon_counters.pop();
+
+                const start_pos = self.instructionPos();
+                const anchor_idx = try self.resolveConstant(path);
+                if (anchor_idx) |idx| {
+                    self.constants.items[idx].obj.data.anchor.ip = start_pos;
+                    try self.compileVisit(idx, token);
+                } else return self.fail("Could not find anchor {s}", token, .{path});
+
                 try self.enterScope(.local);
                 try self.compileBlock(f.body);
                 try self.exitScope();
-                if (f.name != null) {
-                    self.jump_tree.pop();
-                }
 
                 var backup_pos: usize = 0;
                 if (f.is_backup) {
@@ -674,24 +626,15 @@ pub const Compiler = struct {
             },
             .choice => |c| {
                 for (c.tags) |tag| {
-                    try self.getOrSetIdentifierConstant(tag, token);
+                    try self.addIdentifierConstant(tag, token);
                 }
                 const name = c.name orelse &c.id;
-                try self.visit_tree.list.append(self.alloc, name);
-                const cur = if (self.visit_tree.current.getChild(name)) |n| n else {
-                    var buffer: [1024]u8 = undefined;
-                    var writer = std.fs.File.stderr().writer(&buffer);
-                    const stderr = &writer.interface;
-                    self.visit_tree.print(stderr);
-                    return self.fail("Could not find '{s}' in visit tree node '{s}'", token, .{ name, self.visit_tree.current.name });
-                };
-                self.visit_tree.current = cur;
-                defer self.visit_tree.current = cur.parent.?;
-                defer _ = self.visit_tree.list.pop();
+                const full_name = try self.getQualifiedName(name);
+                defer self.alloc.free(full_name);
 
-                const path = try std.mem.join(self.alloc, ".", self.visit_tree.list.items);
-                defer self.alloc.free(path);
-                const visit_symbol = try self.root_scope.resolve(path);
+                const entry_ip = self.instructionPos();
+                const anchor_idx = try self.resolveConstant(full_name) orelse return self.fail("Could not find anchor {s}", token, .{full_name});
+                self.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
 
                 if (self.use_loc) {
                     const s = c.content.type.string;
@@ -707,7 +650,8 @@ pub const Compiler = struct {
                 const start_pos = try self.writeInt(C.JUMP, CHOICE_HOLDER, token);
                 _ = try self.writeInt(u8, if (c.is_unique) 1 else 0, token);
                 try self.writeId(c.id, token);
-                _ = try self.writeInt(C.GLOBAL, visit_symbol.?.index, token);
+
+                _ = try self.writeInt(C.CONSTANT, anchor_idx, token);
                 _ = try self.writeInt(u8, @as(u8, @intCast(c.tags.len)), token);
 
                 try self.writeOp(.jump, token);
@@ -716,39 +660,36 @@ pub const Compiler = struct {
 
                 try self.enterScope(.local);
 
-                try self.compileVisit(visit_symbol, path, token);
+                try self.compileVisit(anchor_idx, token);
                 try self.compileBlock(c.body);
                 try self.writeOp(.fin, token);
                 try self.exitScope();
                 try self.replaceValue(jump_pos, C.JUMP, self.instructionPos());
             },
             .bough => |b| {
-                try self.visit_tree.list.append(self.alloc, b.name);
-                self.visit_tree.current = self.visit_tree.current.getChild(b.name).?;
-                defer self.visit_tree.current = self.visit_tree.current.parent.?;
-                defer _ = self.visit_tree.list.pop();
+                const full_name = try self.getQualifiedName(b.name);
+                defer self.alloc.free(full_name);
 
-                // skip over bough when running through instructions
+                try self.path_stack.append(self.alloc, b.name);
+                try self.anon_counters.append(self.alloc, 0);
+                defer _ = self.path_stack.pop();
+                defer _ = self.anon_counters.pop();
+
                 try self.writeOp(.jump, token);
                 const start_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
-
-                self.jump_tree.current = try self.jump_tree.current.getChild(b.name);
-                self.jump_tree.current.*.dest_ip = self.instructionPos();
-                defer self.jump_tree.pop();
 
                 const locals_count = self.scope.count;
                 try self.enterScope(.local);
                 self.scope.count = locals_count;
                 errdefer self.exitScope() catch {};
 
-                const path = try std.mem.join(self.alloc, ".", self.visit_tree.list.items);
-                defer self.alloc.free(path);
-                const symbol = try self.root_scope.resolve(path);
-                try self.compileVisit(symbol, path, token);
+                const entry_ip = self.instructionPos();
+                const anchor_idx = try self.resolveConstant(full_name) orelse return self.fail("Could not find anchor {s}", token, .{full_name});
+                self.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
+                try self.compileVisit(anchor_idx, token);
 
                 try self.compileBlock(b.body);
                 try self.writeOp(.fin, token);
-
                 try self.exitScope();
 
                 const end = self.instructionPos();
@@ -756,7 +697,7 @@ pub const Compiler = struct {
             },
             .dialogue => |d| {
                 for (d.tags) |tag| {
-                    try self.getOrSetIdentifierConstant(tag, token);
+                    try self.addIdentifierConstant(tag, token);
                 }
 
                 if (self.use_loc) {
@@ -770,7 +711,7 @@ pub const Compiler = struct {
                 } else try self.compileExpression(d.content);
 
                 if (d.speaker) |speaker| {
-                    try self.getOrSetIdentifierConstant(speaker, token);
+                    try self.addIdentifierConstant(speaker, token);
                 }
                 try self.writeOp(.dialogue, d.content.token);
                 const has_speaker_value = if (d.speaker == null) @as(u8, 0) else @as(u8, 1);
@@ -779,27 +720,16 @@ pub const Compiler = struct {
                 try self.writeId(d.id, token);
             },
             .divert => |d| {
-                if (self.scope == self.root_scope) {
-                    const path = try std.mem.join(self.alloc, ".", d.path);
-                    defer self.alloc.free(path);
-                    return self.fail("Cannot execute jump \"{s}\" in global scope", token, .{path});
-                }
-                var backup_pos: usize = 0;
+                const anchor_idx = self.resolveAnchor(d.path) orelse return self.fail("Could not find anchor {f}", token, .{fmt.array("{s}.", d.path)});
                 if (d.is_backup) {
                     try self.writeOp(.backup, token);
-                    backup_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
-                }
-                try self.writeOp(.divert, token);
-                _ = try self.writeInt(u8, @as(u8, @intCast(d.path.len)), token);
-                var i: usize = d.path.len;
-                while (i > 0) : (i -= 1) {
-                    const node = try self.getDivertNode(d.path[0..i], token);
-                    try self.divert_log.append(self.alloc, .{ .node = node, .jump_ip = self.instructionPos() });
-                    _ = try self.writeInt(C.JUMP, DIVERT_HOLDER, token);
-                }
-                const end_pos = self.instructionPos();
-                if (d.is_backup) {
-                    try self.replaceValue(backup_pos, C.JUMP, end_pos);
+                    const backup_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
+                    try self.writeOp(.divert, token);
+                    _ = try self.writeInt(C.CONSTANT, anchor_idx, token);
+                    try self.replaceValue(backup_pos, C.JUMP, self.instructionPos());
+                } else {
+                    try self.writeOp(.divert, token);
+                    _ = try self.writeInt(C.CONSTANT, anchor_idx, token);
                 }
             },
             .return_expression => |r| {
@@ -816,31 +746,152 @@ pub const Compiler = struct {
         }
     }
 
-    fn getDivertNode(self: *Compiler, path: [][]const u8, token: Token) !*JumpTree.Node {
-        var node = self.jump_tree.current;
-        // traverse up the tree to find the start of the path
-        while (!std.mem.eql(u8, node.name, "root")) : (node = node.parent.?) {
-            if (std.mem.eql(u8, node.name, path[0])) {
-                node = node.parent.?;
-                break;
-            }
-            if (node.contains(path[0])) break;
-        }
+    fn evaluateLiteral(self: *Compiler, expr: *const Expression) Error!Value {
+        const token = expr.token;
+        switch (expr.type) {
+            .binary => |bin| {
+                const left = try self.evaluateLiteral(bin.left);
+                const right = try self.evaluateLiteral(bin.right);
 
-        // traverse back down to get the leaf node
-        for (path) |name| {
-            node = node.getChild(name) catch {
-                return self.fail("Could not find symbol '{s}'", token, .{name});
-            };
+                if (left == .number and right == .number) {
+                    return .{
+                        .number = switch (bin.operator) {
+                            .add => left.number + right.number,
+                            .subtract => left.number - right.number,
+                            .multiply => left.number * right.number,
+                            .divide => if (right.number == 0) return self.failError("Division by zero in static expression", token, .{}, Error.IllegalOperation) else left.number / right.number,
+                            else => return self.failError("Operator not supported in static expressions", token, .{}, Error.IllegalOperation),
+                        },
+                    };
+                }
+                return self.failError("Static math only supported on numbers", token, .{}, Error.IllegalOperation);
+            },
+            .unary => |u| {
+                const val = try self.evaluateLiteral(u.value);
+                if (val == .number and u.operator == .negate) return .{ .number = -val.number };
+                if (val == .bool and u.operator == .not) return .{ .bool = !val.bool };
+                return self.failError("Unary operator not supported in static expressions", token, .{}, Error.IllegalOperation);
+            },
+            .number => |n| return .{ .number = n },
+            .boolean => |b| return .{ .bool = b },
+            .string => |s| {
+                if (s.expressions.len > 0) {
+                    return self.failError("Interpolated strings are not allowed as static default values", token, .{}, Error.IllegalOperation);
+                }
+                const obj = try self.alloc.create(Value.Obj);
+                obj.* = .{ .data = .{ .string = try self.alloc.dupe(u8, s.value) } };
+                return .{ .obj = obj };
+            },
+            .identifier => |id| {
+                // Allow referencing other constants (like Enums or other Classes)
+                if (self.constants_map.get(id)) |idx| {
+                    return self.constants.items[idx];
+                }
+                return self.failError("Identifier '{s}' cannot be resolved at compile-time", token, .{id}, Error.CompilerError);
+            },
+            .indexer => |idx| {
+                // Handle Enum.Value references
+                if (idx.target.type == .identifier and token.token_type == .dot) {
+                    const target_name = idx.target.type.identifier;
+                    if (self.constants_map.get(target_name)) |target_idx| {
+                        const target_val = self.constants.items[target_idx];
+                        if (target_val == .obj and target_val.obj.data == .@"enum") {
+                            const enum_obj = target_val.obj.data.@"enum";
+                            const field_name = idx.index.type.identifier;
+
+                            for (enum_obj.values, 0..) |val_name, i| {
+                                if (std.mem.eql(u8, val_name, field_name)) {
+                                    return .{ .number = @floatFromInt(i) };
+                                }
+                            }
+                        }
+                    }
+                }
+                return self.failError("Expression cannot be evaluated at compile-time", token, .{}, Error.IllegalOperation);
+            },
+            .nil => return .nil,
+            .list => |l| {
+                var list = try std.ArrayList(Value).initCapacity(self.alloc, l.len);
+                for (l) |*item| {
+                    try list.append(self.alloc, try self.evaluateLiteral(item));
+                }
+                const obj = try self.alloc.create(Value.Obj);
+                obj.* = .{ .id = UUID.new(), .data = .{ .list = list } };
+                return .{ .obj = obj };
+            },
+            .set => |s| {
+                var set = Value.Obj.SetType.empty;
+                for (s) |*item| {
+                    try set.put(self.alloc, try self.evaluateLiteral(item), {});
+                }
+                const obj = try self.alloc.create(Value.Obj);
+                obj.* = .{ .id = UUID.new(), .data = .{ .set = set } };
+                return .{ .obj = obj };
+            },
+            .map => |m| {
+                var map = Value.Obj.MapType.empty;
+                for (m) |*mp| {
+                    const pair = mp.type.map_pair;
+                    try map.put(self.alloc, try self.evaluateLiteral(pair.key), try self.evaluateLiteral(pair.value));
+                }
+                const obj = try self.alloc.create(Value.Obj);
+                obj.* = .{ .id = UUID.new(), .data = .{ .map = map } };
+                return .{ .obj = obj };
+            },
+            else => return self.failError("Expression of type '{s}' is not a valid static literal", token, .{@tagName(expr.type)}, Error.IllegalOperation),
         }
-        return node;
     }
 
-    fn replaceDiverts(self: *Compiler) !void {
-        for (self.divert_log.items) |entry| {
-            const dest = entry.node.dest_ip;
-            try self.replaceValue(entry.jump_ip, C.JUMP, dest);
+    fn compileFunctionObj(self: *Compiler, stmt: Statement, token: Token) !*Value.Obj {
+        try self.enterScope(.function);
+        try self.enterChunk();
+        const f = stmt.type.function;
+
+        var length = f.parameters.len;
+        if (f.is_method) {
+            length += 1;
+            _ = try self.scope.define("self", false, false);
         }
+
+        for (f.parameters) |param| {
+            _ = try self.scope.define(param, true, false);
+        }
+
+        try self.compileBlock(f.body);
+        if (!(try self.lastIs(.return_value)) and !(try self.lastIs(.return_void))) {
+            try self.writeOp(.return_void, token);
+        }
+
+        const chunk = try self.exitChunk();
+        defer chunk.deinit();
+        const count = self.scope.count;
+
+        try self.exitScope();
+        const obj = try self.alloc.create(Value.Obj);
+
+        obj.* = .{
+            .id = UUID.new(),
+            .data = .{
+                .function = .{
+                    .is_method = f.is_method,
+                    .instructions = try chunk.instructions.toOwnedSlice(self.alloc),
+                    .debug_info = try chunk.debugInfo(self.alloc),
+                    .locals_count = count,
+                    .arity = @as(u8, @intCast(length)),
+                },
+            },
+        };
+        return obj;
+    }
+
+    fn getQualifiedName(self: *Compiler, name: []const u8) ![]const u8 {
+        if (self.path_stack.items.len == 0) {
+            return try self.alloc.dupe(u8, name);
+        }
+
+        const path = try std.mem.join(self.alloc, ".", self.path_stack.items);
+        defer self.alloc.free(path);
+        return try std.fmt.allocPrint(self.alloc, "{s}.{s}", .{ path, name });
     }
 
     fn lastIs(self: *Compiler, op: OpCode) !bool {
@@ -863,28 +914,35 @@ pub const Compiler = struct {
         }
     }
 
-    fn compileVisitDecl(self: *Compiler, name: []const u8, token: Token) Error!void {
-        try self.visit_tree.list.append(self.alloc, name);
-        const path = try std.mem.join(self.alloc, ".", self.visit_tree.list.items);
-        defer self.alloc.free(path);
-        const symbol = self.root_scope.define(path, false, false) catch {
-            var buffer: [1024]u8 = undefined;
-            var writer = std.fs.File.stderr().writer(&buffer);
-            const stderr = &writer.interface;
-            self.visit_tree.print(stderr);
-            return self.fail("Visit '{s}' is already declared", token, .{path});
+    fn registerAnchor(self: *Compiler, full_name: []const u8) !void {
+        const visit_sym = try self.root_scope.define(full_name, false, false);
+
+        var parent_idx: ?C.CONSTANT = null;
+        if (self.path_stack.items.len > 0) {
+            const parent_path = try std.mem.join(self.alloc, ".", self.path_stack.items);
+            defer self.alloc.free(parent_path);
+            parent_idx = self.constants_map.get(parent_path);
+        }
+
+        const anchor_obj = try self.alloc.create(Value.Obj);
+        anchor_obj.* = .{
+            .id = UUID.fromStringHash(full_name),
+            .data = .{
+                .anchor = .{
+                    .name = full_name,
+                    .visit_index = visit_sym.index,
+                    .parent_anchor_index = parent_idx,
+                    .ip = 0,
+                },
+            },
         };
-        try self.writeOp(.constant, token);
-        _ = try self.writeInt(C.CONSTANT, 4, token);
-        try self.setSymbol(symbol, token, true);
-        try self.visit_tree.push(name, symbol.index);
+
+        return try self.addNamedConstant(full_name, .{ .obj = anchor_obj });
     }
 
-    fn compileVisit(self: *Compiler, symbol: ?*Symbol, name: []const u8, token: Token) Error!void {
-        if (symbol) |sym| {
-            try self.writeOp(.visit, token);
-            _ = try self.writeInt(C.GLOBAL, sym.index, token);
-        } else return self.failError("Unknown symbol '{s}'", token, .{name}, Error.SymbolNotFound);
+    fn compileVisit(self: *Compiler, anchor_idx: C.CONSTANT, token: Token) !void {
+        try self.writeOp(.visit, token);
+        _ = try self.writeInt(C.CONSTANT, anchor_idx, token);
     }
 
     pub fn compileExpression(self: *Compiler, expr: *const Expression) Error!void {
@@ -906,14 +964,16 @@ pub const Compiler = struct {
                         .identifier => |id| {
                             try self.compileExpression(bin.right);
                             const symbol = try self.scope.resolve(id);
-                            try self.setSymbol(symbol, token, false);
-                            try self.loadSymbol(symbol, id, token);
+                            try self.setSymbol(id, symbol, token, false);
+                            try self.loadSymbol(id, token);
                             return;
                         },
                         .indexer => |idx| {
                             if (idx.target.type == .identifier) {
-                                if (self.types.get(idx.target.type.identifier)) |stmt|
-                                    return self.fail("Cannot assign value to {s} field", token, .{@tagName(stmt.type)});
+                                if (self.constants_map.get(idx.target.type.identifier)) |i| {
+                                    const val = self.constants.items[i];
+                                    return self.fail("Cannot reassign {t} field", token, .{val.obj.data});
+                                }
                             }
                             try self.compileExpression(bin.right);
                             try self.compileExpression(bin.left);
@@ -956,14 +1016,18 @@ pub const Compiler = struct {
                         switch (bin.left.type) {
                             .identifier => |id| {
                                 const symbol = try self.scope.resolve(id);
-                                try self.setSymbol(symbol, token, false);
-                                try self.loadSymbol(symbol, id, token);
+                                try self.setSymbol(id, symbol, token, false);
+                                try self.loadSymbol(id, token);
                                 return;
                             },
                             .indexer => |idx| {
                                 if (idx.target.type == .identifier) {
-                                    if (self.types.get(idx.target.type.identifier)) |stmt|
-                                        return self.fail("Cannot assign value to {s}", token, .{@tagName(stmt.type)});
+                                    if (self.constants_map.get(idx.target.type.identifier)) |i| {
+                                        const val = self.constants.items[i];
+                                        if (val == .obj and (val.obj.data == .class or val.obj.data == .@"enum" or val.obj.data == .function)) {
+                                            return self.fail("Cannot assign value to {t}", token, .{val.obj.data});
+                                        }
+                                    }
                                 }
                                 try self.compileExpression(bin.left);
                                 try self.removeLast(.index);
@@ -978,7 +1042,7 @@ pub const Compiler = struct {
                 }
             },
             .number => |n| {
-                const i = try self.addConstant(.{ .number = n });
+                const i = try self.addLiteralConstant(.{ .number = n });
                 try self.writeOp(.constant, token);
                 _ = try self.writeInt(C.CONSTANT, i, token);
             },
@@ -1034,27 +1098,52 @@ pub const Compiler = struct {
                 try self.compileExpression(mp.value);
             },
             .indexer => |idx| {
-                if (try self.isVisitExpression(expr, token)) {
-                    return;
+                var parts: std.ArrayList([]const u8) = .empty;
+                defer parts.deinit(self.alloc);
+                if (try self.flattenIndexer(expr, &parts)) {
+                    if (self.resolveAnchor(parts.items)) |i| {
+                        const anchor = self.constants.items[i].obj.data.anchor;
+                        try self.writeOp(.get_global, token);
+                        _ = try self.writeInt(C.GLOBAL, anchor.visit_index, token);
+                        return;
+                    }
                 }
                 try self.compileExpression(idx.target);
                 if (token.token_type == .dot) {
                     if (idx.target.type == .identifier) {
-                        if (self.types.get(idx.target.type.identifier)) |stmt| {
-                            switch (stmt.type) {
-                                .@"enum" => |e| {
-                                    if (!arrayOfTypeContains(u8, e.values, idx.index.type.identifier))
-                                        return self.fail("Enum {s} does not contain a value '{s}'", idx.index.token, .{ idx.target.type.identifier, idx.index.type.identifier });
-                                },
-                                .class => |c| {
-                                    if (!arrayOfTypeContains(u8, c.field_names, idx.index.type.identifier))
-                                        return self.fail("Class {s} does not contain a field '{s}'", idx.index.token, .{ idx.target.type.identifier, idx.index.type.identifier });
-                                },
-                                else => {},
+                        if (self.constants_map.get(idx.target.type.identifier)) |i| {
+                            const val = self.constants.items[i];
+                            if (val == .obj) {
+                                switch (val.obj.data) {
+                                    .anchor => {
+                                        // If we're indexing into an anchor (e.g., Parent.Child)
+                                        // we check if the path resolves to another anchor
+                                        var nested_parts = std.ArrayList([]const u8).empty;
+                                        defer nested_parts.deinit(self.alloc);
+                                        if (try self.flattenIndexer(expr, &nested_parts)) {
+                                            if (self.resolveAnchor(nested_parts.items)) |anchor_idx| {
+                                                try self.writeOp(.pop, token); // pop the target anchor
+                                                const anchor = self.constants.items[anchor_idx].obj.data.anchor;
+                                                try self.writeOp(.get_global, token);
+                                                _ = try self.writeInt(C.GLOBAL, anchor.visit_index, token);
+                                                return;
+                                            }
+                                        }
+                                    },
+                                    .@"enum" => |e| {
+                                        if (!arrayContains(u8, e.values, idx.index.type.identifier))
+                                            return self.fail("Enum {s} does not contain a value '{s}'", idx.index.token, .{ idx.target.type.identifier, idx.index.type.identifier });
+                                    },
+                                    .class => |c| {
+                                        if (c.getFieldIndex(idx.index.type.identifier) == null and c.getMethodIndex(idx.index.type.identifier) == null)
+                                            return self.fail("Class {s} does not contain a field '{s}'", idx.index.token, .{ idx.target.type.identifier, idx.index.type.identifier });
+                                    },
+                                    else => {},
+                                }
                             }
                         }
                     }
-                    try self.getOrSetIdentifierConstant(idx.index.type.identifier, token);
+                    try self.addIdentifierConstant(idx.index.type.identifier, token);
                 } else try self.compileExpression(idx.index);
                 try self.writeOp(.index, token);
             },
@@ -1066,12 +1155,15 @@ pub const Compiler = struct {
                 }
             },
             .identifier => |id| {
-                if (self.visit_tree.resolve(id)) |node| {
-                    try self.loadVisit(node, token);
-                    return;
+                if (try self.resolveConstant(id)) |i| {
+                    const val = self.constants.items[i];
+                    if (val == .obj and val.obj.data == .anchor) {
+                        try self.writeOp(.get_global, token);
+                        _ = try self.writeInt(C.GLOBAL, val.obj.data.anchor.visit_index, token);
+                        return;
+                    }
                 }
-                const symbol = try self.builtins.resolve(id) orelse try self.scope.resolve(id);
-                try self.loadSymbol(symbol, id, token);
+                try self.loadSymbol(id, token);
             },
             .@"if" => |i| {
                 try self.compileExpression(i.condition);
@@ -1088,16 +1180,27 @@ pub const Compiler = struct {
                 try self.replaceValue(nextPos, C.JUMP, self.instructionPos());
             },
             .instance => |ins| {
-                const cls: ?Statement = self.types.get(ins.name);
-                if (cls == null or cls.?.type != .class) return self.fail("Unknown class '{s}'", token, .{ins.name});
-                for (ins.fields, 0..) |field, i| {
-                    if (!arrayOfTypeContains(u8, cls.?.type.class.field_names, ins.field_names[i]))
-                        return self.fail("Class {s} does not contain a field named '{s}'", token, .{ ins.name, ins.field_names[i] });
-                    try self.compileExpression(&field);
-                    try self.getOrSetIdentifierConstant(ins.field_names[i], token);
+                const const_idx = self.constants_map.get(ins.name) orelse
+                    return self.fail("Unknown class '{s}'", token, .{ins.name});
+
+                const class_val = self.constants.items[const_idx];
+                if (class_val != .obj or class_val.obj.data != .class)
+                    return self.fail("'{s}' is not a class", token, .{ins.name});
+
+                const class_def = class_val.obj.data.class;
+                for (ins.fields, 0..) |field_expr, i| {
+                    if (class_def.getFieldIndex(ins.field_names[i]) == null) {
+                        return self.fail("Class {s} has no field '{s}'", token, .{ ins.name, ins.field_names[i] });
+                    }
+
+                    try self.compileExpression(&field_expr);
+                    // Push the name of the field so the VM knows which one we are setting
+                    try self.addIdentifierConstant(ins.field_names[i], token);
                 }
-                const symbol = try self.scope.resolve(ins.name);
-                try self.loadSymbol(symbol, ins.name, token);
+
+                try self.writeOp(.constant, token);
+                _ = try self.writeInt(C.CONSTANT, const_idx, token);
+
                 try self.writeOp(.instance, token);
                 _ = try self.writeInt(C.FIELDS, @as(C.FIELDS, @intCast(ins.fields.len)), token);
             },
@@ -1122,60 +1225,87 @@ pub const Compiler = struct {
         }
     }
 
-    fn setSymbol(self: *Compiler, symbol: ?*Symbol, token: Token, is_decl: bool) !void {
-        if (symbol) |ptr| {
-            if (!is_decl and !ptr.is_mutable) return self.fail("Cannot assign to constant variable '{s}'", token, .{ptr.name});
-            switch (ptr.tag) {
+    fn setSymbol(self: *Compiler, name: []const u8, symbol: ?*Symbol, token: Token, is_decl: bool) !void {
+        if (symbol) |s| {
+            if (!is_decl and !s.is_mutable) return self.fail("Cannot assign to constant variable '{s}'", token, .{s.name});
+            switch (s.tag) {
                 .global => {
                     try self.writeOp(if (is_decl) .decl_global else .set_global, token);
-                    _ = try self.writeInt(C.GLOBAL, @as(C.GLOBAL, @intCast(ptr.index)), token);
+                    _ = try self.writeInt(C.GLOBAL, @as(C.GLOBAL, @intCast(s.index)), token);
                 },
-                .free => {
-                    try self.writeOp(.set_free, token);
-                    _ = try self.writeInt(C.FREE, @as(C.FREE, @intCast(ptr.index)), token);
+                .upvalue => {
+                    std.debug.assert(is_decl == false);
+                    try self.writeOp(.set_upvalue, token);
+                    const depth = self.calculateScopeDepth(s);
+                    _ = try self.writeInt(u8, @intCast(depth), token);
+                    _ = try self.writeInt(C.LOCAL, @as(C.LOCAL, @intCast(s.index)), token);
                 },
-                .builtin, .function => return self.failError("Cannot set '{s}'", token, .{ptr.name}, Error.IllegalOperation),
-                else => {
+                .local, .function => {
                     try self.writeOp(.set_local, token);
-                    _ = try self.writeInt(C.LOCAL, @as(C.LOCAL, @intCast(ptr.index)), token);
+                    _ = try self.writeInt(C.LOCAL, @as(C.LOCAL, @intCast(s.index)), token);
                 },
             }
-        } else return self.failError("Unknown symbol", token, .{}, Error.SymbolNotFound);
+        } else return self.failError("Unknown symbol {s}", token, .{name}, Error.SymbolNotFound);
     }
 
-    fn loadSymbol(self: *Compiler, symbol: ?*Symbol, name: []const u8, token: Token) !void {
-        if (symbol) |ptr| {
-            switch (ptr.tag) {
-                .constant => {
-                    try self.writeOp(.constant, token);
-                    _ = try self.writeInt(C.CONSTANT, @as(C.CONSTANT, @intCast(ptr.index)), token);
+    fn loadSymbol(self: *Compiler, name: []const u8, token: Token) !void {
+        const symbol = try self.scope.resolve(name);
+
+        if (symbol) |s| {
+            switch (s.tag) {
+                .local, .function => {
+                    try self.writeOp(.get_local, token);
+                    _ = try self.writeInt(C.LOCAL, @intCast(s.index), token);
+                    return;
+                },
+                .upvalue => {
+                    try self.writeOp(.get_upvalue, token);
+                    const depth = self.calculateScopeDepth(s);
+                    _ = try self.writeInt(u8, @intCast(depth), token);
+                    _ = try self.writeInt(C.LOCAL, @intCast(s.index), token);
+                    return;
                 },
                 .global => {
                     try self.writeOp(.get_global, token);
-                    _ = try self.writeInt(C.GLOBAL, ptr.index, token);
-                },
-                .builtin => {
-                    try self.writeOp(.get_builtin, token);
-                    _ = try self.writeInt(C.BUILTIN, @as(C.BUILTIN, @intCast(ptr.index)), token);
-                },
-                .free => {
-                    try self.writeOp(.get_free, token);
-                    _ = try self.writeInt(C.FREE, @as(C.FREE, @intCast(ptr.index)), token);
-                },
-                .function => {
-                    try self.writeOp(.current_closure, token);
-                },
-                else => {
-                    try self.writeOp(.get_local, token);
-                    _ = try self.writeInt(C.LOCAL, @as(C.LOCAL, @intCast(ptr.index)), token);
+                    _ = try self.writeInt(C.GLOBAL, @intCast(s.index), token);
+                    return;
                 },
             }
-        } else return self.failError("Unknown symbol '{s}'", token, .{name}, Error.SymbolNotFound);
+        }
+
+        if (try self.resolveConstant(name)) |i| {
+            try self.writeOp(.constant, token);
+            _ = try self.writeInt(C.CONSTANT, i, token);
+            return;
+        }
+
+        return self.failError("Unknown symbol '{s}'", token, .{name}, Error.SymbolNotFound);
     }
 
-    fn loadVisit(self: *Compiler, node: *VisitTree.Node, token: Token) !void {
-        try self.writeOp(.get_global, token);
-        _ = try self.writeInt(C.GLOBAL, node.index, token);
+    fn calculateScopeDepth(self: *Compiler, symbol: *Symbol) usize {
+        var depth: usize = 0;
+        var current: ?*Scope = self.scope;
+
+        while (current) |s| {
+            if (s.tag == .function) depth += 1;
+            if (s.symbols.get(symbol.name) != null) return depth;
+
+            current = s.parent;
+        }
+        return depth;
+    }
+
+    fn resolveConstant(self: *Compiler, name: []const u8) !?C.CONSTANT {
+        var i: usize = self.path_stack.items.len;
+        while (i > 0) : (i -= 1) {
+            const path = try std.mem.join(self.alloc, ".", self.path_stack.items[0..i]);
+            defer self.alloc.free(path);
+            const full_name = try std.fmt.allocPrint(self.alloc, "{s}.{s}", .{ path, name });
+            defer self.alloc.free(full_name);
+            if (self.constants_map.get(full_name)) |idx| return idx;
+        }
+
+        return self.constants_map.get(name);
     }
 
     fn instructionPos(self: *Compiler) C.JUMP {
@@ -1217,6 +1347,11 @@ pub const Compiler = struct {
         }
     }
 
+    pub fn replaceConstant(self: *Compiler, name: []const u8, value: Value, token: Token) !void {
+        const i = self.constants_map.get(name) orelse return self.fail("Constant {s} not found", token, .{name});
+        self.constants.items[i] = value;
+    }
+
     pub fn replaceJumps(instructions: []u8, old_pos: C.JUMP, new_pos: C.JUMP) !void {
         var i: usize = 0;
         const jump = @intFromEnum(OpCode.jump);
@@ -1231,60 +1366,61 @@ pub const Compiler = struct {
         }
     }
 
-    pub fn isVisitExpression(self: *Compiler, index: *const Expression, token: Token) !bool {
-        var idx = index.type.indexer;
-        if (idx.index.type != .identifier) return false;
-        if (idx.target.type != .indexer and idx.target.type != .identifier) return false;
+    fn resolveAnchor(self: *Compiler, path_parts: [][]const u8) ?C.CONSTANT {
+        const path = std.mem.join(self.alloc, ".", path_parts) catch return null;
+        defer self.alloc.free(path);
 
-        var list: std.ArrayList([]const u8) = .empty;
-        defer list.deinit(self.alloc);
-        try list.append(self.alloc, idx.index.type.identifier);
-        while (idx.target.type == .indexer) {
-            idx = idx.target.type.indexer;
-            try list.append(self.alloc, idx.index.type.identifier);
+        const idx = self.resolveConstant(path) catch return null;
+        if (idx) |i| {
+            const value = self.constants.items[i];
+            if (value == .obj and value.obj.data == .anchor) return i;
         }
-        if (idx.target.type != .identifier) return false;
-        try list.append(self.alloc, idx.target.type.identifier);
-        std.mem.reverse([]const u8, list.items);
 
-        const joined = try std.mem.join(self.alloc, ".", list.items);
-        defer self.alloc.free(joined);
-        if (self.visit_tree.resolve(list.items[0])) |visit_node| {
-            var node = visit_node;
-            for (list.items, 0..) |item, i| {
-                if (i == 0) continue;
-                if (node.getChild(item)) |child| {
-                    node = child;
-                } else return false;
-            }
-            try self.loadVisit(node, token);
-            return true;
-        } else return false;
+        return null;
+    }
+
+    fn flattenIndexer(self: *Compiler, expr: *const Expression, list: *std.ArrayList([]const u8)) !bool {
+        var current = expr;
+        while (current.type == .indexer) {
+            const idx = current.type.indexer;
+            if (idx.index.type != .identifier) return false;
+            try list.append(self.alloc, idx.index.type.identifier);
+            current = idx.target;
+        }
+        if (current.type != .identifier) return false;
+        try list.append(self.alloc, current.type.identifier);
+        std.mem.reverse([]const u8, list.items);
+        return true;
     }
 
     pub fn addConstant(self: *Compiler, value: Value) !C.CONSTANT {
         try self.constants.append(self.alloc, value);
-        return @as(C.CONSTANT, @intCast(self.constants.items.len - 1));
+        return @intCast(self.constants.items.len - 1);
     }
 
-    fn initializeConstants(self: *Compiler) !void {
-        inline for (initial_constants) |c| {
-            _ = try self.addConstant(c);
-        }
+    pub fn addNamedConstant(self: *Compiler, name: []const u8, value: Value) !void {
+        const i = try self.addConstant(value);
+        try self.constants_map.putNoClobber(self.alloc, try self.alloc.dupe(u8, name), i);
     }
 
-    fn getOrSetIdentifierConstant(self: *Compiler, name: []const u8, token: Token) !void {
-        if (self.identifier_cache.get(name)) |position| {
-            try self.writeOp(.constant, token);
-            _ = try self.writeInt(C.CONSTANT, position, token);
-            return;
+    pub fn addLiteralConstant(self: *Compiler, value: Value) !C.CONSTANT {
+        if (self.literal_cache.get(value)) |idx| return idx;
+
+        const i = try self.addConstant(value);
+        try self.literal_cache.put(self.alloc, value, i);
+        return i;
+    }
+
+    fn addIdentifierConstant(self: *Compiler, name: []const u8, token: Token) !void {
+        var i = self.constants_map.get(name);
+        if (i == null) {
+            const obj = try self.alloc.create(Value.Obj);
+            obj.* = .{ .data = .{ .string = try self.alloc.dupe(u8, name) } };
+            i = try self.addConstant(.{ .obj = obj });
+            try self.constants_map.putNoClobber(self.alloc, try self.alloc.dupe(u8, name), i.?);
         }
-        const obj = try self.alloc.create(Value.Obj);
-        obj.* = .{ .data = .{ .string = try self.alloc.dupe(u8, name) } };
-        const i = try self.addConstant(.{ .obj = obj });
-        try self.identifier_cache.putNoClobber(self.alloc, name, i);
 
         try self.writeOp(.constant, token);
-        _ = try self.writeInt(C.CONSTANT, i, token);
+        _ = try self.writeInt(C.CONSTANT, i.?, token);
     }
 };

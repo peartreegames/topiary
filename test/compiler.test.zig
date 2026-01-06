@@ -11,7 +11,7 @@ const Compiler = topi.backend.Compiler;
 const OpCode = topi.backend.OpCode;
 const Scope = topi.backend.Scope;
 const Symbol = topi.backend.Symbol;
-const initial_constants = topi.backend.initial_constants;
+const builtins = topi.runtime.builtins;
 
 const parseSource = @import("parser.test.zig").parseSource;
 
@@ -20,7 +20,7 @@ const File = topi.module.File;
 
 const testing = std.testing;
 const allocator = testing.allocator;
-const cl = initial_constants.len;
+const cl = builtins.values().len;
 
 pub fn compileSource(source: []const u8, mod: *Module) !Bytecode {
     const file = try mod.arena.allocator().create(File);
@@ -39,7 +39,7 @@ pub fn compileSource(source: []const u8, mod: *Module) !Bytecode {
     return mod.generateBytecode(allocator);
 }
 
-test "Basic Compile" {
+test "Compile Basic" {
     const test_cases = .{
         .{
             .input = "1 + 2",
@@ -79,7 +79,7 @@ test "Basic Compile" {
     }
 }
 
-test "Conditionals Compile" {
+test "Compile Conditionals" {
     const test_cases = .{
         .{
             .input = "if true { 10 } 333",
@@ -167,7 +167,7 @@ test "Conditionals Compile" {
     }
 }
 
-test "Variables" {
+test "Compile Variables" {
     const test_cases = .{
         .{
             .input =
@@ -254,7 +254,7 @@ test "Variables" {
     }
 }
 
-test "Strings" {
+test "Compile Strings" {
     const test_cases = .{
         .{
             .input = "\"testing\"",
@@ -306,7 +306,7 @@ test "Strings" {
     }
 }
 
-test "Lists" {
+test "Compile Lists" {
     const test_cases = .{
         .{
             .input = "List{}",
@@ -404,7 +404,7 @@ test "Lists" {
     }
 }
 
-test "Maps and Sets" {
+test "Compile Maps and Sets" {
     // {} denotes a group as well as a map/set,
     // wrap it in a () to force group expression statements
     const test_cases = .{
@@ -596,11 +596,11 @@ test "Maps and Sets" {
     }
 }
 
-test "Index" {
+test "Compile Index" {
     const test_cases = .{
         .{
             .input = "List{1,2,3}[1 + 1]",
-            .constants = [_]f32{ 1, 2, 3, 1, 1 },
+            .constants = [_]f32{ 1, 2, 3 },
             .instructions = [_]u8{
                 @intFromEnum(OpCode.constant),
                 0 + cl,
@@ -621,12 +621,12 @@ test "Index" {
                 3,
                 0,
                 @intFromEnum(OpCode.constant),
-                3 + cl,
+                0 + cl,
                 0,
                 0,
                 0,
                 @intFromEnum(OpCode.constant),
-                4 + cl,
+                0 + cl,
                 0,
                 0,
                 0,
@@ -637,7 +637,7 @@ test "Index" {
         },
         .{
             .input = "Map{1: 2}[2 - 1]",
-            .constants = [_]f32{ 1, 2, 2, 1 },
+            .constants = [_]f32{ 1, 2 },
             .instructions = [_]u8{
                 @intFromEnum(OpCode.constant),
                 0 + cl,
@@ -653,12 +653,12 @@ test "Index" {
                 1,
                 0,
                 @intFromEnum(OpCode.constant),
-                2 + cl,
+                1 + cl,
                 0,
                 0,
                 0,
                 @intFromEnum(OpCode.constant),
-                3 + cl,
+                0 + cl,
                 0,
                 0,
                 0,
@@ -686,25 +686,81 @@ test "Index" {
 }
 
 test "Compile Functions" {
+    var five = try allocator.create(Value.Obj);
+    five.data = .{ .function = .{
+        .locals_count = 0,
+        .arity = 0,
+        .debug_info = undefined,
+        .instructions = &[_]u8{
+            @intFromEnum(OpCode.constant),
+            1 + cl,
+            0,
+            0,
+            0,
+            @intFromEnum(OpCode.return_value),
+        },
+    } };
+    defer allocator.destroy(five);
+
+    var two = try allocator.create(Value.Obj);
+    two.data = .{ .function = .{
+        .locals_count = 0,
+        .arity = 0,
+        .debug_info = undefined,
+        .instructions = &[_]u8{
+            @intFromEnum(OpCode.constant),
+            1 + cl,
+            0,
+            0,
+            0,
+            @intFromEnum(OpCode.return_value),
+        },
+    } };
+    defer allocator.destroy(two);
+
+    var value = try allocator.create(Value.Obj);
+    value.data = .{ .function = .{
+        .debug_info = undefined,
+        .locals_count = 0,
+        .arity = 1,
+        .instructions = &[_]u8{
+            @intFromEnum(OpCode.get_local),    0, 0,
+            @intFromEnum(OpCode.return_value),
+        },
+    } };
+    defer allocator.destroy(value);
+
+    var multiArg = try allocator.create(Value.Obj);
+    multiArg.data = .{ .function = .{
+        .debug_info = undefined,
+        .locals_count = 0,
+        .arity = 1,
+        .instructions = &[_]u8{
+            @intFromEnum(OpCode.get_local),
+            0,
+            0,
+            @intFromEnum(OpCode.pop),
+            @intFromEnum(OpCode.get_local),
+            1,
+            0,
+            @intFromEnum(OpCode.pop),
+            @intFromEnum(OpCode.get_local),
+            2,
+            0,
+            @intFromEnum(OpCode.return_value),
+        },
+    } };
+    defer allocator.destroy(multiArg);
+
     const test_cases = .{
         .{
             .input =
-            \\ fn five() { return 5 }
+            \\ fn five || { return 5 }
             \\ five()
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.constant), // Load the function object
-                1 + cl,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.decl_global), // Declare "five"
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.get_global),
-                0,
+                @intFromEnum(OpCode.constant),
+                0 + cl,
                 0,
                 0,
                 0,
@@ -712,44 +768,23 @@ test "Compile Functions" {
                 0,
                 @intFromEnum(OpCode.pop),
             },
-            .constants = [_]f32{5},
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),
-                    0 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
+            .constants = [_]Value{ .{ .obj = five }, .{ .number = 5 } },
         },
         .{
             .input =
-            \\ fn two() { return 2 }
+            \\ fn two || { return 2 }
             \\ two() + two()
             ,
             .instructions = [_]u8{
                 @intFromEnum(OpCode.constant),
-                1 + cl,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.decl_global),
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.get_global),
-                0,
+                0 + cl,
                 0,
                 0,
                 0,
                 @intFromEnum(OpCode.call),
                 0,
-                @intFromEnum(OpCode.get_global),
-                0,
+                @intFromEnum(OpCode.constant),
+                0 + cl,
                 0,
                 0,
                 0,
@@ -758,22 +793,11 @@ test "Compile Functions" {
                 @intFromEnum(OpCode.add),
                 @intFromEnum(OpCode.pop),
             },
-            .constants = [_]f32{2},
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),
-                    0 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
+            .constants = [_]Value{ .{ .obj = two }, .{ .number = 2 } },
         },
         .{
             .input =
-            \\ fn value(a) { return a }
+            \\ fn value |a| { return a }
             \\ value(1) + value(1)
             ,
             .instructions = [_]u8{
@@ -782,16 +806,6 @@ test "Compile Functions" {
                 0,
                 0,
                 0,
-                @intFromEnum(OpCode.decl_global),
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.get_global),
-                0,
-                0,
-                0,
-                0,
                 @intFromEnum(OpCode.constant),
                 1 + cl,
                 0,
@@ -799,13 +813,13 @@ test "Compile Functions" {
                 0,
                 @intFromEnum(OpCode.call),
                 1,
-                @intFromEnum(OpCode.get_global),
-                0,
+                @intFromEnum(OpCode.constant),
+                0 + cl,
                 0,
                 0,
                 0,
                 @intFromEnum(OpCode.constant),
-                2 + cl,
+                1 + cl,
                 0,
                 0,
                 0,
@@ -814,70 +828,16 @@ test "Compile Functions" {
                 @intFromEnum(OpCode.add),
                 @intFromEnum(OpCode.pop),
             },
-            .constants = [_]f32{ 0, 1, 1 },
-            .functions = [_][]const u8{
-                &[_]u8{
-                    @intFromEnum(OpCode.get_local),    0, 0,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
+            .constants = [_]Value{.{ .obj = value }, .{ .number = 1 }},
         },
         .{
             .input =
-            \\ fn oneArg(a) { return a }
-            \\ oneArg(24)
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.constant),
-                0 + cl,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.decl_global),
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.get_global),
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.constant),
-                1 + cl,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.call),
-                1,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{ 0, 24 },
-            .functions = [_][]const u8{
-                &[_]u8{
-                    @intFromEnum(OpCode.get_local),    0, 0,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input =
-            \\ fn multiArg(a, b, c) { a b return c }
+            \\ fn multiArg |a, b, c| { a b return c }
             \\ multiArg(24, 25, 26)
             ,
             .instructions = [_]u8{
                 @intFromEnum(OpCode.constant),
                 0 + cl,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.decl_global),
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.get_global),
-                0,
                 0,
                 0,
                 0,
@@ -900,169 +860,7 @@ test "Compile Functions" {
                 3,
                 @intFromEnum(OpCode.pop),
             },
-            .constants = [_]f32{ 0, 24, 25, 26 },
-            .functions = [_][]const u8{
-                &[_]u8{
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.pop),
-                    @intFromEnum(OpCode.get_local),
-                    1,
-                    0,
-                    @intFromEnum(OpCode.pop),
-                    @intFromEnum(OpCode.get_local),
-                    2,
-                    0,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-    };
-    // ... existing code ...
-
-    inline for (test_cases) |case| {
-        errdefer std.log.warn("{s}", .{case.input});
-        var mod = try Module.initEmpty(allocator);
-        defer mod.deinit();
-        var bytecode = try compileSource(case.input, mod);
-        defer bytecode.free(allocator);
-        for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("Error on: {}\n {s}", .{ i, case.input });
-            try testing.expectEqual(instruction, bytecode.instructions[i]);
-        }
-        for (bytecode.constants[cl..], 0..) |constant, i| {
-            switch (constant) {
-                .number => |n| try testing.expect(case.constants[i] == n),
-                .obj => |o| try testing.expectEqualSlices(u8, case.functions[i], o.data.function.instructions),
-                else => unreachable,
-            }
-        }
-    }
-}
-
-test "Locals" {
-    const test_cases = .{
-        .{
-            .input =
-            \\ const num = 5
-            \\ || return num
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.constant),
-                0 + cl,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.decl_global),
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.closure),
-                1 + cl,
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{5},
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.get_global),
-                    0,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input =
-            \\ || {
-            \\     const num = 5
-            \\     return num 
-            \\ }
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
-                1 + cl,
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{5},
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),
-                    0 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.set_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input =
-            \\ || {
-            \\    const a = 5
-            \\    const b = 7
-            \\    return a + b
-            \\ }
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
-                2 + cl,
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{ 5, 7 },
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),
-                    0 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.set_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.constant),
-                    1 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.set_local),
-                    1,
-                    0,
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.get_local),
-                    1,
-                    0,
-                    @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
+            .constants = [_]Value{ .{ .obj = multiArg }, .{ .number = 24 }, .{ .number = 25 }, .{ .number = 26 } },
         },
     };
 
@@ -1073,27 +871,36 @@ test "Locals" {
         var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
         for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("Error on: {}", .{i});
+            errdefer {
+                std.log.warn("Error on: {}\n {s}", .{ i, case.input });
+                var errbuf: [128]u8 = undefined;
+                var stderr_writer = std.fs.File.stderr().writer(&errbuf);
+                const stderr = &stderr_writer.interface;
+                bytecode.print(stderr) catch unreachable;
+            }
             try testing.expectEqual(instruction, bytecode.instructions[i]);
         }
         for (bytecode.constants[cl..], 0..) |constant, i| {
             switch (constant) {
-                .number => |n| try testing.expect(case.constants[i] == n),
-                .obj => |o| try testing.expectEqualSlices(u8, case.functions[i], o.data.function.instructions),
+                .number => |n| try testing.expect(case.constants[i].number == n),
+                .obj => |o| try testing.expectEqualSlices(u8, case.constants[i].obj.data.function.instructions, o.data.function.instructions),
                 else => unreachable,
             }
         }
     }
 }
 
-test "Builtin Functions" {
+test "Compile Builtin Functions" {
     const test_cases = .{
         .{
             .input =
             \\ rnd(1, 10)
             ,
             .instructions = [_]u8{
-                @intFromEnum(OpCode.get_builtin),
+                @intFromEnum(OpCode.constant),
+                0,
+                0,
+                0,
                 0,
                 @intFromEnum(OpCode.constant),
                 0 + cl,
@@ -1114,8 +921,11 @@ test "Builtin Functions" {
         .{
             .input = "rnd01()",
             .instructions = [_]u8{
-                @intFromEnum(OpCode.get_builtin),
+                @intFromEnum(OpCode.constant),
                 2,
+                0,
+                0,
+                0,
                 @intFromEnum(OpCode.call),
                 0,
                 @intFromEnum(OpCode.pop),
@@ -1140,295 +950,17 @@ test "Builtin Functions" {
     }
 }
 
-test "Closures" {
-    const test_cases = .{
-        .{
-            .input = "|a| { return |b| { return a + b } }",
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
-                1 + cl,
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{0},
-            .functions = [_][]const u8{
-                &[_]u8{
-                    @intFromEnum(OpCode.get_free),
-                    0,
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.return_value),
-                },
-                &[_]u8{
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.closure),
-                    0 + cl,
-                    0,
-                    0,
-                    0,
-                    1,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input =
-            \\ |a| {
-            \\     return |b| { 
-            \\        return |c| return a + b + c 
-            \\     }
-            \\ }
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
-                2 + cl,
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{0},
-            .functions = [_][]const u8{
-                &[_]u8{
-                    @intFromEnum(OpCode.get_free),
-                    0,
-                    @intFromEnum(OpCode.get_free),
-                    1,
-                    @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.return_value),
-                },
-                &[_]u8{
-                    @intFromEnum(OpCode.get_free),
-                    0,
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.closure),
-                    0 + cl,
-                    0,
-                    0,
-                    0,
-                    2,
-                    @intFromEnum(OpCode.return_value),
-                },
-                &[_]u8{
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.closure),
-                    1 + cl,
-                    0,
-                    0,
-                    0,
-                    1,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input =
-            \\ const globalNum = 55
-            \\ || {
-            \\     const a = 66
-            \\     return || {
-            \\        const b = 77 
-            \\        return || {
-            \\            const c = 88 
-            \\            return globalNum + a + b + c
-            \\        }
-            \\     } 
-            \\ }
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.constant),
-                0 + cl,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.decl_global),
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.closure),
-                6 + cl,
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{ 55, 66, 77, 88 },
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{},
-                &[_]u8{},
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),
-                    3 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.set_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.get_global),
-                    0,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.get_free),
-                    0,
-                    @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.get_free),
-                    1,
-                    @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.add),
-                    @intFromEnum(OpCode.return_value),
-                },
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),
-                    2 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.set_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.get_free),
-                    0,
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.closure),
-                    4 + cl,
-                    0,
-                    0,
-                    0,
-                    2,
-                    @intFromEnum(OpCode.return_value),
-                },
-                &[_]u8{
-                    @intFromEnum(OpCode.constant),
-                    1 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.set_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.closure),
-                    5 + cl,
-                    0,
-                    0,
-                    0,
-                    1,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-        .{
-            .input =
-            \\ const countDown =|x| return countDown(x - 1)
-            \\ countDown(1)
-            ,
-            .instructions = [_]u8{
-                @intFromEnum(OpCode.closure),
-                1 + cl,
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.decl_global),
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.get_global),
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.constant),
-                2 + cl,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.call),
-                1,
-                @intFromEnum(OpCode.pop),
-            },
-            .constants = [_]f32{ 1, 0, 1 },
-            .functions = [_][]const u8{
-                &[_]u8{},
-                &[_]u8{
-                    @intFromEnum(OpCode.current_closure),
-                    @intFromEnum(OpCode.get_local),
-                    0,
-                    0,
-                    @intFromEnum(OpCode.constant),
-                    0 + cl,
-                    0,
-                    0,
-                    0,
-                    @intFromEnum(OpCode.subtract),
-                    @intFromEnum(OpCode.call),
-                    1,
-                    @intFromEnum(OpCode.return_value),
-                },
-            },
-        },
-    };
-
-    inline for (test_cases) |case| {
-        errdefer std.log.warn("{s}", .{case.input});
-        var mod = try Module.initEmpty(allocator);
-        defer mod.deinit();
-        var bytecode = try compileSource(case.input, mod);
-        defer bytecode.free(allocator);
-        for (case.instructions, 0..) |instruction, i| {
-            errdefer std.log.warn("Error on: {}", .{i});
-            try testing.expectEqual(instruction, bytecode.instructions[i]);
-        }
-        for (bytecode.constants[cl..], 0..) |constant, i| {
-            switch (constant) {
-                .number => |n| try testing.expect(case.constants[i] == n),
-                .obj => |o| try testing.expectEqualSlices(u8, case.functions[i], o.data.function.instructions),
-                else => unreachable,
-            }
-        }
-    }
-}
-
-test "Classes" {
+test "Compile Classes" {
     const TestValue = union(enum(u4)) {
         number: f32,
         string: []const u8,
+        class: []const u8,
     };
     const test_cases = .{
         .{
             .input =
-            \\ class Test = {
-            \\     value = 0    
+            \\ class Test {
+            \\     value = 0
             \\ }
             \\ new Test{}.value
             \\
@@ -1439,34 +971,19 @@ test "Classes" {
                 0,
                 0,
                 0,
+                @intFromEnum(OpCode.instance),
+                0,
                 @intFromEnum(OpCode.constant),
                 1 + cl,
                 0,
                 0,
                 0,
-                @intFromEnum(OpCode.constant),
-                2 + cl,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.class),
+                @intFromEnum(OpCode.index),
                 1,
-                @intFromEnum(OpCode.decl_global),
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.get_global),
-                0,
-                0,
-                0,
-                0,
-                @intFromEnum(OpCode.instance),
             },
             .constants = [_]TestValue{
-                .{ .number = 0.0 },
+                .{ .class = "Test" },
                 .{ .string = "value" },
-                .{ .string = "Test" },
             },
         },
     };
@@ -1485,28 +1002,17 @@ test "Classes" {
             switch (constant) {
                 .number => |n| try testing.expect(n == bytecode.constants[i + cl].number),
                 .string => |s| try testing.expectEqualStrings(s, bytecode.constants[i + cl].obj.data.string),
+                .class => |c| try testing.expectEqualStrings(c, bytecode.constants[i + cl].obj.data.class.name),
             }
         }
     }
 }
 
-test "Global Jump Error" {
-    const input =
-        \\ === START {}
-        \\ => START
-    ;
-
-    var mod = try Module.initEmpty(allocator);
-    defer mod.deinit();
-    const err = compileSource(input, mod);
-    try testing.expectError(Compiler.Error.CompilerError, err);
-}
-
-test "Serialize" {
+test "Compile Serialization" {
     const input =
         \\ var str = "string value"
         \\ const num = 25
-        \\ const fun = |x| {
+        \\ fn fun |x| {
         \\     return x * 2
         \\ }
         \\ var list = List{

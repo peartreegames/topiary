@@ -16,14 +16,12 @@ pub const Scope = struct {
 
     count: u32 = 0,
     symbols: std.StringArrayHashMapUnmanaged(*Symbol),
-    free_symbols: std.ArrayList(*Symbol),
 
     pub const Tag = union(enum(u4)) {
-        builtin,
-        constant,
         global,
         local,
-        free,
+        function,
+        upvalue,
     };
 
     pub fn create(allocator: std.mem.Allocator, parent: ?*Scope, tag: Tag) !*Scope {
@@ -32,7 +30,6 @@ pub const Scope = struct {
             .allocator = allocator,
             .parent = parent,
             .symbols = .empty,
-            .free_symbols = .empty,
             .tag = tag,
         };
         return scope;
@@ -44,7 +41,6 @@ pub const Scope = struct {
             self.allocator.destroy(s);
         }
         self.symbols.deinit(self.allocator);
-        self.free_symbols.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
@@ -67,30 +63,13 @@ pub const Scope = struct {
         return symbol;
     }
 
-    pub fn defineFunction(self: *Scope, name: []const u8) !*Symbol {
-        const symbol = try self.allocator.create(Symbol);
-        const name_copy = try self.allocator.dupe(u8, name);
-        symbol.* = .{
-            .name = name_copy,
-            .index = 0,
-            .tag = .function,
-            .is_mutable = false,
-            .is_extern = false,
-        };
-        try self.symbols.putNoClobber(self.allocator, name_copy, symbol);
-        return symbol;
-    }
-
-    pub fn defineFree(self: *Scope, original: *Symbol) !*Symbol {
-        const index = @as(u32, @intCast(self.free_symbols.items.len));
-        try self.free_symbols.append(self.allocator, original);
-
+    pub fn defineUpvalue(self: *Scope, original: *Symbol) !*Symbol {
         const symbol = try self.allocator.create(Symbol);
         const name = try self.allocator.dupe(u8, original.name);
         symbol.* = .{
             .name = name,
-            .index = index,
-            .tag = .free,
+            .index = original.index,
+            .tag = .upvalue,
             .is_mutable = original.is_mutable,
             .is_extern = original.is_extern,
         };
@@ -99,16 +78,17 @@ pub const Scope = struct {
     }
 
     pub fn resolve(self: *Scope, name: []const u8) !?*Symbol {
-        var symbol = self.symbols.get(name);
+        const symbol = self.symbols.get(name);
         if (symbol) |s| return s;
+
         if (self.parent) |p| {
-            symbol = try p.resolve(name);
-            if (symbol == null) return null;
-            if (symbol) |s| {
-                if (s.tag == .global or self.tag == .local) return s;
-                const free = try self.defineFree(s);
-                return free;
+            const s = (try p.resolve(name)) orelse return null;
+            if (s.tag == .global) return s;
+
+            if (self.tag == .function) {
+                return try self.defineUpvalue(s);
             }
+            return s;
         }
         return null;
     }

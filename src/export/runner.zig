@@ -147,7 +147,7 @@ pub const ExportRunner = struct {
             .tags = &self.tags,
             .tags_length = @intCast(dialogue.tags.len),
         };
-        self.logger.log("Line:{s}: {s} {f}", .{ dialogue.speaker orelse "", dialogue.content, fmt.tags("#{s}",dialogue.tags) }, .debug);
+        self.logger.log("Line:{s}: {s} {f}", .{ dialogue.speaker orelse "", dialogue.content, fmt.array("#{s}",dialogue.tags) }, .debug);
         self.on_line(@intFromPtr(vm), &self.dialogue);
     }
 
@@ -167,7 +167,7 @@ pub const ExportRunner = struct {
             }
             t_count += t;
 
-            self.logger.log("Choice: {s} {f}", .{choices[i].content, fmt.tags("#{s}", choices[i].tags)}, .debug);
+            self.logger.log("Choice: {s} {f}", .{choices[i].content, fmt.array("#{s}", choices[i].tags)}, .debug);
             const content = choices[i].content;
             result[i] = .{
                 .content = .{ .ptr = content.ptr, .len = content.len },

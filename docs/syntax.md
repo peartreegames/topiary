@@ -37,7 +37,7 @@ As a convenience, if you don't pass in a jump to the CLI the first bough in the 
 # topi run file.topi // START will run in the above example
 ```
 
-Be careful though, if you include other files the "first" bough will be the first in the other file.
+Be careful, if you include other files the "first" bough will be the first in the other file.
 
 ### Nesting
 
@@ -195,7 +195,7 @@ Visit paths can be found within scopes and don't need the full path written out.
         }
         ~ TWO "Answer two" {
             :speaker: "You chose two"
-            if (TWO > 1) :spekaer: "You've already been here"
+            if TWO > 1 :speaker: "You've already been here"
             print("ONE={NAMED.ONE}")
             print("TWO={TWO}")
         }
@@ -210,7 +210,7 @@ If the flow of the story hits a closing backet or `fin`, it will end.
 
 ```topi
 === START {
-    if (true) fin
+    if true fin
     :: "Will not get here"
 }
 ```
@@ -318,7 +318,7 @@ const emptyMap = Map{}
 map.add("one", 3) // Map{one:3, two:2} (add will replace values if already exists)
 map.count() // 2
 map.remove("one") // Map{two:2}
-map.has('two") // true
+map.has("two") // true
 map.clear() // Map{}
 ```
 
@@ -376,8 +376,8 @@ Braces are optional if only one line is used.
 
 ```topi
 var value = 0
-if (value < 10) value = 11
-else if (value > 10) value = 5
+if value < 10 value = 11
+else if value > 10 { value = 5 }
 else value = -5
 print(value) // 11
 ```
@@ -414,9 +414,9 @@ switch 5 {
 }
 
 switch "else" {
-    "string": print(""switch not here"),
-    "number": print(""switch not here"),
-    else: print(""switch else here")
+    "string": print("switch not here"),
+    "number": print("switch not here"),
+    else: print("switch else here")
 ```
 
 
@@ -438,16 +438,16 @@ Double quotation marks can be added by doubling them inside strings `"""Hello"",
 
 ### Functions
 
-Functions are declared same as variables, with parameters between pipes (`|`)
+Functions are declared `fn [NAME]` and parameters between pipes (`|`)
 Braces are optional if only one line is used.
 
-**Functions cannot contain Boughs or Jumps, only logic.**
+**Functions cannot contain Boughs only logic.**
 
 ```topi
-fn sum(x, y) return x + y
+fn sum |x, y| return x + y
 
-fn fib(n) {
-    if (n < 2) return n
+fn fib |n| {
+    if n < 2 return n
     return fib(n - 1) + fib(n - 2)
 }
 ```
@@ -457,8 +457,8 @@ fn fib(n) {
 If you want to return out of a function early you have to specify `return void` and not just `return` like most langauges.
 
 ```topi
-const early = || {
-    if (true) return void
+fn early || {
+    if true return void
 }
 ```
 
@@ -544,9 +544,9 @@ class Person {
     firstName = "",
     lastName = "",
     
-    fn fullName() return self.firstName + " " + self.lastName 
+    fn fullName || return self.firstName + " " + self.lastName 
     
-    fn increaseAge(amount) {
+    fn increaseAge |amount| {
         self.age += amount
     }
 }
@@ -567,7 +567,7 @@ This can be useful for function calls from game applications.
 As an example with the above class:
 
 ```topi
-const changeField = |instance, fieldName, newValue| {
+fn changeField |instance, fieldName, newValue| {
     instance[fieldName] = newValue
 }
 
@@ -589,7 +589,7 @@ include "./other.topi"
 sum(1, 5)
 
 // other.topi
-const sum = |x, y| return x + y
+fn sum |x, y| return x + y
 ```
 
 **Not allowed**

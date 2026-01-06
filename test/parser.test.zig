@@ -92,8 +92,8 @@ test "Parse Declaration" {
 
 test "Parse Function Declaration" {
     const t =
-        \\ fn sum(x, y) return x + y
-        \\ fn str(value, count) {
+        \\ fn sum |x, y| return x + y
+        \\ fn str |value, count| {
         \\    var result = "This is a string"
         \\    return result    
         \\ }
@@ -110,7 +110,7 @@ test "Parse Function Declaration" {
 
 test "Parse Function Arguments" {
     const t =
-        \\ fn sum(x, y) return x + y
+        \\ fn sum |x, y| return x + y
         \\ sum(1, 2) + sum(3, 4)
     ;
     const mod = try parseSource(t);
@@ -454,6 +454,27 @@ test "Parse Forks" {
     choice = fork.body[1].type.choice;
     try testing.expectEqualStrings("choice 2", choice.content.type.string.value);
     try testing.expect(choice.body[0].type == .divert);
+}
+
+test "Parse Divert" {
+    const input =
+        \\  === BOUGH {
+        \\      => INNER
+        \\      === INNER {
+        \\          :speaker: "Inner"
+        \\      }
+        \\  }
+        \\  === END {}
+    ;
+    const mod = try parseSource(input);
+    defer mod.deinit();
+    const file = mod.entry;
+    const tree = file.tree;
+    const body = tree.root[0].type.bough.body;
+    const divert = body[0].type.divert;
+    try testing.expectEqualStrings("INNER", divert.path[0]);
+    const inner = tree.root[0].type.bough.body[1].type.bough.body[0];
+    try testing.expectEqualStrings("Inner", inner.type.dialogue.content.type.string.value);
 }
 
 test "Parse Inline Code" {

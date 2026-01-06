@@ -51,28 +51,22 @@ const TestRunner = struct {
     }
 };
 
-test "Create and Destroy Vm" {
+test "Export Create and Destroy Vm" {
     const text =
         \\ extern var value = "test 123"
         \\ extern var list = List{}
         \\ extern var set = Set{}
         \\ extern var map = Map{}
-        \\ enum Enum = {
-        \\     One
+        \\ enum Enum {
+        \\     One,
         \\     Two
         \\ }
         \\ extern var enum_value = Enum.One
-        \\ extern var sum = |x, y| return x + y
+        \\ fn sum |x, y| return x + y
         \\ === START {
         \\     :: "A person approaches." #starting
         \\     :Stranger: "Hey there."
-        \\     print(value)
-        \\     print(list)
-        \\     print(set)
-        \\     print(map)
-        \\     print(enum_value)
         \\     list.add(3)
-        \\     print(sum(11, 11))
         \\     fork^ {
         \\         ~ "Greet them." #lots #of #tags #here {
         \\             :Drew: "Oh, uh, nice to meet you. My name is Drew."

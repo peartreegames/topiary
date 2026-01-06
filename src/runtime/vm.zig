@@ -57,6 +57,7 @@ pub const Vm = struct {
     jump_backups: std.ArrayList(C.JUMP),
     /// Used to ensure preceeding code is executed before arriving at Bough
     jump_requests: std.ArrayList(C.JUMP),
+    anchor_stack: std.ArrayList(C.CONSTANT),
 
     bytecode: Bytecode,
     /// Current instruction position
@@ -67,6 +68,7 @@ pub const Vm = struct {
     choices_list: std.ArrayList(Choice),
     /// Used to send to the on_choices method
     current_choices: []Choice = undefined,
+    choices_freed: bool = true,
     /// Determines if the vm is waiting on input
     /// hopefully will remove with async?
     is_waiting: bool = false,
@@ -89,34 +91,30 @@ pub const Vm = struct {
     } || Compiler.Error;
 
     /// Initialize Vm
-    /// Sets up globals, root frames, and closures.
     pub fn init(allocator: std.mem.Allocator, bytecode: Bytecode, runner: anytype) !Vm {
-        var globals = try allocator.alloc(Value, bytecode.global_symbols.len);
-
-        var i: usize = 0;
-        while (i < bytecode.global_symbols.len) : (i += 1) {
-            globals[i] = .void;
+        const globals = try allocator.alloc(Value, bytecode.global_symbols.len);
+        @memset(globals, .void);
+        for (bytecode.constants) |c| {
+            if (c != .obj) continue;
+            switch (c.obj.data) {
+                // init visit
+                .anchor =>  globals[c.obj.data.anchor.visit_index] = .{ .visit = 0 },
+                else => {}
+            }
         }
 
-        const root_frame = try allocator.create(Value.Obj.Data);
-        const root_closure = try allocator.create(Value.Obj);
-        root_frame.* = .{
-            .function = .{
-                .instructions = bytecode.instructions,
-                .debug_info = bytecode.debug_info,
-                .locals_count = 0,
-                .arity = 0,
-            },
-        };
-        root_closure.* = .{
+        const main_func_obj = try allocator.create(Value.Obj);
+        main_func_obj.* = .{
+            .id = UUID.new(),
             .data = .{
-                .closure = .{
-                    .data = root_frame,
-                    .free_values = &[_]Value{},
+                .function = .{
+                    .arity = 0,
+                    .instructions = bytecode.instructions,
+                    .locals_count = bytecode.locals_count,
+                    .debug_info = bytecode.debug_info,
                 },
             },
         };
-
         var vm = Vm{
             .alloc = allocator,
             .bytecode = bytecode,
@@ -129,14 +127,35 @@ pub const Vm = struct {
             .iterators = try Stack(Iterator).init(allocator, iterator_size),
             .jump_backups = .empty,
             .jump_requests = .empty,
+            .anchor_stack = .empty,
             .choices_list = .empty,
             .value_subscribers = .empty,
             .loc_map = .empty,
         };
 
         vm.stack.resize(bytecode.locals_count);
-        vm.frames.push(try Frame.create(root_closure, 0, 0));
+        vm.frames.push(try Frame.create(main_func_obj, 0));
         return vm;
+    }
+
+    pub fn deinit(self: *Vm) void {
+        self.alloc.destroy(self.frames.backing[0].func);
+        self.frames.deinit();
+        self.choices_list.deinit(self.alloc);
+        self.stack.deinit();
+        self.iterators.deinit();
+        self.jump_backups.deinit(self.alloc);
+        self.anchor_stack.deinit(self.alloc);
+        self.jump_requests.deinit(self.alloc);
+        self.gc.deinit();
+        self.value_subscribers.deinit(self.alloc);
+        self.alloc.free(self.globals);
+        if (!self.choices_freed) self.alloc.free(self.current_choices);
+        if (self.err.msg) |msg| {
+            self.alloc.free(msg);
+            self.err.msg = null;
+            self.err.file = null;
+        }
     }
 
     pub fn setLocale(self: *Vm, key: ?[]const u8) !void {
@@ -179,25 +198,6 @@ pub const Vm = struct {
         }
     }
 
-    pub fn deinit(self: *Vm) void {
-        self.alloc.destroy(self.currentFrame().cl.data.closure.data);
-        Value.Obj.destroy(self.alloc, self.currentFrame().cl);
-        self.choices_list.deinit(self.alloc);
-        self.stack.deinit();
-        self.iterators.deinit();
-        self.jump_backups.deinit(self.alloc);
-        self.jump_requests.deinit(self.alloc);
-        self.frames.deinit();
-        self.gc.deinit();
-        self.value_subscribers.deinit(self.alloc);
-        self.alloc.free(self.globals);
-        if (self.err.msg) |msg| {
-            self.alloc.free(msg);
-            self.err.msg = null;
-            self.err.file = null;
-        }
-    }
-
     /// Returns root values that should not be cleaned up by the garbage collector
     pub fn roots(self: *Vm) []const []Value {
         return &([_][]Value{ self.globals, self.stack.backing });
@@ -224,6 +224,7 @@ pub const Vm = struct {
             self.alloc.free(c.tags);
         }
         self.alloc.free(self.current_choices);
+        self.choices_freed = true;
     }
 
     pub fn getGlobalsIndex(self: *Vm, name: []const u8) !usize {
@@ -276,50 +277,40 @@ pub const Vm = struct {
     }
 
     pub fn interpret(self: *Vm) !void {
-        const path = if (self.bytecode.boughs.len == 0) null else self.bytecode.boughs[0].name;
+        const path: ?[]const u8 = for (self.bytecode.constants) |v| {
+            if (v == .obj and v.obj.data == .anchor) break v.obj.data.anchor.name;
+        } else null;
         try self.start(path);
         while (self.can_continue) {
             try self.run();
         }
     }
 
-    pub fn start(self: *Vm, bough_path: ?[]const u8) !void {
+    pub fn start(self: *Vm, start_path: ?[]const u8) !void {
         self.can_continue = true;
         self.stack.resize(self.bytecode.locals_count);
         while (self.frames.count > 1) {
             _ = self.frames.pop();
         }
         self.currentFrame().ip = 0;
-        if (bough_path) |path| {
-            var split_it = std.mem.splitSequence(u8, path, ".");
-            var path_parts = std.ArrayList([]const u8).empty;
-            defer path_parts.deinit(self.alloc);
-            while (split_it.next()) |split| {
-                try path_parts.append(self.alloc, split);
-                const current_path = try std.mem.join(self.alloc, ".", path_parts.items);
-                defer self.alloc.free(current_path);
-                var found = false;
-                for (self.bytecode.boughs) |b| {
-                    if (std.mem.eql(u8, current_path, b.name)) {
-                        try self.jump_requests.append(self.alloc, b.ip);
-                        found = true;
-                        break;
-                    }
+        if (start_path) |path| {
+            for (self.bytecode.constants, 0..) |v, i| {
+                if (v == .obj and v.obj.data == .anchor and std.mem.eql(u8, v.obj.data.anchor.name, path)) {
+                    try self.prepareDivert(@intCast(i));
+                    return;
                 }
-                if (!found) {
-                    self.err.msg = try std.fmt.allocPrint(self.alloc, "Could not find starting path", .{});
-                    self.err.line = 1;
-                    return Error.BoughNotFound;
-                }
+            } else {
+                self.err.msg = try std.fmt.allocPrint(self.alloc, "Could not find starting path {s}", .{path});
+                self.err.line = 1;
+                return Error.BoughNotFound;
             }
         }
-        std.mem.reverse(C.JUMP, self.jump_requests.items);
     }
 
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {
         self.err.msg = try std.fmt.allocPrint(self.alloc, msg, args);
         const ip = self.currentFrame().ip;
-        cont: for (self.currentFrame().cl.data.closure.data.function.debug_info) |d| {
+        cont: for (self.currentFrame().func.data.function.debug_info) |d| {
             for (d.ranges.items) |r| {
                 if (ip >= r.start and ip <= r.end) {
                     self.err.line = r.line;
@@ -388,18 +379,27 @@ pub const Vm = struct {
                         const value: f32 = @floatFromInt(left.visit);
                         left = .{ .number = value };
                     }
+                    if (left == .obj and left.obj.data == .string) {
+                        const str = left.obj.data.string;
+                        left = .{ .const_string = str };
+                    }
+                    if (right == .obj and right.obj.data == .string) {
+                        const str = right.obj.data.string;
+                        right = .{ .const_string = str };
+                    }
+
                     if (@intFromEnum(right) != @intFromEnum(left)) {
-                        return self.fail("Cannot add types {s} and {s}", .{ left.typeName(), right.typeName() });
+                        return self.fail("Cannot add types {s} and {s}: {f} {f}", .{ left.typeName(), right.typeName(), left, right });
                     }
                     switch (right) {
+                        .const_string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.alloc, u8, &.{ std.mem.trimRight(u8, left.const_string, &[_]u8{0}), s }) }),
                         .number => try self.push(.{ .number = right.number + left.number }),
                         .obj => |o| {
                             switch (o.data) {
-                                .string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.alloc, u8, &.{ std.mem.trimRight(u8, left.obj.data.string, &[_]u8{0}), s }) }),
-                                else => return self.fail("Cannot add types {s} and {s}", .{ left.typeName(), right.typeName() }),
+                                else => return self.fail("Cannot add types {s} and {s}: {f} {f}", .{ left.typeName(), right.typeName(),left, right }),
                             }
                         },
-                        else => return self.fail("Cannot add types {s} and {s}", .{ left.typeName(), right.typeName() }),
+                        else => return self.fail("Cannot add types {s} and {s}: {f} {f}", .{ left.typeName(), right.typeName(), left, right }),
                     }
                 },
                 .subtract, .multiply, .divide, .modulus => try self.binaryNumberOp(op),
@@ -435,6 +435,10 @@ pub const Vm = struct {
                 },
                 .jump => {
                     const dest = self.takeInt(C.JUMP);
+                    if (self.jump_requests.pop()) |req| {
+                        self.currentFrame().ip = req;
+                        continue;
+                    }
                     if (dest > self.currentFrame().instructions().len) break;
                     self.currentFrame().ip = dest;
                 },
@@ -528,7 +532,7 @@ pub const Vm = struct {
                         },
                         .instance => |inst| {
                             const field_name = field_value.obj.data.string;
-                            if (inst.base.data.class.getIndex(field_name)) |idx| {
+                            if (inst.base.data.class.getFieldIndex(field_name)) |idx| {
                                 inst.fields[idx] = new_value;
                             } else {
                                 return self.fail("Instance of '{s}' does not contain field '{s}'", .{ inst.base.data.class.name, field_name });
@@ -538,31 +542,43 @@ pub const Vm = struct {
                         else => return self.fail("Cannot index '{s}' into type {s}", .{ field_value.typeName(), instance_value.typeName() }),
                     }
                 },
-                .get_builtin => {
-                    const index = self.takeInt(C.BUILTIN);
-                    const len = builtins.functions.keys().len;
-                    if (index >= len)
-                        return self.fail("Index {d} out of bounds for builtins length {d}", .{ index, len });
-                    const value = builtins.functions.values()[index];
-                    try self.push(value);
+                .get_upvalue => {
+                    const frames_to_skip = self.takeInt(u8);
+                    const index = self.takeInt(C.LOCAL);
+                    const frame_count = self.frames.items.len;
+
+                    if (frame_count < frames_to_skip) {
+                        return self.fail("Variable is no longer in scope", .{});
+                    }
+
+                    const target_frame = self.frames.items[frame_count - 1 - frames_to_skip];
+                    const value = self.stack.items[target_frame.bp + index];
+                    self.stack.push(value);
                 },
-                .get_free => {
-                    const index = self.takeInt(C.FREE);
-                    const obj = self.currentFrame().cl;
-                    try self.push(obj.data.closure.free_values[index]);
-                },
-                .set_free => {
-                    const index = self.takeInt(C.FREE);
-                    var obj = self.currentFrame().cl;
-                    obj.data.closure.free_values[index] = try self.pop();
+                .set_upvalue => {
+                    const frames_to_skip = self.takeInt(u8);
+                    const index = self.takeInt(C.LOCAL);
+                    const frame_count = self.frames.items.len;
+
+                    if (frame_count < frames_to_skip) {
+                        return self.fail("Variable is no longer in scope", .{});
+                    }
+
+                    const target_frame = self.frames.items[frame_count - frames_to_skip];
+                    self.stack.items[target_frame.bp + index] = try self.pop();
                 },
                 .string, .loc => {
                     const index = self.takeInt(C.CONSTANT);
                     const str = if (op == .string) self.bytecode.constants[index].obj.*.data.string else self.loc_map.get(self.bytecode.uuids[index]) orelse return self.fail("Could not find localization id '{s}'", .{self.bytecode.uuids[index]});
                     var count = self.takeInt(u8);
+
+                    if (count == 0) {
+                        try self.push(.{ .const_string = str });
+                        continue;
+                    }
+
                     var args = try self.alloc.alloc(Value, count);
                     defer self.alloc.free(args);
-                    // const total = count;
                     while (count > 0) : (count -= 1) {
                         args[count - 1] = try self.pop();
                     }
@@ -590,12 +606,16 @@ pub const Vm = struct {
                                 .number => |n| {
                                     try std.fmt.format(writer, "{d}", .{n});
                                 },
+                                .timestamp => |t| {
+                                    try std.fmt.format(writer, "{d}", .{t});
+                                },
                                 .bool => |b| try writer.writeAll(if (b) "true" else "false"),
                                 .enum_value => |e| {
                                     if (e.index >= e.base.data.@"enum".values.len)
                                         return self.fail("Enum index {d} is out of bounds for '{s}'", .{ e.index, e.base.data.@"enum".name });
                                     try writer.writeAll(e.base.data.@"enum".values[e.index]);
                                 },
+                                .const_string => |cs| try writer.writeAll(std.mem.trimRight(u8, cs, &[_]u8{0})),
                                 .obj => |o| {
                                     switch (o.data) {
                                         // remove final 0
@@ -664,29 +684,6 @@ pub const Vm = struct {
                 .iter_end => {
                     _ = self.iterators.pop();
                 },
-                .class => {
-                    const value = try self.pop();
-                    var count = self.takeInt(C.FIELDS);
-                    var fields = try std.ArrayList(Class.Field).initCapacity(self.alloc, count);
-                    errdefer fields.deinit(self.alloc);
-                    while (count > 0) : (count -= 1) {
-                        const name = try self.pop();
-                        const field_name = try self.alloc.dupe(u8, name.obj.data.string);
-                        const field_value = try self.pop();
-                        fields.appendAssumeCapacity(.{
-                            .name = field_name,
-                            .value = field_value,
-                        });
-                    }
-
-                    std.mem.reverse(Class.Field, fields.items);
-                    const class = try Class.init(
-                        self.alloc,
-                        try self.alloc.dupe(u8, value.obj.data.string),
-                        try fields.toOwnedSlice(self.alloc),
-                    );
-                    try self.pushAlloc(.{ .class = class });
-                },
                 .instance => {
                     const value = try self.pop();
                     if (value != .obj and value.obj.data != .class)
@@ -694,7 +691,7 @@ pub const Vm = struct {
                     var class = value.obj.data.class;
 
                     var count = self.takeInt(C.FIELDS);
-                    var fields = std.ArrayList(Class.Field).empty;
+                    var fields = std.ArrayList(Class.Member).empty;
                     defer fields.deinit(self.alloc);
                     while (count > 0) : (count -= 1) {
                         const name = try self.pop();
@@ -705,7 +702,7 @@ pub const Vm = struct {
                             .value = field,
                         });
                     }
-                    std.mem.reverse(Class.Field, fields.items);
+                    std.mem.reverse(Class.Member, fields.items);
                     const instance = try class.createInstance(value.obj, try fields.toOwnedSlice(self.alloc));
                     try self.pushAlloc(.{ .instance = instance });
                 },
@@ -728,8 +725,7 @@ pub const Vm = struct {
                     switch (target) {
                         .obj => |o| switch (o.data) {
                             .string => {
-                                if (index == .obj and index.obj.data == .string) {
-                                    const name = index.obj.data.string;
+                                if (index.asString()) |name| {
                                     if (std.mem.eql(u8, name, "has")) {
                                         try self.push(builtins.methods.get("has").?);
                                         try self.push(target);
@@ -739,8 +735,7 @@ pub const Vm = struct {
                                 }
                             },
                             .list => |l| {
-                                if (index == .obj and index.obj.data == .string) {
-                                    const name = index.obj.data.string;
+                                if (index.asString()) |name| {
                                     if (builtins.methods.get(name)) |method_value| {
                                         try self.push(method_value);
                                         try self.push(target);
@@ -755,8 +750,7 @@ pub const Vm = struct {
                             .map => |m| {
                                 if (m.get(index)) |v| {
                                     try self.push(v);
-                                } else if (index == .obj and index.obj.data == .string) {
-                                    const name = index.obj.data.string;
+                                } else if (index.asString()) |name| {
                                     if (std.mem.eql(u8, name, "add")) {
                                         try self.push(builtins.methods.get("__addmap").?);
                                         try self.push(target);
@@ -767,59 +761,52 @@ pub const Vm = struct {
                                 } else try self.push(Nil);
                             },
                             .set => {
-                                if (index != .obj and index.obj.data != .string)
-                                    return self.fail("Can only query set methods by string name, found '{s}'", .{index.typeName()});
-                                const name = index.obj.data.string;
-                                if (builtins.methods.get(name)) |method_value| {
-                                    try self.push(method_value);
-                                    try self.push(target);
-                                } else return self.fail("Unknown method '{s}' on set. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
+                                const name = index.asString() orelse return self.fail("Can only query set methods by string name, found '{s}'", .{index.typeName()});
+                                const method = builtins.methods.get(name) orelse return self.fail("Unknown method '{s}' on set. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
+                                try self.push(method);
+                                try self.push(target);
                             },
                             .instance => |i| {
-                                if (index != .obj and index.obj.data != .string)
-                                    return self.fail("Can only query instance fields by string name, found '{s}'", .{index.typeName()});
-                                if (i.base.data.class.getIndex(index.obj.data.string)) |idx| {
-                                    const field = i.fields[idx];
-                                    try self.push(field);
-                                    if (field == .obj and field.obj.data == .closure) {
-                                        try self.push(target);
-                                    }
-                                } else return self.fail("Unknown field '{s}' on instance of {s}.", .{ index.obj.data.string, i.base.data.class.name });
+                                const name = index.asString() orelse return self.fail("Can only query instance fields by string name, found '{s}'", .{index.typeName()});
+                                const value = try i.getProperty(name) orelse return self.fail("Unknown field '{s}' on instance of {s}.", .{ name, i.base.data.class.name });
+                                try self.push(value);
+                                if (value == .obj and value.obj.data == .function) {
+                                    // push instance self
+                                    try self.push(target);
+                                }
                             },
                             .@"enum" => |e| {
-                                if (index != .obj and index.obj.data != .string)
-                                    return self.fail("Can only query enum values by string name, found '{s}'", .{index.typeName()});
-                                var found = false;
-                                for (e.values, 0..) |name, i| {
-                                    if (std.mem.eql(u8, name, index.obj.data.string)) {
+                                const name = index.asString() orelse return self.fail("Can only query enum values by string name, found '{s}'", .{index.typeName()});
+                                for (e.values, 0..) |value, i| {
+                                    if (std.mem.eql(u8, value, name)) {
                                         try self.push(.{ .enum_value = .{ .index = @intCast(i), .base = target.obj } });
-                                        found = true;
                                         break;
                                     }
-                                }
-                                if (!found) return self.fail("Unknown value '{s}' on enum '{s}'", .{ index.obj.data.string, e.name });
+                                } else return self.fail("Unknown value '{s}' on enum '{s}'", .{ index.obj.data.string, e.name });
                             },
                             .class => |c| {
-                                if (index != .obj and index.obj.data != .string)
-                                    return self.fail("Can only query class fields by string name, found '{s}'", .{index.typeName()});
-                                var found = false;
+                                const name = index.asString() orelse return self.fail("Can only query class fields by string name, found '{s}'", .{index.typeName()});
                                 for (c.fields) |field| {
-                                    if (std.mem.eql(u8, field.name, index.obj.data.string)) {
+                                    if (std.mem.eql(u8, field.name, name)) {
                                         try self.push(field.value);
-                                        if (field.value == .obj and field.value.obj.data == .closure) {
-                                            try self.push(Nil); // add nil for "self" in static method
-                                        }
-                                        found = true;
+                                        break;
                                     }
+                                } else {
+                                    for (c.methods) |method| {
+                                        if (std.mem.eql(u8, method.name, name)) {
+                                            try self.push(method.value);
+                                            if (method.value == .obj and method.value.obj.data == .function) {
+                                                try self.push(Nil); // add nil for "self" in static method
+                                            }
+                                            break;
+                                        }
+                                    } else return self.fail("Unknown value '{s}' on Class '{s}'", .{ name, c.name });
                                 }
-                                if (!found) return self.fail("Unknown value '{s}' on Class '{s}'", .{ index.obj.data.string, c.name });
                             },
                             else => return self.fail("Unknown target type '{s}' to index. Only lists, maps, sets, or instances can be indexed.", .{index.typeName()}),
                         },
                         .map_pair => |mp| {
-                            if (index != .obj and index.obj.data != .string)
-                                return self.fail("Unknown index key '{s}' on map key/value pair. Only \"key\" or \"value\" are allowed.", .{index.typeName()});
-                            const name = index.obj.data.string;
+                            const name = index.asString() orelse return self.fail("Unknown index key '{s}' on map key/value pair. Only \"key\" or \"value\" are allowed.", .{index.typeName()});
                             if (std.mem.eql(u8, name, "key")) {
                                 try self.push(mp.key.*);
                             } else if (std.mem.eql(u8, name, "value")) {
@@ -836,14 +823,13 @@ pub const Vm = struct {
                     var speaker: ?[]const u8 = null;
                     if (has_speaker) {
                         const speaker_value = try self.pop();
-                        if (speaker_value != .obj and speaker_value.obj.data != .string)
+                        if (speaker_value == .obj and speaker_value.obj.data != .string)
                             return self.fail("Speaker must be of type string, but found '{s}'", .{speaker_value.typeName()});
                         speaker = speaker_value.obj.data.string;
                     }
 
                     const dialogue_value = try self.pop();
-                    if (dialogue_value != .obj and dialogue_value.obj.data != .string)
-                        return self.fail("Dialogue must be of type string, but found '{s}'", .{dialogue_value.typeName()});
+                    const dialogue_str = dialogue_value.asString() orelse return self.fail("Dialogue must be of type string, but found '{s}'", .{dialogue_value.typeName()});
 
                     const tag_count = self.takeInt(u8);
                     var tags = try self.alloc.alloc([]const u8, tag_count);
@@ -859,7 +845,7 @@ pub const Vm = struct {
                     if (is_in_jump) continue;
                     self.is_waiting = true;
                     self.runner.onLine(self, .{
-                        .content = dialogue_value.obj.data.string,
+                        .content = dialogue_str,
                         .speaker = speaker,
                         .tags = tags,
                         .id = self.bytecode.uuids[id_index],
@@ -872,15 +858,14 @@ pub const Vm = struct {
                     if (value != .obj)
                         return self.fail("Cannot call non-function type {s}", .{value.typeName()});
                     switch (value.obj.data) {
-                        .closure => |c| {
-                            const f = c.data.function;
+                        .function => |f| {
                             if (f.arity != arg_count) {
                                 return self.fail(
                                     "Function expected {} arguments, but found {}",
                                     .{ f.arity, arg_count },
                                 );
                             }
-                            const frame = try Frame.create(value.obj, 0, self.stack.count - arg_count);
+                            const frame = try Frame.create(value.obj, self.stack.count - arg_count);
                             self.frames.push(frame);
                             self.stack.count = frame.bp + f.locals_count;
                         },
@@ -892,7 +877,7 @@ pub const Vm = struct {
                                 );
                             const result = b.backing(self, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
                             if (self.break_on_assert and std.mem.eql(u8, b.name, "assert") and result != .void) {
-                                return self.fail("Assertion Failed: {s}", .{result.obj.data.string});
+                                return self.fail("Assertion Failed: {s}", .{result.asString() orelse unreachable});
                             }
                             self.stack.count -= arg_count + 1;
                             try self.push(result);
@@ -912,28 +897,6 @@ pub const Vm = struct {
                         },
                     }
                 },
-                .closure => {
-                    const index = self.takeInt(C.CONSTANT);
-                    const count = self.takeInt(u8);
-                    var value = self.bytecode.constants[index];
-                    var free_values = try self.alloc.alloc(Value, count);
-                    for (0..count) |i| {
-                        free_values[i] = self.stack.items[self.stack.count - count + i];
-                    }
-                    const closure = try self.gc.create(self, .{
-                        .closure = .{
-                            .data = &value.obj.data,
-                            .free_values = free_values,
-                        },
-                    });
-                    const reset_count = self.stack.count - count;
-                    self.stack.count = reset_count;
-                    try self.push(closure);
-                },
-                .current_closure => {
-                    const current = self.currentFrame().cl;
-                    try self.push(.{ .obj = current });
-                },
                 .return_value => {
                     const value = try self.pop();
                     const frame = self.frames.pop();
@@ -946,28 +909,34 @@ pub const Vm = struct {
                     try self.push(Void);
                 },
                 .fork => {
-                    self.is_waiting = true;
                     self.current_choices = try self.choices_list.toOwnedSlice(self.alloc);
+                    self.choices_freed = false;
                     self.choices_list.clearRetainingCapacity();
                     if (is_in_jump) {
-                        for (self.current_choices) |c| self.alloc.free(c.tags);
-                        self.alloc.free(self.current_choices);
-                        continue;
+                        const next_target = self.jump_requests.getLast();
+                        // If the current IP is the target, pop it.
+                        if (self.currentFrame().ip >= next_target) {
+                            _ = self.jump_requests.pop();
+                        } else continue;
                     }
+
+                    self.is_waiting = true;
                     self.runner.onChoices(self, self.current_choices);
                     return;
                 },
                 .choice => {
-                    const ip = self.takeInt(C.JUMP);
+                    const ip = self.takeInt(C.JUMP); // The skip-jump
                     const is_unique = self.takeInt(u8) == 1;
                     const id_index = self.takeInt(C.CONSTANT);
-                    const visit_index = self.takeInt(C.GLOBAL);
-                    const visit_count = self.globals[visit_index].visit;
+
+                    const anchor_idx = self.takeInt(C.CONSTANT);
+                    const anchor_val = self.bytecode.constants[anchor_idx];
+                    const anchor = anchor_val.obj.data.anchor;
+
+                    const visit_count = self.globals[anchor.visit_index].visit;
 
                     const content_value = try self.pop();
-                    if (content_value != .obj and content_value.obj.data != .string)
-                        return self.fail("Choice content must be of type string, but found '{s}'", .{content_value.typeName()});
-                    const content = content_value.obj.data.string;
+                    const content_str = content_value.asString() orelse return self.fail("Choice content must be of type string, but found '{s}'", .{content_value.typeName()});
 
                     const tag_count = self.takeInt(u8);
                     var tags = try self.alloc.alloc([]const u8, tag_count);
@@ -981,7 +950,7 @@ pub const Vm = struct {
                     if (visit_count > 0 and is_unique) continue;
 
                     try self.choices_list.append(self.alloc, .{
-                        .content = content,
+                        .content = content_str,
                         .tags = tags,
                         .visit_count = visit_count,
                         .ip = ip,
@@ -989,24 +958,25 @@ pub const Vm = struct {
                     });
                 },
                 .visit => {
-                    const index = self.takeInt(C.GLOBAL);
-                    self.globals[index].visit += 1;
+                    const anchor_idx = self.takeInt(C.CONSTANT);
+                    const value = self.bytecode.constants[anchor_idx];
+                    const anchor = value.obj.data.anchor;
+                    self.globals[anchor.visit_index].visit += 1;
+                    try self.anchor_stack.append(self.alloc, anchor_idx);
                 },
                 .divert => {
-                    // already in a jump request, continue
+                    // If in a jump, go to the next jump instead
                     if (self.jump_requests.pop()) |req| {
                         self.currentFrame().ip = req;
                         continue;
                     }
-                    var count = self.takeInt(u8);
-                    while (count > 0) : (count -= 1) {
-                        const dest = self.takeInt(C.JUMP);
+                    const anchor_idx = self.takeInt(C.CONSTANT);
+                    try self.prepareDivert(anchor_idx);
+
+                    if (self.jump_requests.pop()) |dest| {
                         const len = self.currentFrame().instructions().len;
                         if (dest > len) return self.fail("Divert {d} is out of range {d}", .{ dest, len });
-                        try self.jump_requests.append(self.alloc, dest);
-                    }
-                    if (self.jump_requests.pop()) |req| {
-                        self.currentFrame().ip = req;
+                        self.currentFrame().ip = dest;
                     }
                 },
                 .backup => {
@@ -1019,6 +989,10 @@ pub const Vm = struct {
                     try self.jump_backups.append(self.alloc, ip);
                 },
                 .fin => {
+                    if (self.anchor_stack.items.len > 0) {
+                        _ = self.anchor_stack.pop();
+                    }
+
                     if (self.jump_requests.pop()) |req| {
                         self.currentFrame().ip = req;
                         continue;
@@ -1035,9 +1009,56 @@ pub const Vm = struct {
         self.end();
     }
 
+    fn performBin(comptime T: type, op: OpCode, left: T, right: T) !T {
+        return switch (op) {
+            .subtract => left - right,
+            .multiply => left * right,
+            .divide => if (@typeInfo(T) == .int) @divExact(left, right) else left / right,
+            .modulus => @mod(left, right),
+            else => return error.InvalidOperation,
+        };
+    }
+
+    fn prepareDivert(self: *Vm, anchor_idx: C.CONSTANT) !void {
+        var current_idx: ?C.CONSTANT = anchor_idx;
+        var is_target = true;
+        while (current_idx) |idx| {
+            // If this is an ancestor (not the target itself) and it's already active,
+            // we stop climbing because the environment for the target is already set up.
+            if (!is_target) {
+                for (self.anchor_stack.items) |active_idx| {
+                    if (active_idx == idx) return;
+                }
+            }
+
+            const anchor = self.bytecode.constants[idx].obj.data.anchor;
+            try self.jump_requests.append(self.alloc, anchor.ip);
+
+            // If the target itself is already in the stack, we still want to
+            // jump to its IP, but we should treat it as "leaving" and "re-entering".
+            // We pop it from the anchor_stack so the visit logic treats it as a fresh arrival.
+            if (is_target) {
+                for (self.anchor_stack.items, 0..) |active_idx, i| {
+                    if (active_idx == idx) {
+                        self.anchor_stack.shrinkRetainingCapacity(i);
+                        break;
+                    }
+                }
+            }
+
+            current_idx = anchor.parent_anchor_index;
+            is_target = false;
+        }
+    }
+
     fn binaryNumberOp(self: *Vm, op: OpCode) !void {
         var right = try self.pop();
         var left = try self.pop();
+        if (right == .timestamp and left == .timestamp) {
+            try self.push(.{ .timestamp = performBin(i64, op, left.timestamp, right.timestamp) catch
+                return self.fail("Unknown binary operator '{s}'", .{@tagName(op)}) });
+            return;
+        }
         if (right == .visit) {
             const value: f32 = @floatFromInt(right.visit);
             right = .{ .number = value };
@@ -1050,14 +1071,8 @@ pub const Vm = struct {
             return self.fail("Cannot perform binary operation on types of '{s}' and '{s}'", .{ left.typeName(), right.typeName() });
         const right_num = right.number;
         const left_num = left.number;
-        const total = switch (op) {
-            .subtract => left_num - right_num,
-            .multiply => left_num * right_num,
-            .divide => left_num / right_num,
-            .modulus => @mod(left_num, right_num),
-            else => return self.fail("Unknown binary operator '{s}'", .{@tagName(op)}),
-        };
-        try self.push(.{ .number = total });
+        try self.push(.{ .number = performBin(f32, op, left_num, right_num) catch
+            return self.fail("Unknown binary operator '{s}'", .{@tagName(op)}) });
     }
 
     fn comparisonOp(self: *Vm, op: OpCode) !void {
@@ -1073,7 +1088,7 @@ pub const Vm = struct {
         }
 
         if (@intFromEnum(right) != @intFromEnum(left)) {
-            return self.fail("Cannot compare mismatched types '{s}' and '{s}'", .{ left.typeName(), right.typeName() });
+            return self.fail("Cannot compare mismatched types '{s}' and '{s}': {f} {f}", .{ left.typeName(), right.typeName(), left, right });
         }
         if (right == .enum_value) {
             const value: f32 = @floatFromInt(right.enum_value.index);
@@ -1107,7 +1122,8 @@ pub const Vm = struct {
     }
 
     fn pushAlloc(self: *Vm, data: Value.Obj.Data) !void {
-        self.stack.push(try self.gc.create(self, data));
+        const value = try self.gc.create(self, data);
+        self.stack.push(value);
     }
 
     fn pop(self: *Vm) !Value {

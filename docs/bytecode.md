@@ -9,7 +9,6 @@ Starting Positions of each Section
 | Name                          | Type |
 |-------------------------------|------|
 | [Globals](#Globals)           | u64  |
-| [Boughs](#Boughs)             | u64  |
 | [Instructions](#Instructions) | u64  |
 | [Debug Info](#Debug)          | u64  |
 | [Constants](#Constants)       | u64  |
@@ -32,21 +31,6 @@ Starting Positions of each Section
 | Index      | u32        |
 | Is Extern  | u8         |
 | Is Mutable | u8         |
-
-## Boughs
-
-| Name  | Type                   |
-|-------|------------------------|
-| Count | u64                    |
-| Items | [Bough](#Bough)[Count] |
-
-### Bough
-
-| Name     | Type       |
-|----------|------------|
-| Length   | u16         |
-| Name     | u8[Length] |
-| Position | u32        |
 
 ## Instructions
 

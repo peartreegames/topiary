@@ -150,7 +150,9 @@ pub export fn start(vm_ptr: usize, path_ptr: [*:0]const u8) callconv(.c) void {
         }
     }
 
-    const path = if (path_ptr[0] != 0) std.mem.sliceTo(path_ptr, 0) else if (vm.bytecode.boughs.len > 0) vm.bytecode.boughs[0].name else {
+    const path = if (path_ptr[0] != 0) std.mem.sliceTo(path_ptr, 0) else for(vm.bytecode.constants) |c| {
+        if (c == .obj and c.obj.data == .anchor) break c.obj.data.anchor.name;
+    } else {
         logger.log("Topi file does not have a start bough", .{}, .err);
         return;
     };

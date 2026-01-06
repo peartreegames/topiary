@@ -163,7 +163,7 @@ const TestArgs = struct {
 };
 
 pub fn print(comptime msg: []const u8, args: anytype) !void {
-    var buffer: [1024]u8 = undefined;
+    var buffer: [128]u8 = undefined;
     var writer = std.fs.File.stdout().writer(&buffer);
     const stdout = &writer.interface;
     stdout.print(msg, args) catch {
@@ -249,7 +249,7 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
 
     if (args.load) |file_path| {
         const file = try if (std.fs.path.isAbsolute(file_path)) std.fs.openFileAbsolute(file_path, .{}) else std.fs.cwd().openFile(file_path, .{});
-        var buf: [1024]u8 = undefined;
+        var buf: [128]u8 = undefined;
         var reader = file.reader(&buf);
         const read = &reader.interface;
         defer file.close();
@@ -263,7 +263,7 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
     try vm.setLocale(args.language);
     while (vm.can_continue) {
         vm.run() catch {
-            var buffer: [1024]u8 = undefined;
+            var buffer: [128]u8 = undefined;
             var writer = std.fs.File.stdout().writer(&buffer);
             const stdout = &writer.interface;
             vm.err.print(stdout);
@@ -277,7 +277,7 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
             try dir.makePath(dir_name);
         }
         var file = try dir.createFile(file_path, .{});
-        var buf : [1024]u8 = undefined;
+        var buf : [128]u8 = undefined;
         var file_writer = file.writer(&buf);
         const writer = &file_writer.interface;
         defer file.close();
@@ -312,7 +312,7 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
     }
     var file = try dir.createFile(args.output.?, .{});
     defer file.close();
-    var buf: [1024]u8 = undefined;
+    var buf: [128]u8 = undefined;
     var file_writer = file.writer(&buf);
     bytecode.serialize(alloc, &file_writer) catch |err| {
         try print("Could not serialize bytecode\n", .{});
@@ -340,7 +340,7 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
         var vm = try Vm.init(alloc, bytecode, &auto_runner.runner);
         defer vm.deinit();
         vm.interpret() catch {
-            var buffer: [1024]u8 = undefined;
+            var buffer: [128]u8 = undefined;
             var writer = std.fs.File.stdout().writer(&buffer);
             const stdout = &writer.interface;
             vm.err.print(stdout);
@@ -373,7 +373,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
     switch (args.command) {
         .@"export" => {
             if (args.dry) {
-                var buffer: [1024]u8 = undefined;
+                var buffer: [128]u8 = undefined;
                 var writer = std.fs.File.stdout().writer(&buffer);
                 const stdout = &writer.interface;
                 Locale.exportFileAtPath(full_path, stdout, alloc) catch |err| {
@@ -388,7 +388,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                 const file = try dir.createFile(args.output.?, .{});
                 defer file.close();
 
-                var buffer: [1024]u8 = undefined;
+                var buffer: [128]u8 = undefined;
                 var file_writer = file.writer(&buffer);
                 const writer = &file_writer.interface;
                 Locale.exportFileAtPath(full_path, writer, alloc) catch |err| {

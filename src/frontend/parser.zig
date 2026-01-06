@@ -108,13 +108,13 @@ pub const Parser = struct {
             .include => try self.includeStatement(),
             .class => try self.classDeclaration(),
             .@"enum", .enumseq => try self.enumDeclaration(),
-            .@"extern", .@"var", .@"const" => try self.varDeclaration(),
+            .@"var", .@"const" => try self.varDeclaration(),
             .bough => try self.boughStatement(),
             .divert => try self.divertStatement(),
             .colon => try self.dialogueStatement(),
             .tilde => try self.choiceStatement(),
             .fork => try self.forkStatement(),
-            .@"fn" => try self.functionDeclaration(),
+            .@"extern", .@"fn" => try self.functionDeclaration(),
             .@"for" => try self.forStatement(),
             .fin => .{ .token = self.current_token, .type = .fin },
             .@"if" => try self.ifStatement(),
@@ -213,6 +213,7 @@ pub const Parser = struct {
                 var method = try self.functionDeclaration();
                 method.type.function.is_method = true;
                 try methods.append(self.allocator, method);
+                self.next();
             } else {
                 try names.append(self.allocator, try self.consumeIdentifier());
                 try self.expectCurrent(.equal);
@@ -268,11 +269,6 @@ pub const Parser = struct {
 
     fn varDeclaration(self: *Parser) Error!Statement {
         const start_token = self.current_token;
-        var is_extern = false;
-        if (self.currentIs(.@"extern")) {
-            is_extern = true;
-            self.next();
-        }
         const is_mutable = self.currentIs(.@"var");
         self.next();
         const name = try self.consumeIdentifier();
@@ -286,7 +282,6 @@ pub const Parser = struct {
                     .name = name,
                     .initializer = expr,
                     .is_mutable = is_mutable,
-                    .is_extern = is_extern,
                 },
             },
         };
@@ -294,12 +289,17 @@ pub const Parser = struct {
 
     fn functionDeclaration(self: *Parser) Error!Statement {
         const start = self.current_token;
+        var is_extern = false;
+        if (self.currentIs(.@"extern")) {
+            is_extern = true;
+            self.next();
+        }
         self.next();
         const name = try self.consumeIdentifier();
         var list = std.ArrayList([]const u8).empty;
         errdefer list.deinit(self.allocator);
 
-        try self.expectCurrent(.left_paren);
+        try self.expectCurrent(.pipe);
         self.next();
         if (self.currentIs(.identifier)) {
             try list.append(self.allocator, try self.consumeIdentifier());
@@ -308,7 +308,7 @@ pub const Parser = struct {
             self.next();
             try list.append(self.allocator, try self.consumeIdentifier());
         }
-        try self.expectCurrent(.right_paren);
+        try self.expectCurrent(.pipe);
         self.next();
         return .{
             .token = start,
@@ -317,6 +317,7 @@ pub const Parser = struct {
                     .name = name,
                     .parameters = try list.toOwnedSlice(self.allocator),
                     .body = try self.block(),
+                    .is_extern = is_extern,
                 },
             },
         };
@@ -741,7 +742,6 @@ pub const Parser = struct {
 
     fn divertStatement(self: *Parser) Error!Statement {
         const start_token = self.current_token;
-        // TODO: Perhaps this should just be an expression and indexers used
         var list = std.ArrayList([]const u8).empty;
         errdefer list.deinit(self.allocator);
 

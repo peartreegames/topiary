@@ -2,22 +2,22 @@ const std = @import("std");
 const Obj = @import("../types/index.zig").Value.Obj;
 
 pub const Frame = struct {
-    cl: *Obj,
+    func: *Obj,
     ip: usize,
     bp: usize,
 
-    pub fn create(obj: *Obj, ip: usize, bp: usize) !Frame {
-        if (obj.data != .closure) {
+    pub fn create(obj: *Obj, bp: usize) !Frame {
+        if (obj.data != .function) {
             return error.InvalidType;
         }
         return .{
-            .cl = obj,
-            .ip = ip,
+            .func = obj,
+            .ip = 0,
             .bp = bp,
         };
     }
 
     pub fn instructions(self: *Frame) []const u8 {
-        return self.cl.data.closure.data.function.instructions;
+        return self.func.data.function.instructions;
     }
 };

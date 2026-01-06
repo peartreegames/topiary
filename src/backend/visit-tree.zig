@@ -109,6 +109,10 @@ pub const VisitTree = struct {
         self.root.reset();
     }
 
+    pub fn getPath(self: *VisitTree, alloc: std.mem.Allocator) ![]const u8 {
+        return try std.mem.join(alloc, ".", self.list.items);
+    }
+
     pub fn resolve(self: *VisitTree, name: []const u8) ?*Node {
         var node = self.current;
         if (std.mem.eql(u8, node.name, name)) return node;

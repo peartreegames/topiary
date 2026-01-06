@@ -7,17 +7,18 @@ const Obj = Value.Obj;
 
 pub const Gc = struct {
     allocator: std.mem.Allocator,
-    bytes_allocated: usize,
-    next_collection: usize,
+    allocated: usize,
+    threshold: usize,
     stack: ?*Obj,
 
     const default_collection: usize = 1024 * 1024;
+    const growth_factor = 1.5;
 
     pub fn init(allocator: std.mem.Allocator) Gc {
         return .{
             .allocator = allocator,
-            .bytes_allocated = 0,
-            .next_collection = default_collection,
+            .allocated = 0,
+            .threshold = default_collection,
             .stack = null,
         };
     }
@@ -25,7 +26,7 @@ pub const Gc = struct {
     pub fn deinit(self: *Gc) void {
         while (self.stack) |obj| {
             const next = obj.next;
-            Obj.destroy(self.allocator, obj);
+            obj.destroy(self.allocator);
             self.stack = next;
         }
         self.* = undefined;
@@ -40,8 +41,8 @@ pub const Gc = struct {
             .next = self.stack,
         };
         self.stack = obj;
-        self.bytes_allocated += @sizeOf(Obj);
-        if (self.bytes_allocated > self.next_collection) {
+        self.allocated += @sizeOf(Obj);
+        if (self.allocated > self.threshold) {
             mark(obj);
             self.collect(root_ctx);
         }
@@ -64,6 +65,7 @@ pub const Gc = struct {
     }
 
     fn sweep(self: *Gc) void {
+        self.allocated = 0;
         if (self.stack == null) return;
 
         var objPtr = self.stack;
@@ -71,7 +73,7 @@ pub const Gc = struct {
             if (!obj.is_marked) {
                 const unmarked = obj;
                 objPtr = obj.next;
-                Obj.destroy(self.allocator, unmarked);
+                unmarked.destroy(self.allocator);
                 continue;
             }
             obj.is_marked = false;
@@ -82,6 +84,7 @@ pub const Gc = struct {
     fn collect(self: *Gc, root_ctx: anytype) void {
         markAll(root_ctx);
         self.sweep();
-        self.bytes_allocated = 0;
+        self.threshold = @intFromFloat(@as(f64, @floatFromInt(self.allocated)) * growth_factor);
+        if (self.threshold < default_collection) self.threshold = default_collection;
     }
 };

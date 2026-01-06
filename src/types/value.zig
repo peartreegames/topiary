@@ -4,6 +4,7 @@ const runtime = @import("../runtime/index.zig");
 const Gc = runtime.Gc;
 const Vm = runtime.Vm;
 const Builtin = runtime.Builtin;
+const runtime_builtins = runtime.builtins;
 
 const utils = @import("../utils/index.zig");
 const UUID = utils.UUID;
@@ -21,6 +22,8 @@ pub const True = Value{ .bool = true };
 pub const False = Value{ .bool = false };
 pub const Nil = Value{ .nil = {} };
 pub const Void = Value{ .void = {} };
+pub const Zero = Value{ .number = 0 };
+pub const One = Value{ .number = 1 };
 
 pub const OnValueChanged = *const fn (vm: *Vm, []const u8, value: Value) void;
 pub const Type = enum(u8) {
@@ -33,6 +36,8 @@ pub const Type = enum(u8) {
     map_pair,
     visit,
     enum_value,
+    timestamp,
+    const_string,
     ref,
 };
 
@@ -57,6 +62,8 @@ pub const Value = union(Type) {
     },
     visit: u32,
     enum_value: Enum.Val,
+    timestamp: i64,
+    const_string: []const u8,
     ref: UUID.ID,
 
     pub const adapter = Value.Adapter{};
@@ -77,11 +84,10 @@ pub const Value = union(Type) {
             map,
             set,
             function,
-            ext_function,
             builtin,
-            closure,
             class,
             instance,
+            anchor,
         };
 
         pub const Data = union(DataType) {
@@ -109,25 +115,24 @@ pub const Value = union(Type) {
                 is_method: bool,
                 name: []const u8,
             },
-            closure: struct {
-                data: *Data,
-                free_values: []Value,
-            },
             class: Class,
             instance: Class.Instance,
+            anchor: struct {
+                name: []const u8,
+                visit_index: C.GLOBAL,
+                parent_anchor_index: ?C.CONSTANT,
+                ip: C.JUMP,
+            },
         };
 
         pub const MapType = std.ArrayHashMapUnmanaged(Value, Value, Adapter, true);
         pub const SetType = std.ArrayHashMapUnmanaged(Value, void, Adapter, true);
 
-        pub fn destroy(allocator: std.mem.Allocator, obj: *Obj) void {
+        pub fn destroy(obj: *Obj, allocator: std.mem.Allocator) void {
             switch (obj.data) {
+                .anchor => |a| allocator.free(a.name),
                 .string => |s| allocator.free(s),
-                .@"enum" => |e| {
-                    allocator.free(e.name);
-                    for (e.values) |val| allocator.free(val);
-                    allocator.free(e.values);
-                },
+                .@"enum" => |e| e.deinit(allocator),
                 .list => obj.data.list.deinit(allocator),
                 .map => obj.data.map.deinit(allocator),
                 .set => obj.data.set.deinit(allocator),
@@ -140,7 +145,6 @@ pub const Value = union(Type) {
                     e.destroy(e.context_ptr, allocator);
                 },
                 .builtin => {},
-                .closure => |c| allocator.free(c.free_values),
                 .class => |c| c.deinit(),
                 .instance => {
                     allocator.free(obj.data.instance.fields);
@@ -149,6 +153,13 @@ pub const Value = union(Type) {
             allocator.destroy(obj);
         }
     };
+
+    pub fn destroy(self: Value, alloc: std.mem.Allocator) void {
+        switch (self) {
+            .obj => |o| o.destroy(alloc),
+            else => {},
+        }
+    }
 
     pub fn is(self: Value, tag_type: Type) bool {
         return self.tag() == tag_type;
@@ -173,12 +184,14 @@ pub const Value = union(Type) {
             .visit => "visit",
             .enum_value => "enum_value",
             .ref => "reference",
+            .timestamp => "timestamp",
+            .const_string => "const_string",
             .obj => |o| switch (o.data) {
+                .anchor => "anchor",
                 .string => "string",
                 .list => "list",
                 .set => "set",
                 .map => "map",
-                .closure => "closure",
                 .function => "function",
                 .ext_function => "extern_function",
                 .class => "class",
@@ -191,6 +204,7 @@ pub const Value = union(Type) {
 
     pub fn len(self: Value) usize {
         return switch (self) {
+            .const_string => |s| s.len,
             .range => |r| @as(usize, @intCast(@abs(r.end - r.start))) + 1,
             .obj => |o| switch (o.data) {
                 .string => |s| s.len,
@@ -200,6 +214,14 @@ pub const Value = union(Type) {
                 else => unreachable,
             },
             else => unreachable,
+        };
+    }
+
+    pub fn asString(self: Value) ?[]const u8 {
+        return switch (self) {
+            .const_string => |s| s,
+            .obj => |o| if (o.data == .string) o.data.string else null,
+            else => null,
         };
     }
 
@@ -226,8 +248,46 @@ pub const Value = union(Type) {
             bool => if (value) True else False,
             @TypeOf(null) => Nil,
             f32 => .{ .number = value },
+            i64 => .{ .timestamp = value },
             else => unreachable,
         };
+    }
+    pub fn clone(self: Value, allocator: std.mem.Allocator) !Value {
+        if (self != .obj) return self;
+
+        const obj = self.obj;
+        switch (obj.data) {
+            .list => |l| {
+                var new_list = try std.ArrayList(Value).initCapacity(allocator, l.items.len);
+                for (l.items) |item| {
+                    try new_list.append(allocator, try item.clone(allocator));
+                }
+                const new_obj = try allocator.create(Value.Obj);
+                new_obj.* = .{ .id = UUID.new(), .data = .{ .list = new_list } };
+                return .{ .obj = new_obj };
+            },
+            .map => |m| {
+                var new_map = Value.Obj.MapType.empty;
+                var it = m.iterator();
+                while (it.next()) |entry| {
+                    try new_map.put(allocator, try entry.key_ptr.clone(allocator), try entry.value_ptr.clone(allocator));
+                }
+                const new_obj = try allocator.create(Value.Obj);
+                new_obj.* = .{ .id = UUID.new(), .data = .{ .map = new_map } };
+                return .{ .obj = new_obj };
+            },
+            .set => |s| {
+                var new_set = Value.Obj.SetType.empty;
+                var it = s.iterator();
+                while (it.next()) |entry| {
+                    try new_set.put(allocator, try entry.key_ptr.clone(allocator), {});
+                }
+                const new_obj = try allocator.create(Value.Obj);
+                new_obj.* = .{ .id = UUID.new(), .data = .{ .set = new_set } };
+                return .{ .obj = new_obj };
+            },
+            else => return self,
+        }
     }
 
     pub fn isTruthy(self: Value) !bool {
@@ -252,6 +312,13 @@ pub const Value = union(Type) {
                 try writer.writeInt(u8, @as(u8, @intCast(fbs.pos)), .little);
                 try writer.writeAll(fbs.getWritten());
             },
+            .const_string => |s| {
+                try writer.writeInt(u16, @as(u16, @intCast(s.len)), .little);
+                try writer.writeAll(s);
+            },
+            .timestamp => |t| {
+                try writer.writeInt(i64, t, .little);
+            },
             .visit => |v| {
                 try writer.writeInt(u32, v, .little);
             },
@@ -259,9 +326,43 @@ pub const Value = union(Type) {
                 try writer.writeByte(@intFromEnum(@as(Obj.DataType, o.data)));
                 try writer.writeAll(&o.id);
                 switch (o.data) {
+                    .anchor => |a| {
+                        try writer.writeInt(u16, @as(u16, @intCast(a.name.len)), .little);
+                        try writer.writeAll(a.name);
+                        try writer.writeInt(C.JUMP, a.ip, .little);
+                        try writer.writeInt(C.GLOBAL, a.visit_index, .little);
+                        if (a.parent_anchor_index) |idx| {
+                            try writer.writeByte(1);
+                            try writer.writeInt(C.CONSTANT, idx, .little);
+                        } else {
+                            try writer.writeByte(0);
+                        }
+                    },
                     .string => |s| {
                         try writer.writeInt(u16, @as(u16, @intCast(s.len)), .little);
                         try writer.writeAll(s);
+                    },
+                    .builtin => |b| {
+                        try writer.writeByte(@intCast(b.name.len));
+                        try writer.writeAll(b.name);
+                    },
+                    .class => |c| {
+                        try writer.writeByte(@intCast(c.name.len));
+                        try writer.writeAll(c.name);
+
+                        try writer.writeByte(@intCast(c.fields.len));
+                        for (c.fields) |f| {
+                            try writer.writeByte(@intCast(f.name.len));
+                            try writer.writeAll(f.name);
+                            try f.value.serialize(writer);
+                        }
+
+                        try writer.writeByte(@intCast(c.methods.len));
+                        for (c.methods) |m| {
+                            try writer.writeByte(@intCast(m.name.len));
+                            try writer.writeAll(m.name);
+                            try m.value.serialize(writer);
+                        }
                     },
                     .function => |f| {
                         try writer.writeByte(f.arity);
@@ -303,6 +404,13 @@ pub const Value = union(Type) {
                 try reader.readSliceAll(buf);
                 return .{ .number = try std.fmt.parseFloat(f32, buf) };
             },
+            .timestamp => {
+                return .{ .timestamp = try reader.takeInt(i64, .little) };
+            },
+            .const_string => {
+                const length = try reader.takeInt(u16, .little);
+                return .{ .const_string = try reader.readAlloc(allocator, length) };
+            },
             .visit => {
                 return .{ .visit = try reader.takeInt(u32, .little) };
             },
@@ -311,12 +419,83 @@ pub const Value = union(Type) {
                 var id: UUID.ID = undefined;
                 try reader.readSliceAll(id[0..]);
                 switch (data_type) {
+                    .anchor => {
+                        const length = try reader.takeInt(u16, .little);
+                        const buf = try reader.readAlloc(allocator, length);
+                        const ip = try reader.takeInt(C.JUMP, .little);
+                        const visit_idx = try reader.takeInt(C.GLOBAL, .little);
+                        const has_parent = (try reader.takeByte()) == 1;
+                        const parent_anchor_idx = if (has_parent)
+                            try reader.takeInt(C.CONSTANT, .little)
+                        else
+                            null;
+                        const obj = try allocator.create(Value.Obj);
+                        obj.* = .{ .id = id, .data = .{ .anchor = .{
+                            .name = buf,
+                            .ip = ip,
+                            .visit_index = visit_idx,
+                            .parent_anchor_index = parent_anchor_idx,
+                        } } };
+                        return .{ .obj = obj };
+                    },
                     .string => {
                         const length = try reader.takeInt(u16, .little);
-                        const buf = try allocator.alloc(u8, length);
-                        try reader.readSliceAll(buf);
+                        const buf = try reader.readAlloc(allocator, length);
                         const obj = try allocator.create(Value.Obj);
                         obj.* = .{ .id = id, .data = .{ .string = buf } };
+                        return .{ .obj = obj };
+                    },
+                    .builtin => {
+                        const name_len = try reader.takeByte();
+                        const name_buf = try reader.readAlloc(allocator, name_len);
+                        defer allocator.free(name_buf);
+
+                        const builtin = runtime_builtins.get(name_buf) orelse
+                            return error.BuiltinNotFound;
+
+                        const obj = try allocator.create(Value.Obj);
+                        obj.* = .{
+                            .id = id,
+                            .data = .{
+                                .builtin = .{
+                                    .name = builtin.obj.data.builtin.name,
+                                    .arity = builtin.obj.data.builtin.arity,
+                                    .is_method = builtin.obj.data.builtin.is_method,
+                                    .backing = builtin.obj.data.builtin.backing,
+                                },
+                            },
+                        };
+                        return .{ .obj = obj };
+                    },
+                    .class => {
+                        const name_len = try reader.takeByte();
+                        const name = try reader.readAlloc(allocator, name_len);
+
+                        const fields_len = try reader.takeByte();
+                        var fields = try allocator.alloc(Class.Member, fields_len);
+                        for (0..fields_len) |i| {
+                            const f_name_len = try reader.takeByte();
+                            const f_name = try reader.readAlloc(allocator, f_name_len);
+                            const f_val = try Value.deserialize(reader, allocator);
+                            fields[i] = .{ .name = f_name, .value = f_val };
+                        }
+
+                        const methods_len = try reader.takeByte();
+                        var methods = try allocator.alloc(Class.Member, methods_len);
+                        for (0..methods_len) |i| {
+                            const m_name_len = try reader.takeByte();
+                            const m_name = try reader.readAlloc(allocator, m_name_len);
+                            const m_val = try Value.deserialize(reader, allocator);
+                            methods[i] = .{ .name = m_name, .value = m_val };
+                        }
+
+                        const obj = try allocator.create(Value.Obj);
+                        obj.* = .{
+                            .id = id,
+                            .data = .{
+                                .class = try Class.init(allocator, name, fields, methods),
+                            },
+                        };
                         return .{ .obj = obj };
                     },
                     .function => {
@@ -324,8 +503,7 @@ pub const Value = union(Type) {
                         const is_method = if ((try reader.takeByte()) == 1) true else false;
                         const locals_count = try reader.takeInt(u16, .little);
                         const instructions_count = try reader.takeInt(u16, .little);
-                        const buf = try allocator.alloc(u8, instructions_count);
-                        try reader.readSliceAll(buf);
+                        const buf = try reader.readAlloc(allocator, instructions_count);
                         const debug_info_count = try reader.takeInt(u32, .little);
                         var debug_info = try allocator.alloc(DebugInfo, debug_info_count);
                         for (0..debug_info_count) |i| {
@@ -344,17 +522,16 @@ pub const Value = union(Type) {
                         return .{ .obj = obj };
                     },
                     .@"enum" => {
-                        const name_length = try reader.takeByte();
-                        const name_buf = try allocator.alloc(u8, name_length);
-                        try reader.readSliceAll(name_buf);
+                        const name_len = try reader.takeByte();
+                        const name_buf = try reader.readAlloc(allocator, name_len);
+
                         const is_seq = try reader.takeByte() == 1;
                         const values_length = try reader.takeByte();
                         const obj = try allocator.create(Value.Obj);
                         obj.* = .{ .id = id, .data = .{ .@"enum" = .{ .name = name_buf, .values = try allocator.alloc([]const u8, values_length), .is_seq = is_seq } } };
                         for (0..values_length) |i| {
-                            const value_name_length = try reader.takeByte();
-                            const value_name_buf = try allocator.alloc(u8, value_name_length);
-                            try reader.readSliceAll(value_name_buf);
+                            const value_name_len = try reader.takeByte();
+                            const value_name_buf = try reader.readAlloc(allocator, value_name_len);
                             obj.data.@"enum".values[i] = value_name_buf;
                         }
                         return .{ .obj = obj };
@@ -368,7 +545,7 @@ pub const Value = union(Type) {
 
     pub fn format(self: Value, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         return self.print(writer, null) catch |err| {
-            std.debug.print("Could not print value {t}",.{err});
+            std.debug.print("Could not print value {t}", .{err});
             return std.Io.Writer.Error.WriteFailed;
         };
     }
@@ -380,7 +557,8 @@ pub const Value = union(Type) {
             .number => |n| try writer.print("{d:.5}", .{n}),
             .bool => |b| try writer.print("{}", .{b}),
             .nil => try writer.print("nil", .{}),
-            .visit => |v| try writer.print("{d}", .{v}),
+            .const_string => |s| try writer.print("{s}", .{s}),
+            .visit, .timestamp => |v| try writer.print("{t} {d}", .{ self, v }),
             .enum_value => |e| try writer.print("{s}.{s}", .{ e.base.data.@"enum".name, e.base.data.@"enum".values[e.index] }),
             .obj => |o| {
                 const is_container: bool = switch (o.data) {
@@ -397,6 +575,9 @@ pub const Value = union(Type) {
                     }
                 }
                 switch (o.data) {
+                    .anchor => |a| {
+                        try writer.print("[anchor] {s} {d} ({d})", .{ a.name, a.ip, a.visit_index });
+                    },
                     .string => |s| try writer.print("{s}", .{s}),
                     .list => |l| {
                         try writer.print("List{{", .{});
@@ -430,14 +611,9 @@ pub const Value = union(Type) {
                         try writer.print("}}", .{});
                     },
                     .function => |f| {
-                        try writer.print("\nfn---\n", .{});
+                        try writer.print("[fn]\n", .{});
                         try Bytecode.printInstructions(writer, f.instructions);
-                        try writer.print("---", .{});
-                    },
-                    .closure => |c| {
-                        try writer.print("\ncl---\n", .{});
-                        try Bytecode.printInstructions(writer, c.data.function.instructions);
-                        try writer.print("---", .{});
+                        try writer.print("\n", .{});
                     },
                     .class => |c| {
                         try writer.print("{s}", .{c.name});
@@ -462,7 +638,7 @@ pub const Value = union(Type) {
                         try writer.print("}}", .{});
                     },
                     .builtin => |b| {
-                        try writer.print("builtin {s}", .{b.name});
+                        try writer.print("[builtin] {s}", .{b.name});
                     },
                     else => {
                         try writer.print("{s}", .{@tagName(o.data)});
@@ -483,6 +659,8 @@ pub const Value = union(Type) {
                 .number => |n| hashFn(&hasher, @as(u32, @intFromFloat(n * 10000.0))),
                 .bool => |b| hashFn(&hasher, b),
                 .visit => |visit| hashFn(&hasher, visit),
+                .timestamp => |t| hashFn(&hasher, t),
+                .const_string => |s| hasher.update(s),
                 .obj => |o| {
                     switch (o.data) {
                         .string => |s| hasher.update(s),
@@ -511,6 +689,8 @@ pub const Value = union(Type) {
                 .bool => |bl| bl == b.bool,
                 .nil => b == .nil,
                 .visit => |v| v == b.visit,
+                .timestamp => |t| t == b.timestamp,
+                .const_string => |s| std.mem.eql(u8, s, b.const_string),
                 .enum_value => |e| e.base == b.enum_value.base and e.index == b.enum_value.index,
                 .obj => |o| {
                     const b_data = b.obj.data;
