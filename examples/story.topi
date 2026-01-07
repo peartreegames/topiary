@@ -10,7 +10,7 @@ var party = Set{"Rogue", "Druid", "Fighter", "Archer"}
 var gold = 0
 var spiderDefeated = false
 
-class Character = {
+class Character {
 	injured = false,
 }
 var rogue = new Character{}

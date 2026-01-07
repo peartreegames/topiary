@@ -259,7 +259,7 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
         };
     }
 
-    try vm.start(args.bough orelse vm.bytecode.boughs[0].name);
+    try vm.start(args.bough);
     try vm.setLocale(args.language);
     while (vm.can_continue) {
         vm.run() catch {
@@ -314,7 +314,7 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
     defer file.close();
     var buf: [128]u8 = undefined;
     var file_writer = file.writer(&buf);
-    bytecode.serialize(alloc, &file_writer) catch |err| {
+    _ = bytecode.serialize(alloc, &file_writer.interface) catch |err| {
         try print("Could not serialize bytecode\n", .{});
         return if (args.verbose) err else {};
     };

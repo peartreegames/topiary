@@ -25,10 +25,6 @@ pub const CliRunner = struct {
     }
 
     pub fn onLine(runner: *Runner, vm: *Vm, dialogue: Line) void {
-        var stdin_buffer: [1024]u8 = undefined;
-        var stdin_reader = std.fs.File.stdin().reader(&stdin_buffer);
-        const stdin = &stdin_reader.interface;
-
         const self: *CliRunner = @fieldParentPtr("runner", runner);
         print(":", .{}) catch {};
         if (dialogue.speaker) |speaker| {
@@ -40,45 +36,42 @@ pub const CliRunner = struct {
             print("\n", .{}) catch {};
             vm.selectContinue();
         } else {
+            var stdin_buffer: [2]u8 = undefined;
+            var stdin_reader = std.fs.File.stdin().reader(&stdin_buffer);
+            const stdin = &stdin_reader.interface;
             while (stdin.takeDelimiterExclusive('\n')) |_| {
                 vm.selectContinue();
-            } else |err| {
-                print("Unknown error {s}", .{@errorName(err)}) catch {};
+                break;
+            } else |_| {
+                vm.selectContinue();
             }
         }
     }
 
     pub fn onChoices(_: *Runner, vm: *Vm, choices: []Choice) void {
-        var stdin_buffer: [1024]u8 = undefined;
-        var stdin_reader = std.fs.File.stdin().reader(&stdin_buffer);
-        const stdin = &stdin_reader.interface;
-
-        var stdout_buffer: [1024]u8 = undefined;
-        var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-        const stderr = &stdout_writer.interface;
-
         var index: ?usize = null;
         while (index == null) {
+            var stdin_buffer: [8]u8 = undefined;
+            var stdin_reader = std.fs.File.stdin().reader(&stdin_buffer);
+            const stdin = &stdin_reader.interface;
             for (choices, 0..) |choice, i| {
                 print("[{d}] {s}\n", .{ i, choice.content }) catch {};
             }
 
             while (stdin.takeDelimiterExclusive('\n')) |line| {
-                index = std.fmt.parseInt(usize, line, 10) catch |err| blk: {
-                    stderr.print("Invalid value: {}.\n", .{err}) catch {};
-                    break :blk null;
-                };
-                if (index != null and index.? >= choices.len) {
+                index = std.fmt.parseInt(usize, line, 10) catch null;
+                if (index == null or index.? >= choices.len) {
                     index = null;
-                    stderr.print("Invalid value.\n", .{}) catch {};
+                    print("Invalid value '{s}'.\n", .{line}) catch {};
                 }
+                break;
             } else |err| switch (err) {
                 error.EndOfStream => {},
                 error.StreamTooLong => {
-                    stderr.print("Input too long\n", .{}) catch {};
+                    print("Input too long\n", .{}) catch {};
                 },
                 error.ReadFailed => {
-                    stderr.print("Read failed\n", .{}) catch {};
+                    print("Read failed\n", .{}) catch {};
                 }
             }
         }

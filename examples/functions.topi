@@ -1,2 +1,2 @@
-fn sum(x, y) return x + y
+fn sum |x, y| return x + y
 
