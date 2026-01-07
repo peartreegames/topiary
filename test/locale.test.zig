@@ -25,7 +25,6 @@ test "Localization Ids" {
     const file = mod.entry;
     const update = try Locale.validateFile(file, std.testing.allocator);
     defer std.testing.allocator.free(update);
-    std.log.warn("Localized {s}", .{update});
 }
 test "Update File Localization Ids" {
     const input =

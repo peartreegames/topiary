@@ -8,6 +8,7 @@ const False = types.False;
 const Value = types.Value;
 const Enum = types.Enum;
 const Class = types.Class;
+const Function = types.Function;
 
 const backend = @import("../backend/index.zig");
 const Bytecode = backend.Bytecode;
@@ -38,8 +39,6 @@ pub const State = struct {
         };
         try stream.beginObject();
         for (vm.bytecode.global_symbols) |s| {
-            if (s.is_extern) continue;
-
             const value = vm.globals[s.index];
             if (value == .void) continue;
             if (value == .visit and value.visit == 0) continue;
@@ -48,7 +47,7 @@ pub const State = struct {
             const is_mut = s.is_mutable;
             const is_obj = value == .obj;
             if (is_obj) {
-                const is_func = value.obj.data == .builtin or value.obj.data == .ext_function or value.obj.data == .function;
+                const is_func = value.obj.data == .builtin or value.obj.data == .function;
                 if (is_func) continue;
                 is_str = value.obj.data == .string or value == .const_string;
             }
@@ -324,7 +323,7 @@ pub const State = struct {
         if (entry.object.get("function")) |v| {
             const arity = v.object.get("arity").?.integer;
             const inst = v.object.get("inst").?.string;
-            const locals = v.object.get("locals_count").?.integer;
+            const locals_count = v.object.get("locals_count").?.integer;
             const is_method = v.object.get("is_method").?.bool;
             const inst_alloc = try vm.alloc.alloc(u8, try std.base64.standard.Decoder.calcSizeForSlice(inst));
             try std.base64.standard.Decoder.decode(inst_alloc, inst);
@@ -350,7 +349,7 @@ pub const State = struct {
             var result = try vm.gc.create(vm, .{ .function = .{
                 .arity = @intCast(arity),
                 .instructions = inst_alloc,
-                .locals_count = @intCast(locals),
+                .locals_count = @intCast(locals_count),
                 .debug_info = debug_info,
                 .is_method = is_method,
             } });
@@ -372,13 +371,9 @@ pub const State = struct {
                 methods[i].name = try vm.alloc.dupe(u8, m.object.get("name").?.string);
                 methods[i].value = try deserializeEntry(vm, root, m.object.get("value").?, refs, null);
             }
-            var result = try vm.gc.create(vm, .{ .class = .{
-                .allocator = vm.alloc,
-                .name = name,
-                .fields = fields,
-                .methods = methods,
-                .is_gc_managed = true,
-            } });
+            var class = try Class.init( name, fields, methods);
+            class.is_gc_managed = true;
+            var result = try vm.gc.create(vm, .{ .class = class });
             result.obj.id = id.?;
             try refs.put(vm.alloc, id.?, result);
             return result;

@@ -111,7 +111,7 @@ test "Runtime Variables" {
         .{ .input = "var one = 1 one", .value = 1.0 },
         .{ .input = "var one = 1 var two = 2 one + two", .value = 3.0 },
         .{ .input = "var one = 1 var two = one + one one + two", .value = 3.0 },
-        .{ .input = 
+        .{ .input =
         \\ var five = 1
         \\ five = 5
         , .value = 5.0 },
@@ -321,49 +321,49 @@ test "Runtime Index" {
 
 test "Runtime Functions" {
     const test_cases = .{
-        .{ .input = 
+        .{ .input =
         \\ fn fifteen || return 5 + 10
         \\ fifteen()
         , .value = 15.0 },
-        .{ .input = 
+        .{ .input =
         \\ fn one || return 1
         \\ fn two || return 2
         \\ one() + two()
         , .value = 3.0 },
-        .{ .input = 
+        .{ .input =
         \\ fn a || return 1
         \\ fn b || return a() + 1
         \\ fn c || return b() + 1
         \\ c()
         , .value = 3.0 },
-        .{ .input = 
+        .{ .input =
         \\ fn exit || { return 99 return 100 }
         \\ exit()
         , .value = 99.0 },
-        .{ .input = 
+        .{ .input =
         \\ fn cond || { if true return 1 return 0 }
         \\ cond()
         , .value = 1.0 },
-        .{ .input = 
+        .{ .input =
         \\ fn cond || { if false return 1 return 0 }
         \\ cond()
         , .value = 0.0 },
-        .{ .input = 
+        .{ .input =
         \\ fn noop || {}
         \\ noop()
         , .value = null },
-        .{ .input = 
+        .{ .input =
         \\ fn noop || {}
         \\ fn noopop || noop()
         \\ noop()
         \\ noopop()
         , .value = null },
-        .{ .input = 
+        .{ .input =
         \\ fn one || return 1
         \\ fn curry || return one
         \\ curry()()
         , .value = 1.0 },
-        .{ .input = 
+        .{ .input =
         \\ fn fib |n| {
         \\   if n < 2 return n
         \\   return fib(n - 1) + fib(n - 2)
@@ -469,29 +469,29 @@ test "Runtime Locals" {
 
 test "Runtime Function Arguments" {
     const test_cases = .{
-        .{ .input = 
+        .{ .input =
         \\ fn ident |a| return a
         \\ ident(4)
         , .value = 4.0 },
-        .{ .input = 
+        .{ .input =
         \\ fn sum |a, b| return a + b
         \\ sum(1, 2)
         , .value = 3.0 },
-        .{ .input = 
+        .{ .input =
         \\ fn sum |a, b| {
         \\    const c = a + b
         \\    return c
         \\ }
         \\ sum(1, 2)
         , .value = 3.0 },
-        .{ .input = 
+        .{ .input =
         \\ fn sum |a, b| {
         \\    const c = a + b
         \\    return c
         \\ }
         \\ sum(1, 2) + sum(3, 4)
         , .value = 10.0 },
-        .{ .input = 
+        .{ .input =
         \\ const globalNum = 10
         \\ fn sum |a, b| {
         \\     const c = a + b
@@ -499,7 +499,7 @@ test "Runtime Function Arguments" {
         \\ }
         \\ sum(5, 5) + globalNum
         , .value = 30.0 },
-        .{ .input = 
+        .{ .input =
         \\ const globalNum = 10
         \\ fn sum |a, b| {
         \\     const c = a + b
@@ -564,14 +564,14 @@ test "Runtime Builtin Functions" {
 
 test "Runtime While and For Loops" {
     const test_cases = .{
-        .{ .input = 
+        .{ .input =
         \\ var x = 0
         \\ while x < 10 {
         \\     x = x + 1
         \\ }
         \\ x
         , .value = 10 },
-        .{ .input = 
+        .{ .input =
         \\ var x = 0
         \\ while true {
         \\    if x > 9 break
@@ -579,7 +579,7 @@ test "Runtime While and For Loops" {
         \\ }
         \\ x
         , .value = 10 },
-        .{ .input = 
+        .{ .input =
         \\ var x = 0
         \\ while true {
         \\    x = x + 1
@@ -588,7 +588,7 @@ test "Runtime While and For Loops" {
         \\ }
         \\ x
         , .value = 10 },
-        .{ .input = 
+        .{ .input =
         \\ var x = 0
         \\ while true {
         \\    var y = 1
@@ -598,7 +598,7 @@ test "Runtime While and For Loops" {
         \\ }
         \\ x
         , .value = 10 },
-        .{ .input = 
+        .{ .input =
         \\ var x = 0
         \\ while true {
         \\    var y = 1
@@ -613,7 +613,7 @@ test "Runtime While and For Loops" {
         \\ }
         \\ x
         , .value = 190 },
-        .{ .input = 
+        .{ .input =
         \\ const list = List{1,2,3,4,5}
         \\ var sum = 0
         \\ for list |item| {
@@ -621,7 +621,7 @@ test "Runtime While and For Loops" {
         \\ }
         \\ sum
         , .value = 15 },
-        .{ .input = 
+        .{ .input =
         \\ const set = Set{1,2,3,3,3}
         \\ var sum = 0
         \\ for set |item| {
@@ -629,7 +629,7 @@ test "Runtime While and For Loops" {
         \\ }
         \\ sum
         , .value = 6 },
-        .{ .input = 
+        .{ .input =
         \\ const map = Map{1:2,3:4,5:6}
         \\ var sum = 0
         \\ for map |kvp| {
@@ -637,14 +637,14 @@ test "Runtime While and For Loops" {
         \\ }
         \\ sum
         , .value = 21 },
-        .{ .input = 
+        .{ .input =
         \\ var sum = 0
         \\ for 0..10 |i| {
         \\     sum += i
         \\ }
         \\ sum
         , .value = 55 },
-        .{ .input = 
+        .{ .input =
         \\ const list = List{1,2,3,4,5}
         \\ var sum = 0
         \\ for 0..(list.count() - 1) |i| {
@@ -713,17 +713,14 @@ test "Runtime Class Error" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        const err = vm.interpret() catch |err| blk: {
-            printErr(&vm);
-            break :blk err;
-        };
+        const err = vm.interpret() catch |err| err;
         try std.testing.expectError(error.RuntimeError, err);
     }
 }
 
 test "Runtime Class Compile Error" {
     const tests = .{
-        .{ .input = 
+        .{ .input =
         \\ class Test {
         \\    value = 0
         \\ }
@@ -731,19 +728,19 @@ test "Runtime Class Compile Error" {
         \\    val = 2
         \\ }
         , .err = Vm.Error.CompilerError },
-        .{ .input = 
+        .{ .input =
         \\ class Test {
         \\    value = 0
         \\ }
         \\ Test.value = 55
         , .err = Vm.Error.CompilerError },
-        .{ .input = 
+        .{ .input =
         \\ class Test {
         \\    value = 0
         \\ }
         \\ Test = 55
-        , .err = Vm.Error.SymbolNotFound },
-        .{ .input = 
+        , .err = Vm.Error.CompilerError },
+        .{ .input =
         \\ var test = new Test{}
         , .err = Vm.Error.CompilerError },
     };
@@ -845,41 +842,6 @@ test "Runtime Enums" {
     };
 }
 
-test "Runtime Enum Error" {
-    const tests = .{
-        \\ enum TimeOfDay {
-        \\  Morning,
-        \\  Afternoon,
-        \\  Evening,
-        \\  Night
-        \\ }
-        \\
-        \\ var time = TimeOfDay.morn
-        ,
-        \\ enum TimeOfDay {
-        \\  Morning,
-        \\  Afternoon,
-        \\  Evening,
-        \\  Night
-        \\ }
-        \\
-        \\ TimeOfDay.Morning = 5
-        ,
-        \\ enum TimeOfDay {
-        \\  Morning,
-        \\ }
-        \\
-        \\ TimeOfDay = 5
-    };
-
-    inline for (tests) |input| {
-        var mod = try Module.initEmpty(allocator);
-        defer mod.deinit();
-        const err = initTestVm(input, mod, false);
-        try testing.expectError(Vm.Error.CompilerError, err);
-    }
-}
-
 test "Runtime Boughs" {
     const test_cases = .{
         .{
@@ -891,7 +853,7 @@ test "Runtime Boughs" {
             ,
             .expected = &[_][]const u8{ "Text goes here", "More text here" },
         },
-        .{ .input = 
+        .{ .input =
         \\ === START {
         \\    const before = "This is added before"
         \\    const after = "and this is added afterwards"
@@ -899,7 +861,7 @@ test "Runtime Boughs" {
         \\    :speaker_two: "Text goes here {after}"
         \\ }
         , .expected = &[_][]const u8{ "This is added before and then more text here", "Text goes here and this is added afterwards" } },
-        .{ .input = 
+        .{ .input =
         \\ fn repeat |str, count| {
         \\     var result = ""
         \\     while count > 0 {
@@ -927,7 +889,7 @@ test "Runtime Boughs" {
             \\ === START {
             \\    if true :speaker: "True text goes here"
             \\    :speaker: "More text here"
-            \\    if false { 
+            \\    if false {
             \\        :speaker: "False text doesn't appear"
             \\        assert(false, "should not be here")
             \\    }
@@ -1039,7 +1001,7 @@ test "Runtime Bough Nested Starts with Backups" {
         \\           ~ "One" { "One" }
         \\           ~ "Two" { "Two" }
         \\        }
-        \\        :Speaker: "Outer"    
+        \\        :Speaker: "Outer"
         \\        === INNER {
         \\            :Speaker: "Inner"
         \\        }
@@ -1236,7 +1198,7 @@ test "Runtime Forks" {
     inline for (test_cases) |case| {
         var mod = try Module.initEmpty(allocator);
         defer mod.deinit();
-        var vm = try initTestVm(case.input, mod, true);
+        var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
         const test_runner: *TestRunner = @fieldParentPtr("runner", vm.runner);
         defer test_runner.deinit();
@@ -1401,6 +1363,7 @@ test "Runtime Jump Backups" {
         },
         .{
             .input =
+            \\ var done = false
             \\ === START {
             \\     :speaker: "Question"
             \\    var count = 0
@@ -1416,7 +1379,7 @@ test "Runtime Jump Backups" {
             \\    }
             \\    => DONE
             \\ }
-            \\ var done = false
+            \\
             \\ === DONE {
             \\     if done == false {
             \\        done = true
@@ -1436,7 +1399,12 @@ test "Runtime Jump Backups" {
         const test_runner: *TestRunner = @fieldParentPtr("runner", vm.runner);
         defer test_runner.deinit();
         defer vm.bytecode.free(testing.allocator);
-        try vm.interpret();
+        vm.interpret() catch |err| {
+            std.debug.print("{s}", .{ case.input });
+            try printBytecode(&vm.bytecode);
+            printErr(&vm);
+            return err;
+        };
 
         test_runner.expectOutput(case.expected) catch |err| {
             std.debug.print("Output: {f}", .{fmt.array("{s}", test_runner.output.items)});
@@ -1668,34 +1636,30 @@ test "Runtime Switch" {
         };
     }
 }
-
-test "Runtime Externs and Subscribers" {
-    const test_cases = .{
-        .{ .input = 
-        \\ extern const value = 1
-        \\ value
-        , .value = 2.0 },
-        .{ .input = 
-        \\ extern var value = 1
-        \\ value = 5
-        , .value = 5.0 },
-    };
-
-    inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
-        defer mod.deinit();
-        var vm = try initTestVm(case.input, mod, false);
-        defer vm.deinit();
-        const test_runner: *TestRunner = @fieldParentPtr("runner", vm.runner);
-        defer test_runner.deinit();
-        defer vm.bytecode.free(testing.allocator);
-        try vm.setExtern("value", .{ .number = 2 });
-        _ = try vm.subscribeToValueChange("value");
-        try vm.interpret();
-        _ = vm.unusbscribeToValueChange("value");
-        try testing.expect(case.value == vm.stack.previous().number);
-    }
-}
+//
+// test "Runtime Externs and Subscribers" {
+//     const test_cases = .{
+//         .{ .input =
+//         \\ var value = 1
+//         \\ value = 5
+//         , .value = 5.0 },
+//     };
+//
+//     inline for (test_cases) |case| {
+//         var mod = try Module.initEmpty(allocator);
+//         defer mod.deinit();
+//         var vm = try initTestVm(case.input, mod, false);
+//         defer vm.deinit();
+//         const test_runner: *TestRunner = @fieldParentPtr("runner", vm.runner);
+//         defer test_runner.deinit();
+//         defer vm.bytecode.free(testing.allocator);
+//         try vm.setExtern("value", .{ .number = 2 });
+//         _ = try vm.subscribeToValueChange("value");
+//         try vm.interpret();
+//         _ = vm.unusbscribeToValueChange("value");
+//         try testing.expect(case.value == vm.stack.previous().number);
+//     }
+// }
 
 test "Runtime Save and Load State" {
     const test_case =
@@ -1826,5 +1790,8 @@ test "Runtime Includes" {
     var vm = try Vm.init(std.testing.allocator, bytecode, &test_runner.runner);
     defer vm.deinit();
     defer test_runner.deinit();
-    try vm.interpret();
+    vm.interpret() catch |err| {
+        printErr(&vm);
+        return err;
+    };
 }

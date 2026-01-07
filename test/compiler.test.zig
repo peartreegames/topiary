@@ -4,6 +4,7 @@ const topi = @import("topi");
 const Value = topi.types.Value;
 const ValueType = topi.types.Type;
 const String = topi.types.String;
+const Function = topi.types.Function;
 
 const Errors = topi.backend.CompilerErrors;
 const Bytecode = topi.backend.Bytecode;
@@ -730,8 +731,8 @@ test "Compile Functions" {
     } };
     defer allocator.destroy(value);
 
-    var multiArg = try allocator.create(Value.Obj);
-    multiArg.data = .{ .function = .{
+    var multi_arg = try allocator.create(Value.Obj);
+    multi_arg.data = .{ .function = .{
         .debug_info = undefined,
         .locals_count = 0,
         .arity = 1,
@@ -750,7 +751,7 @@ test "Compile Functions" {
             @intFromEnum(OpCode.return_value),
         },
     } };
-    defer allocator.destroy(multiArg);
+    defer allocator.destroy(multi_arg);
 
     const test_cases = .{
         .{
@@ -860,7 +861,7 @@ test "Compile Functions" {
                 3,
                 @intFromEnum(OpCode.pop),
             },
-            .constants = [_]Value{ .{ .obj = multiArg }, .{ .number = 24 }, .{ .number = 25 }, .{ .number = 26 } },
+            .constants = [_]Value{ .{ .obj = multi_arg }, .{ .number = 24 }, .{ .number = 25 }, .{ .number = 26 } },
         },
     };
 
@@ -1005,6 +1006,41 @@ test "Compile Classes" {
                 .class => |c| try testing.expectEqualStrings(c, bytecode.constants[i + cl].obj.data.class.name),
             }
         }
+    }
+}
+
+test "Compile Enums Error" {
+    const tests = .{
+        \\ enum TimeOfDay {
+        \\  Morning,
+        \\  Afternoon,
+        \\  Evening,
+        \\  Night
+        \\ }
+        \\
+        \\ var time = TimeOfDay.morn
+        ,
+        \\ enum TimeOfDay {
+        \\  Morning,
+        \\  Afternoon,
+        \\  Evening,
+        \\  Night
+        \\ }
+        \\
+        \\ TimeOfDay.Morning = 5
+        ,
+        \\ enum TimeOfDay {
+        \\  Morning,
+        \\ }
+        \\
+        \\ TimeOfDay = 5
+    };
+
+    inline for (tests) |input| {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        const err = compileSource(input, mod);
+        try testing.expectError(error.CompilerError, err);
     }
 }
 

@@ -6,11 +6,11 @@ const Bytecode = topi.backend.Bytecode;
 
 const Vm = topi.runtime.Vm;
 const State = topi.runtime.State;
+const Extern = topi.runtime.Extern;
 
 const Module = topi.module.Module;
 const File = topi.module.File;
 
-const ExportValue = @import("value.zig").ExportValue;
 const export_runner = @import("runner.zig");
 const ExportLogger = export_runner.ExportLogger;
 const ExportRunner = export_runner.ExportRunner;
@@ -27,7 +27,7 @@ var alloc = gpa.allocator();
 pub export fn calculateCompileSize(path_ptr: [*:0]const u8, log_ptr: usize, log_severity: u8) callconv(.c) usize {
     const logger = ExportLogger{ .on_log = @ptrFromInt(log_ptr), .severity = @enumFromInt(log_severity), .allocator = alloc };
 
-    const mod = createModule( std.mem.sliceTo(path_ptr, 0), logger);
+    const mod = createModule(std.mem.sliceTo(path_ptr, 0), logger);
     if (mod == null) return 0;
     defer mod.?.deinit();
 
@@ -126,7 +126,7 @@ fn createBytecode(mod: *Module, logger: ExportLogger) ?Bytecode {
 }
 
 fn writeBytecode(path: []const u8, writer: *std.io.Writer, logger: ExportLogger) usize {
-    const mod = createModule( path, logger);
+    const mod = createModule(path, logger);
     if (mod == null) return 0;
     defer mod.?.deinit();
 
@@ -144,13 +144,13 @@ pub export fn start(vm_ptr: usize, path_ptr: [*:0]const u8) callconv(.c) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
     const logger = runner.logger;
-    for (vm.bytecode.global_symbols) |sym| {
-        if (sym.is_extern and vm.globals[sym.index] == .void) {
-            logger.log("Export \"{s}\" has not been set", .{sym.name}, .warn);
-        }
+    for (vm.bytecode.constants) |c| {
+        if (c != .obj or c.obj.data != .function) continue;
+        if (c.obj.data.function.extern_index == null)
+            logger.log("Extern \"{?s}\" has not been set", .{c.obj.data.function.extern_name}, .warn);
     }
 
-    const path = if (path_ptr[0] != 0) std.mem.sliceTo(path_ptr, 0) else for(vm.bytecode.constants) |c| {
+    const path = if (path_ptr[0] != 0) std.mem.sliceTo(path_ptr, 0) else for (vm.bytecode.constants) |c| {
         if (c == .obj and c.obj.data == .anchor) break c.obj.data.anchor.name;
     } else {
         logger.log("Topi file does not have a start bough", .{}, .err);
@@ -194,22 +194,6 @@ pub export fn selectChoice(vm_ptr: usize, index: usize) callconv(.c) void {
     vm.selectChoice(index) catch runner.logger.log("Invalid choice", .{}, .err);
 }
 
-pub export fn setExtern(vm_ptr: usize, name_ptr: [*:0]const u8, exp_value: ExportValue, free_ptr: usize) callconv(.c) void {
-    var vm: *Vm = @ptrFromInt(vm_ptr);
-    const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
-    const logger = runner.logger;
-    const name = std.mem.sliceTo(name_ptr, 0);
-    const value = exp_value.toValue(vm, @ptrFromInt(free_ptr)) catch |err| {
-        logger.log("Could not create Value \"{s}\": {t}", .{ name, err }, .err);
-        return;
-    };
-    logger.log("Setting {s} to {f}", .{ name, value }, .debug);
-
-    vm.setExtern(name, value) catch |err| {
-        logger.log("Could not set Export value \"{s}\": {t}", .{ name, err }, .err);
-    };
-}
-
 pub export fn setExternFunc(vm_ptr: usize, name_ptr: [*:0]const u8, value_ptr: usize, arity: u8, free_ptr: usize) callconv(.c) void {
     var vm: *Vm = @ptrFromInt(vm_ptr);
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
@@ -221,17 +205,18 @@ pub export fn setExternFunc(vm_ptr: usize, name_ptr: [*:0]const u8, value_ptr: u
         return;
     };
     wrapper.* = ExportFunction.create(vm, @ptrFromInt(value_ptr), @ptrFromInt(free_ptr));
-    const val = vm.gc.create(vm, .{ .ext_function = .{
+    const val = alloc.create(Extern) catch |err| {
+        logger.log("Could not create function value '{s}': {t}", .{ name, err }, .err);
+        return;
+    };
+    val.* = .{
         .arity = arity,
         .backing = ExportFunction.call,
         .context_ptr = @intFromPtr(wrapper),
         .destroy = ExportFunction.destroy,
-    } }) catch |err| {
-        logger.log("Could not create function value '{s}': {t}", .{ name, err }, .err);
-        return;
     };
     vm.setExtern(name, val) catch |err| {
-        logger.log("Could not set Export value '{s}': {t}", .{ name, err }, .err);
+        logger.log("Could not set Extern fn '{s}': {t}", .{ name, err }, .err);
     };
 }
 

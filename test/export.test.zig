@@ -53,16 +53,16 @@ const TestRunner = struct {
 
 test "Export Create and Destroy Vm" {
     const text =
-        \\ extern var value = "test 123"
-        \\ extern var list = List{}
-        \\ extern var set = Set{}
-        \\ extern var map = Map{}
+        \\ var value = "test 123"
+        \\ var list = List{}
+        \\ var set = Set{}
+        \\ var map = Map{}
         \\ enum Enum {
         \\     One,
         \\     Two
         \\ }
-        \\ extern var enum_value = Enum.One
-        \\ fn sum |x, y| return x + y
+        \\ var enum_value = Enum.One
+        \\ extern fn sum |x, y| return x + y
         \\ === START {
         \\     :: "A person approaches." #starting
         \\     :Stranger: "Hey there."
@@ -115,56 +115,45 @@ test "Export Create and Destroy Vm" {
     const vm: *Vm = @ptrFromInt(vm_ptr);
 
     defer main.destroyVm(vm_ptr);
-    var list_value = [2]ExportValue{
-        .{ .tag = .number, .data = .{ .number = 1 } },
-        .{ .tag = .number, .data = .{ .number = 2 } },
-    };
-    const list = ExportValue{ .tag = .list, .data = .{
-        .list = .{
-            .items = &list_value,
-            .count = 2,
-        },
-    } };
+    // var list_value = [2]ExportValue{
+    //     .{ .tag = .number, .data = .{ .number = 1 } },
+    //     .{ .tag = .number, .data = .{ .number = 2 } },
+    // };
+    // const list = ExportValue{ .tag = .list, .data = .{
+    //     .list = .{
+    //         .items = &list_value,
+    //         .count = 2,
+    //     },
+    // } };
 
     const someStr = try std.testing.allocator.dupe(u8, "some");
     defer std.testing.allocator.free(someStr);
     const valueStr = try std.testing.allocator.dupe(u8, "value");
     defer std.testing.allocator.free(valueStr);
-    var set_value = [2]ExportValue{
-        .{ .tag = .string, .data = .{ .string = .{ .ptr = someStr.ptr, .len = someStr.len } } },
-        .{ .tag = .string, .data = .{ .string = .{ .ptr = valueStr.ptr, .len = valueStr.len } } },
-    };
-    const set = ExportValue{
-        .tag = .set,
-        .data = .{ .list = .{ .items = &set_value, .count = 2 } },
-    };
-    var map_value = [4]ExportValue{
-        .{ .tag = .number, .data = .{ .number = 0 } },
-        .{ .tag = .number, .data = .{ .number = 0.0001 } },
-        .{ .tag = .number, .data = .{ .number = 1 } },
-        .{ .tag = .number, .data = .{ .number = 1.1111 } },
-    };
-    const map = ExportValue{
-        .tag = .map,
-        .data = .{ .list = .{ .items = &map_value, .count = 4 } },
-    };
+    // var set_value = [2]ExportValue{
+    //     .{ .tag = .string, .data = .{ .string = .{ .ptr = someStr.ptr, .len = someStr.len } } },
+    //     .{ .tag = .string, .data = .{ .string = .{ .ptr = valueStr.ptr, .len = valueStr.len } } },
+    // };
+    // const set = ExportValue{
+    //     .tag = .set,
+    //     .data = .{ .list = .{ .items = &set_value, .count = 2 } },
+    // };
+    // var map_value = [4]ExportValue{
+    //     .{ .tag = .number, .data = .{ .number = 0 } },
+    //     .{ .tag = .number, .data = .{ .number = 0.0001 } },
+    //     .{ .tag = .number, .data = .{ .number = 1 } },
+    //     .{ .tag = .number, .data = .{ .number = 1.1111 } },
+    // };
+    // const map = ExportValue{
+    //     .tag = .map,
+    //     .data = .{ .list = .{ .items = &map_value, .count = 4 } },
+    // };
 
     const enumStr = try std.testing.allocator.dupe(u8, "Enum");
     defer std.testing.allocator.free(enumStr);
     const twoStr = try std.testing.allocator.dupe(u8, "Two");
     defer std.testing.allocator.free(twoStr);
-    const enum_value = ExportValue{
-        .tag = .@"enum",
-        .data = .{ .@"enum" = .{
-            .name = .{ .ptr = enumStr.ptr, .len = enumStr.len },
-            .value = .{ .ptr = twoStr.ptr, .len = twoStr.len },
-        } },
-    };
     const free_ptr = @intFromPtr(&TestRunner.free);
-    main.setExtern(vm_ptr, "list", list, free_ptr);
-    main.setExtern(vm_ptr, "set", set, free_ptr);
-    main.setExtern(vm_ptr, "map", map, free_ptr);
-    main.setExtern(vm_ptr, "enum_value", enum_value, free_ptr);
     main.setExternFunc(vm_ptr, "sum", @intFromPtr(&TestRunner.sum), 2, free_ptr);
 
     const list_name = "list";

@@ -2,7 +2,6 @@ const std = @import("std");
 const Value = @import("value.zig").Value;
 
 pub const Class = struct {
-    allocator: std.mem.Allocator,
     name: []const u8,
     fields: []Member,
     methods: []Member,
@@ -13,29 +12,28 @@ pub const Class = struct {
         value: Value,
     };
 
-    pub fn init(allocator: std.mem.Allocator, name: []const u8, fields: []Member, methods: []Member) !Class {
+    pub fn init(name: []const u8, fields: []Member, methods: []Member) !Class {
         return .{
-            .allocator = allocator,
             .name = name,
             .fields = fields,
             .methods = methods,
         };
     }
 
-    pub fn deinit(self: *const Class) void {
-        self.allocator.free(self.name);
+    pub fn deinit(self: *const Class, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
         for (self.fields) |f| {
-            self.allocator.free(f.name);
+            allocator.free(f.name);
             if (self.is_gc_managed) continue;
-            f.value.destroy(self.allocator);
+            f.value.destroy(allocator);
         }
-        self.allocator.free(self.fields);
+        allocator.free(self.fields);
         for (self.methods) |f| {
-            self.allocator.free(f.name);
+            allocator.free(f.name);
             if (self.is_gc_managed) continue;
-            f.value.destroy(self.allocator);
+            f.value.destroy(allocator);
         }
-        self.allocator.free(self.methods);
+        allocator.free(self.methods);
     }
 
     pub fn getFieldIndex(self: *const Class, field_name: []const u8) ?usize {
@@ -68,18 +66,6 @@ pub const Class = struct {
             return self.methods[i].value;
         }
         return null;
-    }
-
-    pub fn createInstance(self: *Class, base: *Value.Obj, inst_fields: []Member) !Instance {
-        var values = try self.allocator.alloc(Value, self.fields.len);
-        for (self.fields, 0..) |f, i| values[i] = try f.value.clone(self.allocator);
-        for (inst_fields) |inst_field| {
-            if (self.getFieldIndex(inst_field.name)) |i| values[i] = inst_field.value;
-        }
-        return .{
-            .base = base,
-            .fields = values,
-        };
     }
 
     pub const Instance = struct {

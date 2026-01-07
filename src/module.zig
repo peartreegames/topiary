@@ -50,12 +50,12 @@ pub const Module = struct {
     pub fn generateBytecode(self: *Module, allocator: std.mem.Allocator) !Bytecode {
         try self.entry.loadSource();
 
-        var stderr_buffer: [1024]u8 = undefined;
-        var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
-        const stderr = &stderr_writer.interface;
+        // var stderr_buffer: [1024]u8 = undefined;
+        // var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+        // const stderr = &stderr_writer.interface;
 
         self.entry.buildTree() catch |err| {
-            try self.writeErrors(stderr);
+            // try self.writeErrors(stderr);
             return err;
         };
 
@@ -64,7 +64,7 @@ pub const Module = struct {
         defer compiler.deinit();
 
         compiler.compile() catch |e| {
-            try self.writeErrors(stderr);
+            // try self.writeErrors(stderr);
             return e;
         };
         return try compiler.bytecode();

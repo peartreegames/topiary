@@ -13,6 +13,9 @@ const True = types.True;
 const False = types.False;
 const Void = types.Void;
 const Iterator = types.Iterator;
+const Function = types.Function;
+
+const Extern = @import("./extern.zig").Extern;
 
 const utils = @import("../utils/index.zig");
 const UUID = utils.UUID;
@@ -55,9 +58,10 @@ pub const Vm = struct {
     iterators: Stack(Iterator),
     /// List of positions to jump back to using `^`
     jump_backups: std.ArrayList(C.JUMP),
-    /// Used to ensure preceeding code is executed before arriving at Bough
+    /// Used to ensure preceding code is executed before arriving at Bough
     jump_requests: std.ArrayList(C.JUMP),
     anchor_stack: std.ArrayList(C.CONSTANT),
+    externs: std.ArrayList(*Extern),
 
     bytecode: Bytecode,
     /// Current instruction position
@@ -98,8 +102,8 @@ pub const Vm = struct {
             if (c != .obj) continue;
             switch (c.obj.data) {
                 // init visit
-                .anchor =>  globals[c.obj.data.anchor.visit_index] = .{ .visit = 0 },
-                else => {}
+                .anchor => globals[c.obj.data.anchor.visit_index] = .{ .visit = 0 },
+                else => {},
             }
         }
 
@@ -128,6 +132,7 @@ pub const Vm = struct {
             .jump_backups = .empty,
             .jump_requests = .empty,
             .anchor_stack = .empty,
+            .externs = .empty,
             .choices_list = .empty,
             .value_subscribers = .empty,
             .loc_map = .empty,
@@ -147,6 +152,7 @@ pub const Vm = struct {
         self.jump_backups.deinit(self.alloc);
         self.anchor_stack.deinit(self.alloc);
         self.jump_requests.deinit(self.alloc);
+        self.externs.deinit(self.alloc);
         self.gc.deinit();
         self.value_subscribers.deinit(self.alloc);
         self.alloc.free(self.globals);
@@ -236,15 +242,21 @@ pub const Vm = struct {
     }
 
     fn getExternIndex(self: *Vm, name: []const u8) !usize {
-        const index = try self.getGlobalsIndex(name);
-        if (!self.bytecode.global_symbols[index].is_extern) return error.IllegalOperation;
-        return index;
+        for (self.bytecode.constants, 0..) |c, i| {
+            if (c != .obj or c.obj.data != .function) continue;
+            if (c.obj.data.function.extern_name) |func_name| {
+                if (!std.mem.eql(u8, name, func_name)) return i;
+            }
+        }
+        return error.NotFound;
     }
 
-    pub fn setExtern(self: *Vm, name: []const u8, value: Value) !void {
+    pub fn setExtern(self: *Vm, name: []const u8, value: *Extern) !void {
         const index = try self.getExternIndex(name);
-        if (value == .obj) value.obj.index = @intCast(index);
-        self.globals[index] = value;
+        if (self.bytecode.constants[index].obj.data.function.extern_index != null)
+            return error.AlreadySet;
+        try self.externs.append(self.alloc, value);
+        self.bytecode.constants[index].obj.data.function.extern_index = @intCast(self.externs.items.len - 1);
     }
 
     pub fn getExtern(self: *Vm, name: []const u8) !Value {
@@ -396,7 +408,7 @@ pub const Vm = struct {
                         .number => try self.push(.{ .number = right.number + left.number }),
                         .obj => |o| {
                             switch (o.data) {
-                                else => return self.fail("Cannot add types {s} and {s}: {f} {f}", .{ left.typeName(), right.typeName(),left, right }),
+                                else => return self.fail("Cannot add types {s} and {s}: {f} {f}", .{ left.typeName(), right.typeName(), left, right }),
                             }
                         },
                         else => return self.fail("Cannot add types {s} and {s}: {f} {f}", .{ left.typeName(), right.typeName(), left, right }),
@@ -688,7 +700,6 @@ pub const Vm = struct {
                     const value = try self.pop();
                     if (value != .obj and value.obj.data != .class)
                         return self.fail("Instance expected type class, but found '{s}'", .{value.typeName()});
-                    var class = value.obj.data.class;
 
                     var count = self.takeInt(C.FIELDS);
                     var fields = std.ArrayList(Class.Member).empty;
@@ -703,7 +714,7 @@ pub const Vm = struct {
                         });
                     }
                     std.mem.reverse(Class.Member, fields.items);
-                    const instance = try class.createInstance(value.obj, try fields.toOwnedSlice(self.alloc));
+                    const instance = try self.createInstance(value.obj, try fields.toOwnedSlice(self.alloc));
                     try self.pushAlloc(.{ .instance = instance });
                 },
                 .range => {
@@ -879,16 +890,6 @@ pub const Vm = struct {
                             if (self.break_on_assert and std.mem.eql(u8, b.name, "assert") and result != .void) {
                                 return self.fail("Assertion Failed: {s}", .{result.asString() orelse unreachable});
                             }
-                            self.stack.count -= arg_count + 1;
-                            try self.push(result);
-                        },
-                        .ext_function => |e| {
-                            if (e.arity != arg_count)
-                                return self.fail(
-                                    "Extern Function expected {} arguments, but found {}",
-                                    .{ e.arity, arg_count },
-                                );
-                            const result = e.backing(e.context_ptr, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
                             self.stack.count -= arg_count + 1;
                             try self.push(result);
                         },
@@ -1114,6 +1115,62 @@ pub const Vm = struct {
             else => capture.eql(case),
         };
         return result;
+    }
+
+    fn clone(self: *Vm, value: Value) !Value {
+        if (value != .obj) return value;
+
+        const allocator = self.alloc;
+        const obj = value.obj;
+        switch (obj.data) {
+            .list => |l| {
+                var new_list = try std.ArrayList(Value).initCapacity(allocator, l.items.len);
+                for (l.items) |item| {
+                    try new_list.append(allocator, try self.clone(item));
+                }
+                return try self.gc.create(self, .{ .list = new_list });
+            },
+            .map => |m| {
+                var new_map = Value.Obj.MapType.empty;
+                var it = m.iterator();
+                while (it.next()) |entry| {
+                    try new_map.put(allocator, try self.clone(entry.key_ptr.*), try self.clone(entry.value_ptr.*));
+                }
+                return try self.gc.create(self, .{ .map = new_map });
+            },
+            .set => |s| {
+                var new_set = Value.Obj.SetType.empty;
+                var it = s.iterator();
+                while (it.next()) |entry| {
+                    try new_set.put(allocator, try self.clone(entry.key_ptr.*), {});
+                }
+                return try self.gc.create(self, .{ .set = new_set });
+            },
+            .instance => |inst| {
+                var values = try self.alloc.alloc(Value, inst.fields.len);
+                for (inst.fields, 0..) |inst_value, i| {
+                    values[i] = try self.clone(inst_value);
+                }
+                return try self.gc.create(self, .{ .instance = .{
+                    .base = inst.base,
+                    .fields = values,
+                } });
+            },
+            else => return value,
+        }
+    }
+
+    fn createInstance(self: *Vm, base: *Value.Obj, inst_fields: []Class.Member) !Class.Instance {
+        const class = base.data.class;
+        var values = try self.alloc.alloc(Value, class.fields.len);
+        for (class.fields, 0..) |f, i| values[i] = try self.clone(f.value);
+        for (inst_fields) |inst_field| {
+            if (class.getFieldIndex(inst_field.name)) |i| values[i] = inst_field.value;
+        }
+        return .{
+            .base = base,
+            .fields = values,
+        };
     }
 
     fn push(self: *Vm, value: Value) !void {

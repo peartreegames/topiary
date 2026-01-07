@@ -210,24 +210,6 @@ test "Parse Nested Iterable Types" {
     try testing.expect(tree.root[0].type.expression.type.list[0].type == .list);
 }
 
-test "Parse Extern" {
-    const test_cases = .{
-        .{ .input = "extern const x = 0", .id = "x", .mutable = false, .@"extern" = true },
-        .{ .input = "extern var y = 0", .id = "y", .mutable = true, .@"extern" = true },
-    };
-
-    inline for (test_cases) |case| {
-        const mod = try parseSource(case.input);
-        defer mod.deinit();
-        const file = mod.entry;
-        const tree = file.tree;
-        const decl = tree.root[0].type.variable;
-        try testing.expectEqualStrings(case.id, decl.name);
-        try testing.expect(case.mutable == decl.is_mutable);
-        try testing.expect(case.@"extern" == decl.is_extern);
-    }
-}
-
 test "Parse Enum" {
     const input =
         \\ enum E {

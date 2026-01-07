@@ -6,7 +6,6 @@ pub const Symbol = struct {
     name: []const u8,
     tag: Scope.Tag,
     is_mutable: bool,
-    is_extern: bool,
 };
 
 pub const Scope = struct {
@@ -44,19 +43,15 @@ pub const Scope = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn define(self: *Scope, name: []const u8, is_mutable: bool, is_extern: bool) !*Symbol {
+    pub fn define(self: *Scope, name: []const u8, is_mutable: bool) !*Symbol {
         if (self.symbols.contains(name)) return error.SymbolAlreadyDeclared;
         const symbol = try self.allocator.create(Symbol);
-        if (is_extern and self.parent != null) {
-            return error.ExternError;
-        }
         const name_copy = try self.allocator.dupe(u8, name);
         symbol.* = .{
             .name = name_copy,
             .index = self.count,
             .tag = self.tag,
             .is_mutable = is_mutable,
-            .is_extern = is_extern,
         };
         self.count += 1;
         try self.symbols.putNoClobber(self.allocator, name_copy, symbol);
@@ -71,7 +66,6 @@ pub const Scope = struct {
             .index = original.index,
             .tag = .upvalue,
             .is_mutable = original.is_mutable,
-            .is_extern = original.is_extern,
         };
         try self.symbols.putNoClobber(self.allocator, symbol.name, symbol);
         return symbol;

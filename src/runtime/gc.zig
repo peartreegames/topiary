@@ -4,6 +4,23 @@ const Value = @import("../types/index.zig").Value;
 const UUID = @import("../utils/index.zig").UUID;
 
 const Obj = Value.Obj;
+// pub fn GcManaged(comptime T: type) type {
+//     return struct {
+//         header: GcHeader,
+//         data: T,
+//
+//         const Self = @This();
+//
+//         pub fn fromData(data_ptr: *T) *Self {
+//             return @fieldParentPtr("data", data_ptr);
+//         }
+//     };
+// }
+//
+// pub const GcHeader = struct {
+//     next: ?*GcHeader,
+//     is_marked: bool,
+// };
 
 pub const Gc = struct {
     allocator: std.mem.Allocator,

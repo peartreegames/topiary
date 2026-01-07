@@ -16,6 +16,8 @@ const DebugInfo = backend.DebugInfo;
 
 const Enum = @import("enum.zig").Enum;
 const Class = @import("class.zig").Class;
+const Function = @import("function.zig").Function;
+const Anchor = @import("anchor.zig").Anchor;
 const Allocator = std.mem.Allocator;
 
 pub const True = Value{ .bool = true };
@@ -96,33 +98,11 @@ pub const Value = union(Type) {
             list: std.ArrayList(Value),
             map: MapType,
             set: SetType,
-            function: struct {
-                arity: u8,
-                instructions: []const u8,
-                locals_count: usize,
-                is_method: bool = false,
-                debug_info: []DebugInfo,
-            },
-            ext_function: struct {
-                arity: u8,
-                context_ptr: usize,
-                backing: *const fn (context_ptr: usize, args: []Value) Value,
-                destroy: *const fn (context_ptr: usize, allocator: std.mem.Allocator) void,
-            },
-            builtin: struct {
-                arity: u8,
-                backing: Builtin,
-                is_method: bool,
-                name: []const u8,
-            },
+            function: Function,
+            builtin: Builtin,
             class: Class,
             instance: Class.Instance,
-            anchor: struct {
-                name: []const u8,
-                visit_index: C.GLOBAL,
-                parent_anchor_index: ?C.CONSTANT,
-                ip: C.JUMP,
-            },
+            anchor: Anchor,
         };
 
         pub const MapType = std.ArrayHashMapUnmanaged(Value, Value, Adapter, true);
@@ -136,16 +116,9 @@ pub const Value = union(Type) {
                 .list => obj.data.list.deinit(allocator),
                 .map => obj.data.map.deinit(allocator),
                 .set => obj.data.set.deinit(allocator),
-                .function => |f| {
-                    allocator.free(f.instructions);
-                    for (f.debug_info) |*d| d.*.deinit();
-                    allocator.free(f.debug_info);
-                },
-                .ext_function => |e| {
-                    e.destroy(e.context_ptr, allocator);
-                },
+                .function => |f| f.deinit(allocator),
                 .builtin => {},
-                .class => |c| c.deinit(),
+                .class => |c| c.deinit(allocator),
                 .instance => {
                     allocator.free(obj.data.instance.fields);
                 },
@@ -193,7 +166,6 @@ pub const Value = union(Type) {
                 .set => "set",
                 .map => "map",
                 .function => "function",
-                .ext_function => "extern_function",
                 .class => "class",
                 .instance => "instance",
                 .@"enum" => "enum",
@@ -251,43 +223,6 @@ pub const Value = union(Type) {
             i64 => .{ .timestamp = value },
             else => unreachable,
         };
-    }
-    pub fn clone(self: Value, allocator: std.mem.Allocator) !Value {
-        if (self != .obj) return self;
-
-        const obj = self.obj;
-        switch (obj.data) {
-            .list => |l| {
-                var new_list = try std.ArrayList(Value).initCapacity(allocator, l.items.len);
-                for (l.items) |item| {
-                    try new_list.append(allocator, try item.clone(allocator));
-                }
-                const new_obj = try allocator.create(Value.Obj);
-                new_obj.* = .{ .id = UUID.new(), .data = .{ .list = new_list } };
-                return .{ .obj = new_obj };
-            },
-            .map => |m| {
-                var new_map = Value.Obj.MapType.empty;
-                var it = m.iterator();
-                while (it.next()) |entry| {
-                    try new_map.put(allocator, try entry.key_ptr.clone(allocator), try entry.value_ptr.clone(allocator));
-                }
-                const new_obj = try allocator.create(Value.Obj);
-                new_obj.* = .{ .id = UUID.new(), .data = .{ .map = new_map } };
-                return .{ .obj = new_obj };
-            },
-            .set => |s| {
-                var new_set = Value.Obj.SetType.empty;
-                var it = s.iterator();
-                while (it.next()) |entry| {
-                    try new_set.put(allocator, try entry.key_ptr.clone(allocator), {});
-                }
-                const new_obj = try allocator.create(Value.Obj);
-                new_obj.* = .{ .id = UUID.new(), .data = .{ .set = new_set } };
-                return .{ .obj = new_obj };
-            },
-            else => return self,
-        }
     }
 
     pub fn isTruthy(self: Value) !bool {
@@ -493,7 +428,7 @@ pub const Value = union(Type) {
                         obj.* = .{
                             .id = id,
                             .data = .{
-                                .class = try Class.init(allocator, name, fields, methods),
+                                .class = try Class.init(name, fields, methods),
                             },
                         };
                         return .{ .obj = obj };
@@ -639,9 +574,6 @@ pub const Value = union(Type) {
                     },
                     .builtin => |b| {
                         try writer.print("[builtin] {s}", .{b.name});
-                    },
-                    else => {
-                        try writer.print("{s}", .{@tagName(o.data)});
                     },
                 }
             },

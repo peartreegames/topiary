@@ -23,7 +23,6 @@ pub const Bytecode = struct {
     pub const GlobalSymbol = struct {
         name: []const u8,
         index: C.GLOBAL,
-        is_extern: bool,
         is_mutable: bool,
     };
 
@@ -31,9 +30,7 @@ pub const Bytecode = struct {
         allocator.free(self.instructions);
         for (self.debug_info) |*d| d.*.deinit();
         allocator.free(self.debug_info);
-        for (self.constants) |item| {
-            item.destroy(allocator);
-        }
+        for (self.constants) |item| item.destroy(allocator);
         allocator.free(self.constants);
         allocator.free(self.uuids);
         for (self.global_symbols) |s| allocator.free(s.name);
@@ -47,7 +44,6 @@ pub const Bytecode = struct {
             try writer.writeInt(u8, @as(u8, @intCast(sym.name.len)), .little);
             try writer.writeAll(sym.name);
             try writer.writeInt(C.GLOBAL, @as(C.GLOBAL, @intCast(sym.index)), .little);
-            try writer.writeByte(if (sym.is_extern) 1 else 0);
             try writer.writeByte(if (sym.is_mutable) 1 else 0);
         }
     }
@@ -123,12 +119,10 @@ pub const Bytecode = struct {
             errdefer allocator.free(buf);
             try reader.readSliceAll(buf);
             const index = try reader.takeInt(C.GLOBAL, .little);
-            const is_extern = if (try reader.takeByte() == 1) true else false;
             const is_mutable = if (try reader.takeByte() == 1) true else false;
             global_symbols[count] = GlobalSymbol{
                 .name = buf,
                 .index = index,
-                .is_extern = is_extern,
                 .is_mutable = is_mutable,
             };
         }
@@ -178,8 +172,8 @@ pub const Bytecode = struct {
         try writer.print("\n==DEBUG==\n", .{});
         try printDebugInfo(writer, code.debug_info);
         try writer.print("\n==GLOBALS==\n", .{});
-        for(code.global_symbols) |g| {
-            try writer.print("{d} {s}", .{g.index, g.name});
+        for (code.global_symbols) |g| {
+            try writer.print("{d} {s}", .{ g.index, g.name });
             try writer.print("\n", .{});
         }
         try writer.print("\n==CONSTANTS==\n", .{});
@@ -235,12 +229,13 @@ pub const Bytecode = struct {
                     i += 2;
                 },
                 .get_upvalue,
-                .set_upvalue, => {
+                .set_upvalue,
+                => {
                     const frames_up = instructions[i];
                     i += 1;
                     const index = std.mem.readVarInt(C.LOCAL, instructions[i..(i + 2)], .little);
                     i += 2;
-                    try writer.print("{d: >8} {d}", .{frames_up, index});
+                    try writer.print("{d: >8} {d}", .{ frames_up, index });
                 },
                 .call,
                 .instance,

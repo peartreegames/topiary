@@ -16,6 +16,8 @@ const Module = @import("../module.zig").Module;
 
 const types = @import("../types/index.zig");
 const Value = types.Value;
+const Function = types.Function;
+const Anchor = types.Anchor;
 
 const scope = @import("scope.zig");
 const Scope = scope.Scope;
@@ -205,7 +207,6 @@ pub const Compiler = struct {
             global_symbols[i] = Bytecode.GlobalSymbol{
                 .name = try self.alloc.dupe(u8, s.name),
                 .index = s.index,
-                .is_extern = s.is_extern,
                 .is_mutable = s.is_mutable,
             };
         }
@@ -276,7 +277,7 @@ pub const Compiler = struct {
         old_scope.destroy();
     }
 
-    pub fn prepass(self: *Compiler, stmt: Statement) Error!void {
+    fn prepass(self: *Compiler, stmt: Statement) Error!void {
         switch (stmt.type) {
             .include => |i| {
                 const tmp = self.err;
@@ -393,6 +394,8 @@ pub const Compiler = struct {
                 try self.replaceValue(jumpPos, C.JUMP, self.instructionPos());
             },
             .function => |f| {
+                if (self.scope.parent != null and f.is_extern)
+                    return self.failError("Only global functions can be extern.", token, .{}, Error.IllegalOperation);
                 const obj = try self.compileFunctionObj(stmt, token);
                 const full_name = try self.getQualifiedName(f.name);
                 defer self.alloc.free(full_name);
@@ -495,7 +498,7 @@ pub const Compiler = struct {
                 try self.enterScope(.local);
                 try self.writeOp(.set_local, token);
                 _ = try self.writeInt(C.LOCAL, 0, token);
-                _ = try self.scope.define(f.capture, false, false);
+                _ = try self.scope.define(f.capture, false);
 
                 try self.compileBlock(f.body);
                 try self.writeOp(.jump, token);
@@ -516,9 +519,7 @@ pub const Compiler = struct {
             .variable => |v| {
                 if (builtins.has(v.name))
                     return self.failError("'{s}' is a builtin function and cannot be used as a variable name", stmt.token, .{v.name}, Error.IllegalOperation);
-                if (self.scope.parent != null and v.is_extern)
-                    return self.failError("Only global variables can be extern.", token, .{}, Error.IllegalOperation);
-                const symbol = self.scope.define(v.name, v.is_mutable, v.is_extern) catch {
+                const symbol = self.scope.define(v.name, v.is_mutable) catch {
                     return self.fail("'{s}' is already declared", token, .{v.name});
                 };
                 try self.compileExpression(&v.initializer);
@@ -548,7 +549,7 @@ pub const Compiler = struct {
                         .value = .{ .obj = func_obj },
                     };
                 }
-                const class_data = try types.Class.init(self.alloc, try self.alloc.dupe(u8, c.name), fields, methods);
+                const class_data = try types.Class.init(try self.alloc.dupe(u8, c.name), fields, methods);
                 const obj = try self.alloc.create(Value.Obj);
                 obj.* = .{
                     .id = UUID.new(),
@@ -850,11 +851,11 @@ pub const Compiler = struct {
         var length = f.parameters.len;
         if (f.is_method) {
             length += 1;
-            _ = try self.scope.define("self", false, false);
+            _ = try self.scope.define("self", false);
         }
 
         for (f.parameters) |param| {
-            _ = try self.scope.define(param, true, false);
+            _ = try self.scope.define(param, true);
         }
 
         try self.compileBlock(f.body);
@@ -915,7 +916,7 @@ pub const Compiler = struct {
     }
 
     fn registerAnchor(self: *Compiler, full_name: []const u8) !void {
-        const visit_sym = try self.root_scope.define(full_name, false, false);
+        const visit_sym = try self.root_scope.define(full_name, false);
 
         var parent_idx: ?C.CONSTANT = null;
         if (self.path_stack.items.len > 0) {
@@ -1226,6 +1227,10 @@ pub const Compiler = struct {
     }
 
     fn setSymbol(self: *Compiler, name: []const u8, symbol: ?*Symbol, token: Token, is_decl: bool) !void {
+        if (try self.resolveConstant(name) != null) {
+            return self.fail("Cannot assign to constant '{s}'", token,.{name});
+        }
+
         if (symbol) |s| {
             if (!is_decl and !s.is_mutable) return self.fail("Cannot assign to constant variable '{s}'", token, .{s.name});
             switch (s.tag) {

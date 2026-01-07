@@ -10,7 +10,16 @@ const utils = @import("../utils/index.zig");
 const UUID = utils.UUID;
 
 const Vm = @import("vm.zig").Vm;
-pub const Builtin = *const fn (vm: *Vm, args: []Value) Value;
+
+pub const Builtin = struct {
+    arity: u8,
+    backing: Fn,
+    is_method: bool,
+    name: []const u8,
+
+    pub const Fn = *const fn (vm: *Vm, args: []Value) Value;
+};
+
 var r: ?std.Random.DefaultPrng = null;
 
 pub const functions = std.StaticStringMap(Value).initComptime(.{ .{

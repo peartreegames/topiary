@@ -1,5 +1,6 @@
 const builtin = @import("builtins.zig");
 pub const builtins = builtin.functions;
+pub const BuiltinFn = builtin.BuiltinFn;
 pub const Builtin = builtin.Builtin;
 
 const gc = @import("gc.zig");
@@ -18,3 +19,5 @@ pub const Vm = vm.Vm;
 
 const err = @import("error.zig");
 pub const RuntimeErr = err.RuntimeErr;
+
+pub const Extern = @import("extern.zig").Extern;
