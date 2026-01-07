@@ -72,8 +72,6 @@ pub const Value = union(Type) {
 
     /// Allocated Value
     pub const Obj = struct {
-        is_marked: bool = false,
-        next: ?*Obj = null,
         // used for serializing references
         id: UUID.ID = UUID.Empty,
         index: ?C.GLOBAL = null,
@@ -108,7 +106,7 @@ pub const Value = union(Type) {
         pub const MapType = std.ArrayHashMapUnmanaged(Value, Value, Adapter, true);
         pub const SetType = std.ArrayHashMapUnmanaged(Value, void, Adapter, true);
 
-        pub fn destroy(obj: *Obj, allocator: std.mem.Allocator) void {
+        pub fn deinit(obj: *Obj, allocator: std.mem.Allocator) void {
             switch (obj.data) {
                 .anchor => |a| allocator.free(a.name),
                 .string => |s| allocator.free(s),
@@ -123,13 +121,15 @@ pub const Value = union(Type) {
                     allocator.free(obj.data.instance.fields);
                 },
             }
-            allocator.destroy(obj);
         }
     };
 
     pub fn destroy(self: Value, alloc: std.mem.Allocator) void {
         switch (self) {
-            .obj => |o| o.destroy(alloc),
+            .obj => |o| {
+                o.deinit(alloc);
+                alloc.destroy(o);
+            },
             else => {},
         }
     }

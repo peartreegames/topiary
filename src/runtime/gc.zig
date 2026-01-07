@@ -4,29 +4,17 @@ const Value = @import("../types/index.zig").Value;
 const UUID = @import("../utils/index.zig").UUID;
 
 const Obj = Value.Obj;
-// pub fn GcManaged(comptime T: type) type {
-//     return struct {
-//         header: GcHeader,
-//         data: T,
-//
-//         const Self = @This();
-//
-//         pub fn fromData(data_ptr: *T) *Self {
-//             return @fieldParentPtr("data", data_ptr);
-//         }
-//     };
-// }
-//
-// pub const GcHeader = struct {
-//     next: ?*GcHeader,
-//     is_marked: bool,
-// };
+pub const GcObj = struct {
+    next: ?*GcObj = null,
+    obj: Obj,
+    is_marked: bool = false,
+};
 
 pub const Gc = struct {
     allocator: std.mem.Allocator,
     allocated: usize,
     threshold: usize,
-    stack: ?*Obj,
+    stack: ?*GcObj,
 
     const default_collection: usize = 1024 * 1024;
     const growth_factor = 1.5;
@@ -41,9 +29,10 @@ pub const Gc = struct {
     }
 
     pub fn deinit(self: *Gc) void {
-        while (self.stack) |obj| {
-            const next = obj.next;
-            obj.destroy(self.allocator);
+        while (self.stack) |gc_obj| {
+            const next = gc_obj.next;
+            gc_obj.obj.deinit(self.allocator);
+            self.allocator.destroy(gc_obj);
             self.stack = next;
         }
         self.* = undefined;
@@ -51,24 +40,26 @@ pub const Gc = struct {
 
     /// root_ctx must have `fn root() []const []Value` function
     pub fn create(self: *Gc, root_ctx: anytype, data: Obj.Data) !Value {
-        const obj = try self.allocator.create(Obj);
-        obj.* = .{
-            .id = UUID.new(),
-            .data = data,
+        const gc_obj = try self.allocator.create(GcObj);
+        gc_obj.* = .{
+            .obj = .{
+                .id = UUID.new(),
+                .data = data
+            },
             .next = self.stack,
         };
-        self.stack = obj;
-        self.allocated += @sizeOf(Obj);
+        self.stack = gc_obj;
+        self.allocated += @sizeOf(GcObj);
         if (self.allocated > self.threshold) {
-            mark(obj);
+            mark(gc_obj);
             self.collect(root_ctx);
         }
         return .{
-            .obj = obj,
+            .obj = &gc_obj.obj,
         };
     }
 
-    fn mark(obj: *Obj) void {
+    fn mark(obj: *GcObj) void {
         if (obj.is_marked) return;
         obj.is_marked = true;
     }
@@ -76,7 +67,7 @@ pub const Gc = struct {
     fn markAll(root_ctx: anytype) void {
         for (root_ctx.roots()) |list| {
             for (list) |item| {
-                if (item == .obj) mark(item.obj);
+                if (item == .obj) mark(@fieldParentPtr("obj", item.obj));
             }
         }
     }
@@ -90,7 +81,8 @@ pub const Gc = struct {
             if (!obj.is_marked) {
                 const unmarked = obj;
                 objPtr = obj.next;
-                unmarked.destroy(self.allocator);
+                unmarked.obj.deinit(self.allocator);
+                self.allocator.destroy(unmarked);
                 continue;
             }
             obj.is_marked = false;

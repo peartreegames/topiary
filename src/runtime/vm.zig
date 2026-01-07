@@ -305,16 +305,18 @@ pub const Vm = struct {
             _ = self.frames.pop();
         }
         self.currentFrame().ip = 0;
-        for (self.bytecode.constants, 0..) |v, i| {
-            if (v == .obj and v.obj.data == .anchor) {
-                if (start_path != null and !std.mem.eql(u8, v.obj.data.anchor.name, start_path.?)) continue;
-                try self.prepareDivert(@intCast(i));
-                return;
+        if (start_path) |path| {
+            for (self.bytecode.constants, 0..) |v, i| {
+                if (v == .obj and v.obj.data == .anchor) {
+                    if (!std.mem.eql(u8, v.obj.data.anchor.name, path)) continue;
+                    try self.prepareDivert(@intCast(i));
+                    return;
+                }
+            } else {
+                self.err.msg = try std.fmt.allocPrint(self.alloc, "Could not find starting path {s}", .{path});
+                self.err.line = 1;
+                return Error.BoughNotFound;
             }
-        } else {
-            self.err.msg = try std.fmt.allocPrint(self.alloc, "Could not find starting path {?s}", .{start_path});
-            self.err.line = 1;
-            return Error.BoughNotFound;
         }
     }
 
