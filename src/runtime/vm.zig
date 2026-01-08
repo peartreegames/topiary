@@ -14,8 +14,7 @@ const False = types.False;
 const Void = types.Void;
 const Iterator = types.Iterator;
 const Function = types.Function;
-
-const Extern = @import("./extern.zig").Extern;
+const Extern = types.Extern;
 
 const utils = @import("../utils/index.zig");
 const UUID = utils.UUID;
@@ -51,17 +50,17 @@ pub const Vm = struct {
     err: RuntimeErr,
     gc: Gc,
     globals: []Value,
-    value_subscribers: std.StringHashMapUnmanaged(void),
+    value_subscribers: std.StringHashMapUnmanaged(void) = .empty,
+    notifiable_objects: std.AutoHashMapUnmanaged(UUID.ID, usize) = .empty,
 
     stack: Stack(Value),
     /// Current iterators to allow easy nesting
     iterators: Stack(Iterator),
     /// List of positions to jump back to using `^`
-    jump_backups: std.ArrayList(C.JUMP),
+    jump_backups: std.ArrayList(C.JUMP) = .empty,
     /// Used to ensure preceding code is executed before arriving at Bough
-    jump_requests: std.ArrayList(C.JUMP),
-    anchor_stack: std.ArrayList(C.CONSTANT),
-    externs: std.ArrayList(*Extern),
+    jump_requests: std.ArrayList(C.JUMP) = .empty,
+    anchor_stack: std.ArrayList(C.CONSTANT) = .empty,
 
     bytecode: Bytecode,
     /// Current instruction position
@@ -69,7 +68,7 @@ pub const Vm = struct {
     break_on_assert: bool = true,
 
     /// Used to cache the choices
-    choices_list: std.ArrayList(Choice),
+    choices_list: std.ArrayList(Choice) = .empty,
     /// Used to send to the on_choices method
     current_choices: []Choice = undefined,
     choices_freed: bool = true,
@@ -83,7 +82,7 @@ pub const Vm = struct {
     loc_key: ?[]const u8 = null,
 
     /// The currently loaded localization map
-    loc_map: std.AutoHashMapUnmanaged(UUID.ID, []const u8),
+    loc_map: std.AutoHashMapUnmanaged(UUID.ID, []const u8) = .empty,
 
     runner: *Runner,
 
@@ -129,13 +128,6 @@ pub const Vm = struct {
             .gc = Gc.init(allocator),
             .stack = try Stack(Value).init(allocator, stack_size),
             .iterators = try Stack(Iterator).init(allocator, iterator_size),
-            .jump_backups = .empty,
-            .jump_requests = .empty,
-            .anchor_stack = .empty,
-            .externs = .empty,
-            .choices_list = .empty,
-            .value_subscribers = .empty,
-            .loc_map = .empty,
         };
 
         vm.stack.resize(bytecode.locals_count);
@@ -152,7 +144,7 @@ pub const Vm = struct {
         self.jump_backups.deinit(self.alloc);
         self.anchor_stack.deinit(self.alloc);
         self.jump_requests.deinit(self.alloc);
-        self.externs.deinit(self.alloc);
+        self.notifiable_objects.deinit(self.alloc);
         self.gc.deinit();
         self.value_subscribers.deinit(self.alloc);
         self.alloc.free(self.globals);
@@ -241,30 +233,29 @@ pub const Vm = struct {
         return error.SymbolNotFound;
     }
 
-    fn getExternIndex(self: *Vm, name: []const u8) !usize {
-        for (self.bytecode.constants, 0..) |c, i| {
-            if (c != .obj or c.obj.data != .function) continue;
-            if (c.obj.data.function.extern_name) |func_name| {
-                if (!std.mem.eql(u8, name, func_name)) return i;
-            }
-        }
-        return error.NotFound;
+    fn getExtern(self: *Vm, name: []const u8) !Value {
+        return for (self.bytecode.constants) |e| {
+            if (e == .obj and e.obj.data == .@"extern" and std.mem.eql(u8, name, e.obj.data.@"extern".name))
+                break e;
+        } else error.NotFound;
     }
 
-    pub fn setExtern(self: *Vm, name: []const u8, value: *Extern) !void {
-        const index = try self.getExternIndex(name);
-        if (self.bytecode.constants[index].obj.data.function.extern_index != null)
-            return error.AlreadySet;
-        try self.externs.append(self.alloc, value);
-        self.bytecode.constants[index].obj.data.function.extern_index = @intCast(self.externs.items.len - 1);
+    pub fn setExtern(self: *Vm, name: []const u8, arity: u8, context_ptr: usize, backing: Extern.Backing, destroy: Extern.Destroy) !void {
+        const value = try self.getExtern(name);
+        var ext = &value.obj.data.@"extern";
+        if (ext.arity != arity) return error.InvalidArity;
+        if (ext.context_ptr != null) return error.AlreadySet;
+        ext.context_ptr = context_ptr;
+        ext.backing = backing;
+        ext.destroy = destroy;
     }
 
-    pub fn getExtern(self: *Vm, name: []const u8) !Value {
-        const index = self.getExternIndex(name) catch |err| {
-            if (err == Error.IllegalOperation) return err;
-            return Nil;
-        };
-        return self.globals[index];
+    pub fn removeExtern(self: *Vm, name: []const u8) !void {
+        const value = try self.getExtern(name);
+        var ext = &value.obj.data.@"extern";
+        ext.context_ptr = null;
+        ext.backing = undefined;
+        ext.destroy = undefined;
     }
 
     pub fn subscribeToValueChange(self: *Vm, name: []const u8) !bool {
@@ -279,6 +270,12 @@ pub const Vm = struct {
 
     pub fn unusbscribeToValueChange(self: *Vm, name: []const u8) bool {
         return self.value_subscribers.remove(name);
+    }
+
+    pub fn notifyValueObjChange(self: *Vm, uuid: UUID.ID, new_value: Value) void {
+        if (self.notifiable_objects.get(uuid)) |i| {
+            return self.notifyValueChange(i, Void, new_value);
+        }
     }
 
     pub fn notifyValueChange(self: *Vm, index: usize, old_value: Value, new_value: Value) void {
@@ -378,6 +375,13 @@ pub const Vm = struct {
                     if (index >= self.bytecode.constants.len)
                         return self.fail("Constant index {d} outside of bounds length {d}", .{ index, self.bytecode.constants.len });
                     const value = self.bytecode.constants[index];
+                    if (value == .obj and value.obj.data == .function and index < self.bytecode.constants.len - 1) {
+                        const ext = self.bytecode.constants[index + 1];
+                        if (ext == .obj and ext.obj.data == .@"extern" and ext.obj.data.@"extern".context_ptr != null) {
+                            try self.push(ext);
+                            continue;
+                        }
+                    }
                     try self.push(value);
                 },
                 .pop => _ = try self.pop(),
@@ -486,10 +490,10 @@ pub const Vm = struct {
                     if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{index});
                     const value = try self.pop();
                     // global already set from loaded state
+                    if (value == .obj) try self.notifiable_objects.put(self.alloc, value.obj.id, @intCast(index));
                     if (self.globals[index] != .void) {
                         continue;
                     }
-                    if (value == .obj) value.obj.index = @intCast(index);
                     self.globals[index] = value;
                 },
                 .set_global => {
@@ -502,7 +506,6 @@ pub const Vm = struct {
                     if (current == .enum_value and value == .enum_value and current.enum_value.base == value.enum_value.base and current.enum_value.base.data.@"enum".is_seq) {
                         if (current.enum_value.index > value.enum_value.index) value = current;
                     }
-                    if (value == .obj) value.obj.index = @intCast(index);
                     const old_value = self.globals[index];
                     self.globals[index] = value;
                     self.notifyValueChange(index, old_value, value);
@@ -880,6 +883,13 @@ pub const Vm = struct {
                             const frame = try Frame.create(value.obj, self.stack.count - arg_count);
                             self.frames.push(frame);
                             self.stack.count = frame.bp + f.locals_count;
+                        },
+                        .@"extern" => |e| {
+                            if (e.context_ptr) |ptr| {
+                                const result = e.backing(ptr, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
+                                self.stack.count -= arg_count + 1;
+                                try self.push(result);
+                            } else return self.fail("Extern function {s} not set", .{e.name});
                         },
                         .builtin => |b| {
                             if (b.arity != arg_count)

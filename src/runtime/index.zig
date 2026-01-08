@@ -19,5 +19,3 @@ pub const Vm = vm.Vm;
 
 const err = @import("error.zig");
 pub const RuntimeErr = err.RuntimeErr;
-
-pub const Extern = @import("extern.zig").Extern;

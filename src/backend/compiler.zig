@@ -45,10 +45,10 @@ fn arrayContains(comptime T: type, haystack: []const []const T, needle: []const 
 }
 pub const Compiler = struct {
     alloc: std.mem.Allocator,
-    constants: std.ArrayList(Value),
-    constants_map: std.StringHashMapUnmanaged(C.CONSTANT),
-    literal_cache: std.ArrayHashMapUnmanaged(Value, C.CONSTANT, Value.Adapter, true),
-    uuids: std.ArrayList(UUID.ID),
+    constants: std.ArrayList(Value) = .empty,
+    constants_map: std.StringHashMapUnmanaged(C.CONSTANT) = .empty,
+    literal_cache: std.ArrayHashMapUnmanaged(Value, C.CONSTANT, Value.Adapter, true) = .empty,
+    uuids: std.ArrayList(UUID.ID) = .empty,
     err: *CompilerErrors,
     scope: *Scope,
     root_scope: *Scope,
@@ -57,12 +57,12 @@ pub const Compiler = struct {
     use_loc: bool = false,
 
     module: *Module,
-    path_stack: std.ArrayList([]const u8),
-    anon_counters: std.ArrayList(usize),
+    path_stack: std.ArrayList([]const u8) = .empty,
+    anon_counters: std.ArrayList(usize) = .empty,
 
     pub const Chunk = struct {
-        instructions: std.ArrayList(u8),
-        debug_markers: std.ArrayList(Marker),
+        instructions: std.ArrayList(u8) = .empty,
+        debug_markers: std.ArrayList(Marker) = .empty,
         parent: ?*Chunk,
         module: *Module,
         alloc: std.mem.Allocator,
@@ -75,8 +75,6 @@ pub const Compiler = struct {
         pub fn init(allocator: std.mem.Allocator, parent: ?*Chunk, module: *Module) !*Chunk {
             const chunk = try allocator.create(Chunk);
             chunk.* = .{
-                .instructions = .empty,
-                .debug_markers = .empty,
                 .module = module,
                 .parent = parent,
                 .alloc = allocator,
@@ -153,15 +151,9 @@ pub const Compiler = struct {
         const root_scope = try Scope.create(alloc, null, .global);
         return .{
             .alloc = alloc,
-            .constants = .empty,
-            .constants_map = .empty,
-            .literal_cache = .empty,
-            .uuids = .empty,
             .chunk = root_chunk,
             .scope = root_scope,
             .root_scope = root_scope,
-            .path_stack = .empty,
-            .anon_counters = .empty,
             .err = &module.entry.errors,
             .module = module,
         };
@@ -292,17 +284,20 @@ pub const Compiler = struct {
             .function => |f| {
                 const full_name = try self.getQualifiedName(f.name);
                 defer self.alloc.free(full_name);
-                _ = try self.addNamedConstant(full_name, .nil);
+                try self.addNamedConstant(full_name, .nil);
+                if (f.is_extern) {
+                    _ = try self.addConstant(.{ .obj = try self.compileExternFunctionObj(stmt)});
+                }
             },
             .class => |c| {
                 const full_name = try self.getQualifiedName(c.name);
                 defer self.alloc.free(full_name);
-                _ = try self.addNamedConstant(full_name, .nil);
+                try self.addNamedConstant(full_name, .nil);
             },
             .@"enum" => |e| {
                 const full_name = try self.getQualifiedName(e.name);
                 defer self.alloc.free(full_name);
-                _ = try self.addNamedConstant(full_name, .nil);
+                try self.addNamedConstant(full_name, .nil);
             },
             .bough => |b| {
                 const full_name = try self.getQualifiedName(b.name);
@@ -395,7 +390,7 @@ pub const Compiler = struct {
             },
             .function => |f| {
                 if (self.scope.parent != null and f.is_extern)
-                    return self.failError("Only global functions can be extern.", token, .{}, Error.IllegalOperation);
+                   return self.failError("Only global functions can be extern.", token, .{}, Error.IllegalOperation);
                 const obj = try self.compileFunctionObj(stmt, token);
                 const full_name = try self.getQualifiedName(f.name);
                 defer self.alloc.free(full_name);
@@ -843,6 +838,20 @@ pub const Compiler = struct {
         }
     }
 
+    fn compileExternFunctionObj(self: *Compiler, stmt: Statement) !*Value.Obj {
+        const f = stmt.type.function;
+        const obj = try self.alloc.create(Value.Obj);
+        obj.* = .{
+            .data = .{
+                .@"extern" = .{
+                    .name = f.name,
+                    .arity = @intCast(f.parameters.len),
+                }
+            }
+        };
+        return obj;
+    }
+
     fn compileFunctionObj(self: *Compiler, stmt: Statement, token: Token) !*Value.Obj {
         try self.enterScope(.function);
         try self.enterChunk();
@@ -874,11 +883,11 @@ pub const Compiler = struct {
             .id = UUID.new(),
             .data = .{
                 .function = .{
+                    .arity = @as(u8, @intCast(length)),
                     .is_method = f.is_method,
                     .instructions = try chunk.instructions.toOwnedSlice(self.alloc),
                     .debug_info = try chunk.debugInfo(self.alloc),
                     .locals_count = count,
-                    .arity = @as(u8, @intCast(length)),
                 },
             },
         };
@@ -938,7 +947,7 @@ pub const Compiler = struct {
             },
         };
 
-        return try self.addNamedConstant(full_name, .{ .obj = anchor_obj });
+        try self.addNamedConstant(full_name, .{ .obj = anchor_obj });
     }
 
     fn compileVisit(self: *Compiler, anchor_idx: C.CONSTANT, token: Token) !void {
@@ -1228,7 +1237,7 @@ pub const Compiler = struct {
 
     fn setSymbol(self: *Compiler, name: []const u8, symbol: ?*Symbol, token: Token, is_decl: bool) !void {
         if (try self.resolveConstant(name) != null) {
-            return self.fail("Cannot assign to constant '{s}'", token,.{name});
+            return self.fail("Cannot assign to constant '{s}'", token, .{name});
         }
 
         if (symbol) |s| {

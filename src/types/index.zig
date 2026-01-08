@@ -14,3 +14,4 @@ pub const Class = @import("class.zig").Class;
 pub const Function = @import("function.zig").Function;
 pub const Enum = @import("enum.zig").Enum;
 pub const Anchor = @import("anchor.zig").Anchor;
+pub const Extern = @import("extern.zig").Extern;

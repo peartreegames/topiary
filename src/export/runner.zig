@@ -11,7 +11,6 @@ const Value = topi.types.Value;
 const Nil = topi.types.Nil;
 
 const ExportValue = @import("value.zig").ExportValue;
-pub const ExportFunctionDelegate = *const fn (args: []Value) Value;
 
 pub const ExportString = extern struct {
     ptr: [*c]const u8,
@@ -49,7 +48,7 @@ pub const ExportLogger = struct {
     pub fn log(self: ExportLogger, comptime msg: []const u8, args: anytype, severity: Severity) void {
         if (@intFromEnum(severity) < @intFromEnum(self.severity)) return;
         const buf = std.fmt.allocPrint(self.allocator, msg, args) catch |err| {
-            std.log.err("Error fmt: {}", .{err});
+            std.log.err("Error fmt: {t}", .{err});
             self.on_log(.{ .ptr = msg.ptr, .len = msg.len }, severity);
             return;
         };

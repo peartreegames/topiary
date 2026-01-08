@@ -13,9 +13,12 @@ const ExportString = exp.ExportString;
 const ExportLine = exp.ExportLine;
 const ExportChoice = exp.ExportChoice;
 
+const allocator = std.testing.allocator;
+
+var output: std.ArrayList([]const u8) = .empty;
 const TestRunner = struct {
     pub fn onLine(vm_ptr: usize, dialogue: *ExportLine) callconv(.c) void {
-        _ = dialogue;
+        output.append(allocator, allocator.dupe(u8, dialogue.content.ptr[0..dialogue.content.len]) catch unreachable) catch unreachable;
         main.selectContinue(vm_ptr);
     }
 
@@ -25,28 +28,24 @@ const TestRunner = struct {
         main.selectChoice(vm_ptr, 0);
     }
 
-    pub fn onValueChanged(_: usize, name_ptr: [*c]const u8, name_len: usize, value: ExportValue) callconv(.c) void {
-        var buffer: [1024]u8 = undefined;
-        var writer = std.fs.File.stderr().writer(&buffer);
-        const stderr = &writer.interface;
-        stderr.print("onValueChanged: {s} = ", .{name_ptr[0..name_len]}) catch {};
-        value.print(stderr) catch {};
-        stderr.print("\n", .{}) catch {};
+    pub fn onValueChanged(_: usize, name_ptr: [*c]const u8, name_len: usize, _: ExportValue) callconv(.c) void {
+        output.append(allocator, std.fmt.allocPrint(allocator, "onValueChanged: {s}", .{name_ptr[0..name_len]}) catch unreachable) catch unreachable;
     }
 
     pub fn log(msg: ExportString, severity: ExportLogger.Severity) callconv(.c) void {
-        std.debug.print("[{t}] {s}\n", .{ severity, msg.ptr[0..msg.len] });
+        _ = msg;
+        _ = severity;
     }
 
     pub fn free(ptr: usize) void {
-        std.debug.print("test export free memory at: {d}\n", .{ptr});
+        _ = ptr;
     }
 
     // *const fn (vm_ptr: usize, args: [*c]ExportValue, args_len: u8) callconv(.c) ExportValue;
     pub fn sum(_: usize, args: [*c]ExportValue, _: u8) callconv(.c) ExportValue {
         const arg1 = args[0].data.number;
         const arg2 = args[1].data.number;
-        std.debug.print("extern sum {d} + {d} = {d}\n", .{ arg1, arg2, arg1 + arg2 });
+        output.append(allocator, std.fmt.allocPrint(allocator, "extern sum {d} + {d} = {d}", .{ arg1, arg2, arg1 + arg2 }) catch unreachable) catch unreachable;
         return .{ .tag = .number, .data = .{ .number = arg1 + arg2 } };
     }
 };
@@ -65,7 +64,7 @@ test "Export Create and Destroy Vm" {
         \\ extern fn sum |x, y| return x + y
         \\ === START {
         \\     :: "A person approaches." #starting
-        \\     :Stranger: "Hey there."
+        \\     :Stranger: "Hey there. {sum(5, 4)}"
         \\     list.add(3)
         \\     fork^ {
         \\         ~ "Greet them." #lots #of #tags #here {
@@ -81,6 +80,12 @@ test "Export Create and Destroy Vm" {
         \\ }
         \\
     ;
+    defer {
+        for (output.items) |o| {
+            allocator.free(o);
+        }
+        output.deinit(allocator);
+    }
 
     const file = try std.fs.cwd().createFile("tmp.topi", .{ .read = false });
     defer std.fs.cwd().deleteFile("tmp.topi") catch {};
@@ -92,14 +97,14 @@ test "Export Create and Destroy Vm" {
     try file_write.flush();
 
     try file.seekTo(0);
-    const dir_path = try std.fs.cwd().realpathAlloc(std.testing.allocator, ".");
-    defer std.testing.allocator.free(dir_path);
-    const path = try std.fs.path.resolve(std.testing.allocator, &.{ dir_path, "tmp.topi" ++ "\x00" });
-    defer std.testing.allocator.free(path);
+    const dir_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+    const path = try std.fs.path.resolve(allocator, &.{ dir_path, "tmp.topi" ++ "\x00" });
+    defer allocator.free(path);
     const path_ptr: [*:0]const u8 = path[0 .. path.len - 1 :0];
     const calc_size = main.calculateCompileSize(path_ptr, @intFromPtr(&TestRunner.log), @intFromEnum(ExportLogger.Severity.debug));
-    const buf = try std.testing.allocator.alloc(u8, calc_size);
-    defer std.testing.allocator.free(buf);
+    const buf = try allocator.alloc(u8, calc_size);
+    defer allocator.free(buf);
     const compile_size = main.compile(path_ptr, buf.ptr, buf.len, @intFromPtr(&TestRunner.log), @intFromEnum(ExportLogger.Severity.debug));
     try std.testing.expectEqual(compile_size, calc_size);
 
@@ -115,44 +120,6 @@ test "Export Create and Destroy Vm" {
     const vm: *Vm = @ptrFromInt(vm_ptr);
 
     defer main.destroyVm(vm_ptr);
-    // var list_value = [2]ExportValue{
-    //     .{ .tag = .number, .data = .{ .number = 1 } },
-    //     .{ .tag = .number, .data = .{ .number = 2 } },
-    // };
-    // const list = ExportValue{ .tag = .list, .data = .{
-    //     .list = .{
-    //         .items = &list_value,
-    //         .count = 2,
-    //     },
-    // } };
-
-    const someStr = try std.testing.allocator.dupe(u8, "some");
-    defer std.testing.allocator.free(someStr);
-    const valueStr = try std.testing.allocator.dupe(u8, "value");
-    defer std.testing.allocator.free(valueStr);
-    // var set_value = [2]ExportValue{
-    //     .{ .tag = .string, .data = .{ .string = .{ .ptr = someStr.ptr, .len = someStr.len } } },
-    //     .{ .tag = .string, .data = .{ .string = .{ .ptr = valueStr.ptr, .len = valueStr.len } } },
-    // };
-    // const set = ExportValue{
-    //     .tag = .set,
-    //     .data = .{ .list = .{ .items = &set_value, .count = 2 } },
-    // };
-    // var map_value = [4]ExportValue{
-    //     .{ .tag = .number, .data = .{ .number = 0 } },
-    //     .{ .tag = .number, .data = .{ .number = 0.0001 } },
-    //     .{ .tag = .number, .data = .{ .number = 1 } },
-    //     .{ .tag = .number, .data = .{ .number = 1.1111 } },
-    // };
-    // const map = ExportValue{
-    //     .tag = .map,
-    //     .data = .{ .list = .{ .items = &map_value, .count = 4 } },
-    // };
-
-    const enumStr = try std.testing.allocator.dupe(u8, "Enum");
-    defer std.testing.allocator.free(enumStr);
-    const twoStr = try std.testing.allocator.dupe(u8, "Two");
-    defer std.testing.allocator.free(twoStr);
     const free_ptr = @intFromPtr(&TestRunner.free);
     main.setExternFunc(vm_ptr, "sum", @intFromPtr(&TestRunner.sum), 2, free_ptr);
 
@@ -168,4 +135,19 @@ test "Export Create and Destroy Vm" {
         }
     }
     _ = main.unsubscribe(vm_ptr, list_name);
+
+    const expected = &[_][]const u8{
+        "A person approaches.",
+        "extern sum 5 + 4 = 9",
+        "Hey there. 9",
+        "onValueChanged: list",
+        "Oh, uh, nice to meet you. My name is Drew.",
+        "Sorry, I thought you were someone I knew.",
+        "I'd love to stay and chat, but this is just a short demo.",
+        "They walk away...",
+    };
+    try std.testing.expectEqual(expected.len, output.items.len);
+    for (expected, 0..) |e, i| {
+        try std.testing.expectEqualSlices(u8, e, output.items[i]);
+    }
 }

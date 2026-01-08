@@ -43,7 +43,7 @@ pub const functions = std.StaticStringMap(Value).initComptime(.{ .{
 }, .{
     "mstime",
     create("mstime", 0, false, mstime),
-}});
+} });
 
 pub const methods = std.StaticStringMap(Value).initComptime(.{ .{
     "count",
@@ -141,9 +141,7 @@ fn add_method(vm: *Vm, args: []Value) Value {
         .set => args[0].obj.data.set.put(vm.alloc, item, {}) catch {},
         else => unreachable,
     }
-    if (args[0].obj.index) |i| {
-        vm.notifyValueChange(i, Void, args[0]);
-    }
+    vm.notifyValueObjChange(args[0].obj.id, args[0]);
     return Void;
 }
 
@@ -154,9 +152,7 @@ fn addmap_method(vm: *Vm, args: []Value) Value {
         .map => args[0].obj.data.map.put(vm.alloc, key, item) catch {},
         else => unreachable,
     }
-    if (args[0].obj.index) |i| {
-        vm.notifyValueChange(i, Void, args[0]);
-    }
+    vm.notifyValueObjChange(args[0].obj.id, args[0]);
     return Void;
 }
 fn remove_method(vm: *Vm, args: []Value) Value {
@@ -173,9 +169,7 @@ fn remove_method(vm: *Vm, args: []Value) Value {
         .map => _ = args[0].obj.data.map.orderedRemove(item),
         else => unreachable,
     }
-    if (args[0].obj.index) |i| {
-        vm.notifyValueChange(i, Void, args[0]);
-    }
+    vm.notifyValueObjChange(args[0].obj.id, args[0]);
     return Void;
 }
 
@@ -210,8 +204,6 @@ fn clear_method(vm: *Vm, args: []Value) Value {
         .set => data.set.clearAndFree(vm.alloc),
         else => unreachable,
     }
-    if (args[0].obj.index) |i| {
-        vm.notifyValueChange(i, Void, args[0]);
-    }
+    vm.notifyValueObjChange(args[0].obj.id, args[0]);
     return Void;
 }

@@ -1636,30 +1636,30 @@ test "Runtime Switch" {
         };
     }
 }
-//
-// test "Runtime Externs and Subscribers" {
-//     const test_cases = .{
-//         .{ .input =
-//         \\ var value = 1
-//         \\ value = 5
-//         , .value = 5.0 },
-//     };
-//
-//     inline for (test_cases) |case| {
-//         var mod = try Module.initEmpty(allocator);
-//         defer mod.deinit();
-//         var vm = try initTestVm(case.input, mod, false);
-//         defer vm.deinit();
-//         const test_runner: *TestRunner = @fieldParentPtr("runner", vm.runner);
-//         defer test_runner.deinit();
-//         defer vm.bytecode.free(testing.allocator);
-//         try vm.setExtern("value", .{ .number = 2 });
-//         _ = try vm.subscribeToValueChange("value");
-//         try vm.interpret();
-//         _ = vm.unusbscribeToValueChange("value");
-//         try testing.expect(case.value == vm.stack.previous().number);
-//     }
-// }
+
+test "Runtime Externs and Subscribers" {
+    const test_cases = .{
+        .{ .input =
+        \\ var value = 1
+        \\ value = 5
+        , .value = 5.0 },
+    };
+
+    inline for (test_cases) |case| {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm(case.input, mod, false);
+        defer vm.deinit();
+        const test_runner: *TestRunner = @fieldParentPtr("runner", vm.runner);
+        defer test_runner.deinit();
+        defer vm.bytecode.free(testing.allocator);
+        _ = try vm.subscribeToValueChange("value");
+        try vm.interpret();
+        _ = vm.unusbscribeToValueChange("value");
+        try testing.expect(case.value == vm.stack.previous().number);
+        try testing.expect(case.value == test_runner.values_changed.pop().?.number);
+    }
+}
 
 test "Runtime Save and Load State" {
     const test_case =

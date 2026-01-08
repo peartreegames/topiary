@@ -51,7 +51,6 @@ pub const Gc = struct {
         self.stack = gc_obj;
         self.allocated += @sizeOf(GcObj);
         if (self.allocated > self.threshold) {
-            mark(gc_obj);
             self.collect(root_ctx);
         }
         return .{
@@ -73,20 +72,23 @@ pub const Gc = struct {
     }
 
     fn sweep(self: *Gc) void {
-        self.allocated = 0;
         if (self.stack == null) return;
 
-        var objPtr = self.stack;
-        while (objPtr) |obj| {
+        var prev: ?*GcObj = null;
+        var current = self.stack;
+        while (current) |obj| {
             if (!obj.is_marked) {
                 const unmarked = obj;
-                objPtr = obj.next;
+                current = obj.next;
+                if (prev) |p| p.next = current else self.stack = current;
                 unmarked.obj.deinit(self.allocator);
                 self.allocator.destroy(unmarked);
+                self.allocated -= @sizeOf(GcObj);
                 continue;
             }
             obj.is_marked = false;
-            objPtr = obj.next;
+            prev = current;
+            current = obj.next;
         }
     }
 

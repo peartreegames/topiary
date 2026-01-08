@@ -145,9 +145,9 @@ pub export fn start(vm_ptr: usize, path_ptr: [*:0]const u8) callconv(.c) void {
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
     const logger = runner.logger;
     for (vm.bytecode.constants) |c| {
-        if (c != .obj or c.obj.data != .function) continue;
-        if (c.obj.data.function.extern_index == null)
-            logger.log("Extern \"{?s}\" has not been set", .{c.obj.data.function.extern_name}, .warn);
+        if (c != .obj or c.obj.data != .@"extern") continue;
+        if (c.obj.data.@"extern".context_ptr == null)
+            logger.log("Extern '{s}' has not been set", .{c.obj.data.@"extern".name}, .warn);
     }
 
     const path = if (path_ptr[0] != 0) std.mem.sliceTo(path_ptr, 0) else for (vm.bytecode.constants) |c| {
@@ -205,18 +205,8 @@ pub export fn setExternFunc(vm_ptr: usize, name_ptr: [*:0]const u8, value_ptr: u
         return;
     };
     wrapper.* = ExportFunction.create(vm, @ptrFromInt(value_ptr), @ptrFromInt(free_ptr));
-    const val = alloc.create(Extern) catch |err| {
-        logger.log("Could not create function value '{s}': {t}", .{ name, err }, .err);
-        return;
-    };
-    val.* = .{
-        .arity = arity,
-        .backing = ExportFunction.call,
-        .context_ptr = @intFromPtr(wrapper),
-        .destroy = ExportFunction.destroy,
-    };
-    vm.setExtern(name, val) catch |err| {
-        logger.log("Could not set Extern fn '{s}': {t}", .{ name, err }, .err);
+    vm.setExtern(name, arity, @intFromPtr(wrapper), ExportFunction.call, ExportFunction.destroy) catch |err| {
+        logger.log("Could not set extern fn '{s}': {t}", .{ name, err }, .err);
     };
 }
 

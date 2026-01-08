@@ -177,7 +177,8 @@ pub const Bytecode = struct {
             try writer.print("\n", .{});
         }
         try writer.print("\n==CONSTANTS==\n", .{});
-        for (code.constants) |value| {
+        for (code.constants, 0..) |value, i| {
+            try writer.print("{} ", .{i});
             try value.print(writer, null);
             try writer.print("\n", .{});
         }

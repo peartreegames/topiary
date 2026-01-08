@@ -18,6 +18,8 @@ const Enum = @import("enum.zig").Enum;
 const Class = @import("class.zig").Class;
 const Function = @import("function.zig").Function;
 const Anchor = @import("anchor.zig").Anchor;
+const Extern = @import("extern.zig").Extern;
+
 const Allocator = std.mem.Allocator;
 
 pub const True = Value{ .bool = true };
@@ -74,7 +76,6 @@ pub const Value = union(Type) {
     pub const Obj = struct {
         // used for serializing references
         id: UUID.ID = UUID.Empty,
-        index: ?C.GLOBAL = null,
         data: Data,
 
         pub const DataType = enum(u8) {
@@ -84,6 +85,7 @@ pub const Value = union(Type) {
             map,
             set,
             function,
+            @"extern",
             builtin,
             class,
             instance,
@@ -97,6 +99,7 @@ pub const Value = union(Type) {
             map: MapType,
             set: SetType,
             function: Function,
+            @"extern": Extern,
             builtin: Builtin,
             class: Class,
             instance: Class.Instance,
@@ -115,6 +118,7 @@ pub const Value = union(Type) {
                 .map => obj.data.map.deinit(allocator),
                 .set => obj.data.set.deinit(allocator),
                 .function => |f| f.deinit(allocator),
+                .@"extern" => |e| if (e.context_ptr) |ptr| e.destroy(ptr, allocator),
                 .builtin => {},
                 .class => |c| c.deinit(allocator),
                 .instance => {
@@ -166,6 +170,7 @@ pub const Value = union(Type) {
                 .set => "set",
                 .map => "map",
                 .function => "function",
+                .@"extern" => "extern_function",
                 .class => "class",
                 .instance => "instance",
                 .@"enum" => "enum",
@@ -307,6 +312,11 @@ pub const Value = union(Type) {
                         try writer.writeAll(f.instructions);
                         try writer.writeInt(u32, @intCast(f.debug_info.len), .little);
                         for (f.debug_info) |d| try d.serialize(writer);
+                    },
+                    .@"extern" => |e| {
+                        try writer.writeByte(@intCast(e.name.len));
+                        try writer.writeAll(e.name);
+                        try writer.writeByte(e.arity);
                     },
                     .@"enum" => |e| {
                         try writer.writeByte(@intCast(e.name.len));
@@ -456,6 +466,18 @@ pub const Value = union(Type) {
                         } };
                         return .{ .obj = obj };
                     },
+                    .@"extern" => {
+                        const name_len = try reader.takeByte();
+                        const name_buf = try reader.readAlloc(allocator, name_len);
+                        const arity = try reader.takeByte();
+
+                        const obj = try allocator.create(Value.Obj);
+                        obj.* = .{ .id = id, .data = .{ .@"extern" = .{
+                            .name = name_buf,
+                            .arity = arity,
+                        } } };
+                        return .{ .obj = obj };
+                    },
                     .@"enum" => {
                         const name_len = try reader.takeByte();
                         const name_buf = try reader.readAlloc(allocator, name_len);
@@ -463,7 +485,16 @@ pub const Value = union(Type) {
                         const is_seq = try reader.takeByte() == 1;
                         const values_length = try reader.takeByte();
                         const obj = try allocator.create(Value.Obj);
-                        obj.* = .{ .id = id, .data = .{ .@"enum" = .{ .name = name_buf, .values = try allocator.alloc([]const u8, values_length), .is_seq = is_seq } } };
+                        obj.* = .{
+                            .id = id,
+                            .data = .{
+                                .@"enum" = .{
+                                    .name = name_buf,
+                                    .values = try allocator.alloc([]const u8, values_length),
+                                    .is_seq = is_seq,
+                                },
+                            },
+                        };
                         for (0..values_length) |i| {
                             const value_name_len = try reader.takeByte();
                             const value_name_buf = try reader.readAlloc(allocator, value_name_len);
@@ -548,7 +579,9 @@ pub const Value = union(Type) {
                     .function => |f| {
                         try writer.print("[fn]\n", .{});
                         try Bytecode.printInstructions(writer, f.instructions);
-                        try writer.print("\n", .{});
+                    },
+                    .@"extern" => |e| {
+                        try writer.print("[extern fn] {s}", .{e.name});
                     },
                     .class => |c| {
                         try writer.print("{s}", .{c.name});

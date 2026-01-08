@@ -294,7 +294,7 @@ pub const Parser = struct {
             is_extern = true;
             self.next();
         }
-        self.next();
+        self.next(); // skip fn
         const name = try self.consumeIdentifier();
         var list = std.ArrayList([]const u8).empty;
         errdefer list.deinit(self.allocator);

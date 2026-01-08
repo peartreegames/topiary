@@ -11,8 +11,6 @@ pub const Function = struct {
     locals_count: usize,
     is_method: bool = false,
     debug_info: []DebugInfo,
-    extern_name: ?[]const u8 = null,
-    extern_index: ?C.GLOBAL = null,
 
     pub fn deinit(self: Function, allocator: std.mem.Allocator) void {
         allocator.free(self.instructions);
