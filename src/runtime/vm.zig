@@ -240,7 +240,7 @@ pub const Vm = struct {
         } else error.NotFound;
     }
 
-    pub fn setExtern(self: *Vm, name: []const u8, arity: u8, context_ptr: usize, backing: Extern.Backing, destroy: Extern.Destroy) !void {
+    pub fn setExtern(self: *Vm, name: []const u8, arity: u8, context_ptr: *anyopaque, backing: Extern.Backing, destroy: Extern.Destroy) !void {
         const value = try self.getExtern(name);
         var ext = &value.obj.data.@"extern";
         if (ext.arity != arity) return error.InvalidArity;

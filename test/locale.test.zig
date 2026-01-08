@@ -84,8 +84,22 @@ test "Export Localization CSV Tree" {
     const mod = try parser_test.parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    var buffer: [1024]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    const stderr = &writer.interface;
-    try Locale.exportFile(file, stderr);
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try Locale.exportFile(file, &output.writer);
+
+    const expected =
+        \\"id","speaker","raw","en"
+        \\"8R955KPX-2WI5R816","NONE","A person approaches.","A person approaches."
+        \\"C5I6VN71-IP0HPJHE","Stranger","Hey there.","Hey there."
+        \\"JTCCIIS7-NHTNWTBL","CHOICE","Greet them.","Greet them."
+        \\"8T8YW3LX-RNGWJE68","Drew","Oh, uh, nice to meet you. My name is Drew.","Oh, uh, nice to meet you. My name is Drew."
+        \\"8LIQ3QJV-5U3AJJKV","Drew","Sorry, I thought you were someone I knew.","Sorry, I thought you were someone I knew."
+        \\"YPTY00G5-1WX98ONH","Drew","I'd love to stay and chat, but this is just a short demo.","I'd love to stay and chat, but this is just a short demo."
+        \\"AEPZ4SNT-UFN9U9YW","CHOICE","Say nothing.","Say nothing."
+        \\"S6MF4G1X-34IOPNOJ","NONE","The person acts as though they were addressing someone else.","The person acts as though they were addressing someone else."
+        \\"KPTQNK2P-69OMTGXF","NONE","They walk away... Counting down from {num}","They walk away... Counting down from {0}"
+        \\
+        ;
+    try std.testing.expectEqualSlices(u8, expected, output.written());
 }

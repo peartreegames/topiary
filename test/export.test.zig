@@ -17,12 +17,12 @@ const allocator = std.testing.allocator;
 
 var output: std.ArrayList([]const u8) = .empty;
 const TestRunner = struct {
-    pub fn onLine(vm_ptr: usize, dialogue: *ExportLine) callconv(.c) void {
+    pub fn onLine(vm_ptr: *anyopaque, dialogue: *ExportLine) callconv(.c) void {
         output.append(allocator, allocator.dupe(u8, dialogue.content.ptr[0..dialogue.content.len]) catch unreachable) catch unreachable;
         main.selectContinue(vm_ptr);
     }
 
-    pub fn onChoices(vm_ptr: usize, choices: [*]ExportChoice, choices_len: u8) callconv(.c) void {
+    pub fn onChoices(vm_ptr: *anyopaque, choices: [*]ExportChoice, choices_len: u8) callconv(.c) void {
         _ = choices;
         _ = choices_len;
         main.selectChoice(vm_ptr, 0);
@@ -37,12 +37,12 @@ const TestRunner = struct {
         _ = severity;
     }
 
-    pub fn free(ptr: usize) void {
+    pub fn free(ptr: *anyopaque) void {
         _ = ptr;
     }
 
-    // *const fn (vm_ptr: usize, args: [*c]ExportValue, args_len: u8) callconv(.c) ExportValue;
-    pub fn sum(_: usize, args: [*c]ExportValue, _: u8) callconv(.c) ExportValue {
+    // *const fn (vm_ptr: *anyopaque, args: [*c]ExportValue, args_len: u8) callconv(.c) ExportValue;
+    pub fn sum(_: *anyopaque, args: [*c]ExportValue, _: u8) callconv(.c) ExportValue {
         const arg1 = args[0].data.number;
         const arg2 = args[1].data.number;
         output.append(allocator, std.fmt.allocPrint(allocator, "extern sum {d} + {d} = {d}", .{ arg1, arg2, arg1 + arg2 }) catch unreachable) catch unreachable;
@@ -102,26 +102,26 @@ test "Export Create and Destroy Vm" {
     const path = try std.fs.path.resolve(allocator, &.{ dir_path, "tmp.topi" ++ "\x00" });
     defer allocator.free(path);
     const path_ptr: [*:0]const u8 = path[0 .. path.len - 1 :0];
-    const calc_size = main.calculateCompileSize(path_ptr, @intFromPtr(&TestRunner.log), @intFromEnum(ExportLogger.Severity.debug));
+    const calc_size = main.calculateCompileSize(path_ptr, @ptrCast(&TestRunner.log), @intFromEnum(ExportLogger.Severity.debug));
     const buf = try allocator.alloc(u8, calc_size);
     defer allocator.free(buf);
-    const compile_size = main.compile(path_ptr, buf.ptr, buf.len, @intFromPtr(&TestRunner.log), @intFromEnum(ExportLogger.Severity.debug));
+    const compile_size = main.compile(path_ptr, buf.ptr, buf.len, @ptrCast(&TestRunner.log), @intFromEnum(ExportLogger.Severity.debug));
     try std.testing.expectEqual(compile_size, calc_size);
 
     const vm_ptr = main.createVm(
         buf.ptr,
         buf.len,
-        @intFromPtr(&TestRunner.onLine),
-        @intFromPtr(&TestRunner.onChoices),
-        @intFromPtr(&TestRunner.onValueChanged),
-        @intFromPtr(&TestRunner.log),
+        @ptrCast(&TestRunner.onLine),
+        @ptrCast(&TestRunner.onChoices),
+        @ptrCast(&TestRunner.onValueChanged),
+        @ptrCast(&TestRunner.log),
         @intFromEnum(ExportLogger.Severity.debug),
-    );
-    const vm: *Vm = @ptrFromInt(vm_ptr);
+    ) orelse return error.InternalError;
+    const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
 
     defer main.destroyVm(vm_ptr);
-    const free_ptr = @intFromPtr(&TestRunner.free);
-    main.setExternFunc(vm_ptr, "sum", @intFromPtr(&TestRunner.sum), 2, free_ptr);
+    const free_ptr: *const anyopaque = @ptrCast(&TestRunner.free);
+    main.setExternFunc(vm_ptr, "sum", @ptrCast(&TestRunner.sum), 2, free_ptr);
 
     const list_name = "list";
     _ = main.subscribe(vm_ptr, list_name);

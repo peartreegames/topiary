@@ -73,12 +73,12 @@ pub const ExportFunction = struct {
         };
     }
 
-    pub fn destroy(int_ptr: usize, allocator: std.mem.Allocator) void {
-        allocator.destroy(@as(*ExportFunction, @ptrFromInt(int_ptr)));
+    pub fn destroy(int_ptr: *anyopaque, allocator: std.mem.Allocator) void {
+        allocator.destroy(@as(*ExportFunction, @ptrCast(@alignCast(int_ptr))));
     }
 
-    pub fn call(context_ptr: usize, args: []Value) Value {
-        var self: *ExportFunction = @ptrFromInt(context_ptr);
+    pub fn call(context_ptr: *anyopaque, args: []Value) Value {
+        var self: *ExportFunction = @ptrCast(@alignCast(context_ptr));
         var arena = std.heap.ArenaAllocator.init(self.vm.alloc);
         const arenaAlloc = arena.allocator();
         defer arena.deinit();

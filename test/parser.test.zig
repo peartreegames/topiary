@@ -35,11 +35,7 @@ pub fn parseSource(source: []const u8) !*Module {
     }, .err, .{"test"});
     mod.entry = file;
 
-    var buffer: [1024]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    const stderr = &writer.interface;
     file.buildTree() catch |err| {
-        try file.errors.write("N/A", source, stderr);
         return err;
     };
     return mod;
