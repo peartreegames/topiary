@@ -48,13 +48,11 @@ pub const Compiler = struct {
     constants: std.ArrayList(Value) = .empty,
     constants_map: std.StringHashMapUnmanaged(C.CONSTANT) = .empty,
     literal_cache: std.ArrayHashMapUnmanaged(Value, C.CONSTANT, Value.Adapter, true) = .empty,
-    uuids: std.ArrayList(UUID.ID) = .empty,
     err: *CompilerErrors,
     scope: *Scope,
     root_scope: *Scope,
     chunk: *Chunk,
     locals_count: usize = 0,
-    use_loc: bool = false,
 
     module: *Module,
     path_stack: std.ArrayList([]const u8) = .empty,
@@ -179,7 +177,6 @@ pub const Compiler = struct {
         self.constants.deinit(self.alloc);
         self.path_stack.deinit(self.alloc);
         self.anon_counters.deinit(self.alloc);
-        self.uuids.deinit(self.alloc);
     }
 
     fn fail(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype) Error {
@@ -202,25 +199,12 @@ pub const Compiler = struct {
                 .is_mutable = s.is_mutable,
             };
         }
-        var loc: std.ArrayList(u8) = .empty;
-        defer loc.deinit(self.alloc);
-        if (self.use_loc) {
-            var it = self.module.includes.iterator();
-            while (it.next()) |kvp| {
-                const file = kvp.value_ptr.*;
-                try file.loadLoc();
-                defer file.unloadLoc();
-                if (file.loc_loaded) try loc.appendSlice(self.alloc, file.loc);
-            }
-        }
         return .{
             .instructions = try self.chunk.instructions.toOwnedSlice(self.alloc),
             .debug_info = try self.chunk.debugInfo(self.alloc),
             .constants = try self.constants.toOwnedSlice(self.alloc),
             .global_symbols = global_symbols,
             .locals_count = self.locals_count,
-            .uuids = try self.uuids.toOwnedSlice(self.alloc),
-            .loc = try loc.toOwnedSlice(self.alloc),
         };
     }
 
@@ -286,7 +270,7 @@ pub const Compiler = struct {
                 defer self.alloc.free(full_name);
                 try self.addNamedConstant(full_name, .nil);
                 if (f.is_extern) {
-                    _ = try self.addConstant(.{ .obj = try self.compileExternFunctionObj(stmt)});
+                    _ = try self.addConstant(.{ .obj = try self.compileExternFunctionObj(stmt) });
                 }
             },
             .class => |c| {
@@ -390,7 +374,7 @@ pub const Compiler = struct {
             },
             .function => |f| {
                 if (self.scope.parent != null and f.is_extern)
-                   return self.failError("Only global functions can be extern.", token, .{}, Error.IllegalOperation);
+                    return self.failError("Only global functions can be extern.", token, .{}, Error.IllegalOperation);
                 const obj = try self.compileFunctionObj(stmt, token);
                 const full_name = try self.getQualifiedName(f.name);
                 defer self.alloc.free(full_name);
@@ -632,20 +616,28 @@ pub const Compiler = struct {
                 const anchor_idx = try self.resolveConstant(full_name) orelse return self.fail("Could not find anchor {s}", token, .{full_name});
                 self.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
 
-                if (self.use_loc) {
-                    const s = c.content.type.string;
-                    for (s.expressions) |*item| {
-                        try self.compileExpression(item);
-                    }
-                    try self.writeOp(.loc, token);
-                    try self.writeId(c.id, token);
-                    _ = try self.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
-                } else try self.compileExpression(&c.content);
+                const s = c.content.type.string;
+                for (s.expressions) |*item| {
+                    try self.compileExpression(item);
+                }
+
+                const obj = try self.alloc.create(Value.Obj);
+                obj.* = .{
+                    .id = c.id,
+                    .data = .{
+                        .string = try self.alloc.dupe(u8, c.content.type.string.value),
+                    },
+                };
+
+                const index = try self.addConstant(.{ .obj = obj });
+
+                try self.writeOp(.loc, token);
+                _ = try self.writeInt(C.CONSTANT, index, token);
+                _ = try self.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
 
                 try self.writeOp(.choice, token);
                 const start_pos = try self.writeInt(C.JUMP, CHOICE_HOLDER, token);
                 _ = try self.writeInt(u8, if (c.is_unique) 1 else 0, token);
-                try self.writeId(c.id, token);
 
                 _ = try self.writeInt(C.CONSTANT, anchor_idx, token);
                 _ = try self.writeInt(u8, @as(u8, @intCast(c.tags.len)), token);
@@ -696,15 +688,24 @@ pub const Compiler = struct {
                     try self.addIdentifierConstant(tag, token);
                 }
 
-                if (self.use_loc) {
-                    const s = d.content.type.string;
-                    for (s.expressions) |*item| {
-                        try self.compileExpression(item);
-                    }
-                    try self.writeOp(.loc, token);
-                    try self.writeId(d.id, token);
-                    _ = try self.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
-                } else try self.compileExpression(d.content);
+                const s = d.content.type.string;
+                for (s.expressions) |*item| {
+                    try self.compileExpression(item);
+                }
+
+                const obj = try self.alloc.create(Value.Obj);
+                obj.* = .{
+                    .id = d.id,
+                    .data = .{
+                        .string = try self.alloc.dupe(u8, s.value),
+                    },
+                };
+
+                const index = try self.addConstant(.{ .obj = obj });
+
+                try self.writeOp(.loc, token);
+                _ = try self.writeInt(C.CONSTANT, index, token);
+                _ = try self.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
 
                 if (d.speaker) |speaker| {
                     try self.addIdentifierConstant(speaker, token);
@@ -713,7 +714,6 @@ pub const Compiler = struct {
                 const has_speaker_value = if (d.speaker == null) @as(u8, 0) else @as(u8, 1);
                 _ = try self.writeInt(u8, has_speaker_value, token);
                 _ = try self.writeInt(u8, @as(u8, @intCast(d.tags.len)), token);
-                try self.writeId(d.id, token);
             },
             .divert => |d| {
                 const anchor_idx = self.resolveAnchor(d.path) orelse return self.fail("Could not find anchor {f}", token, .{fmt.array("{s}.", d.path)});
@@ -841,14 +841,10 @@ pub const Compiler = struct {
     fn compileExternFunctionObj(self: *Compiler, stmt: Statement) !*Value.Obj {
         const f = stmt.type.function;
         const obj = try self.alloc.create(Value.Obj);
-        obj.* = .{
-            .data = .{
-                .@"extern" = .{
-                    .name = f.name,
-                    .arity = @intCast(f.parameters.len),
-                }
-            }
-        };
+        obj.* = .{ .data = .{ .@"extern" = .{
+            .name = f.name,
+            .arity = @intCast(f.parameters.len),
+        } } };
         return obj;
     }
 
@@ -1347,11 +1343,6 @@ pub const Compiler = struct {
         return start;
     }
 
-    pub fn writeId(self: *Compiler, id: UUID.ID, token: Token) !void {
-        try self.uuids.append(self.alloc, id);
-        _ = try self.writeInt(C.CONSTANT, @as(C.CONSTANT, @intCast(self.uuids.items.len - 1)), token);
-    }
-
     pub fn replaceValue(self: *Compiler, pos: usize, comptime T: type, value: T) !void {
         var buf: [@sizeOf(T)]u8 = undefined;
         std.mem.writeInt(T, buf[0..], value, .little);
@@ -1428,9 +1419,7 @@ pub const Compiler = struct {
     fn addIdentifierConstant(self: *Compiler, name: []const u8, token: Token) !void {
         var i = self.constants_map.get(name);
         if (i == null) {
-            const obj = try self.alloc.create(Value.Obj);
-            obj.* = .{ .data = .{ .string = try self.alloc.dupe(u8, name) } };
-            i = try self.addConstant(.{ .obj = obj });
+            i = try self.addConstant(.{ .const_string = name });
             try self.constants_map.putNoClobber(self.alloc, try self.alloc.dupe(u8, name), i.?);
         }
 

@@ -23,7 +23,6 @@ const C = utils.C;
 const Stack = @import("stack.zig").Stack;
 const Gc = @import("gc.zig").Gc;
 const Frame = @import("frame.zig").Frame;
-const StateMap = @import("state.zig").StateMap;
 const builtins = @import("builtins.zig");
 
 const runners = @import("runner.zig");
@@ -31,6 +30,8 @@ const Runner = runners.Runner;
 const Line = runners.Line;
 const Choice = runners.Choice;
 const RuntimeErr = @import("error.zig").RuntimeErr;
+
+const LocaleProvider = @import("../locale.zig").LocaleProvider;
 
 const stack_size = 4096;
 const frame_size = 255;
@@ -77,12 +78,7 @@ pub const Vm = struct {
     is_waiting: bool = false,
     can_continue: bool = false,
 
-    /// The localization language key
-    /// eg. en-US, zh-CN, de, etc
-    loc_key: ?[]const u8 = null,
-
-    /// The currently loaded localization map
-    loc_map: std.AutoHashMapUnmanaged(UUID.ID, []const u8) = .empty,
+    loc_provider: ?*LocaleProvider = null,
 
     runner: *Runner,
 
@@ -138,61 +134,33 @@ pub const Vm = struct {
     pub fn deinit(self: *Vm) void {
         self.alloc.destroy(self.frames.backing[0].func);
         self.frames.deinit();
-        self.choices_list.deinit(self.alloc);
+        self.gc.deinit();
+
         self.stack.deinit();
         self.iterators.deinit();
+        self.choices_list.deinit(self.alloc);
         self.jump_backups.deinit(self.alloc);
         self.anchor_stack.deinit(self.alloc);
         self.jump_requests.deinit(self.alloc);
         self.notifiable_objects.deinit(self.alloc);
-        self.gc.deinit();
         self.value_subscribers.deinit(self.alloc);
         self.alloc.free(self.globals);
         if (!self.choices_freed) self.alloc.free(self.current_choices);
-        if (self.err.msg) |msg| {
-            self.alloc.free(msg);
-            self.err.msg = null;
-            self.err.file = null;
-        }
+        self.err.deinit(self.alloc);
     }
 
-    pub fn setLocale(self: *Vm, key: ?[]const u8) !void {
-        self.loc_key = key;
-        self.loc_map.clearRetainingCapacity();
-        if (key == null) return;
-        var fbs = std.Io.fixedBufferStream(self.bytecode.loc);
-        var reader = fbs.reader();
-        var line = std.ArrayList(u8).empty;
-        defer line.deinit(self.alloc);
-        const writer = line.writer(self.alloc);
-        try reader.streamUntilDelimiter(writer, '\n', null);
-        var headers = std.mem.splitSequence(u8, line.items, ",");
-        var index: usize = 0;
-        while (headers.next()) |header| : (index += 1) {
-            if (std.mem.eql(u8, key.?, std.mem.trim(u8, header, "\""))) break;
+    pub fn setLocale(self: *Vm, path: []const u8) !void {
+        if (self.loc_provider) |lp| {
+            if (std.mem.eql(u8, lp.path, path)) return;
         }
-        line.clearRetainingCapacity();
-        while (true) {
-            defer line.clearRetainingCapacity();
-            reader.streamUntilDelimiter(writer, '\n', null) catch break;
-            var i: usize = 0;
-            var c_start: usize = 0;
-            var count: usize = 0;
-            var in_value = false;
-            const id: UUID.ID = UUID.fromString(line.items[1..(UUID.Size + 1)]);
-            // Since lines can include ',' and '""' we'll parse out the cells manually
-            while (i < line.items.len) : (i += 1) {
-                const c = line.items[i];
-                const is_end = i == line.items.len - 1;
-                if (!is_end) {
-                    if (c == '"' and line.items[i + 1] != '"') in_value = !in_value;
-                    if (in_value) continue;
-                    if (c == ',') count += 1;
-                    if (count == index) c_start = i + 2;
-                    if (count <= index) continue;
-                }
-                try self.loc_map.put(self.alloc, id, try self.alloc.dupe(u8, line.items[c_start..i]));
-            }
+        self.removeLocale();
+        self.loc_provider = try LocaleProvider.load(self.alloc, path);
+    }
+
+    pub fn removeLocale(self: *Vm) void {
+        if (self.loc_provider) |lp| {
+            lp.deinit();
+            self.loc_provider = null;
         }
     }
 
@@ -311,7 +279,6 @@ pub const Vm = struct {
                 }
             } else {
                 self.err.msg = try std.fmt.allocPrint(self.alloc, "Could not find starting path {s}", .{path});
-                self.err.line = 1;
                 return Error.BoughNotFound;
             }
         }
@@ -319,16 +286,27 @@ pub const Vm = struct {
 
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {
         self.err.msg = try std.fmt.allocPrint(self.alloc, msg, args);
-        const ip = self.currentFrame().ip;
-        cont: for (self.currentFrame().func.data.function.debug_info) |d| {
-            for (d.ranges.items) |r| {
-                if (ip >= r.start and ip <= r.end) {
-                    self.err.line = r.line;
-                    self.err.file = d.file;
-                    break :cont;
+
+        var i: usize = self.frames.count - 1;
+        while (i > 0) : (i -= 1) {
+            const frame = &self.frames.items[i];
+            const ip = frame.ip;
+            const func_obj = frame.func;
+
+            var trace_entry = RuntimeErr.Trace{};
+            cont: for (func_obj.data.function.debug_info) |d| {
+                for (d.ranges.items) |r| {
+                    if (ip >= r.start and ip <= r.end) {
+                        trace_entry.line = r.line;
+                        trace_entry.file = d.file;
+                        break :cont;
+                    }
                 }
             }
+
+            try self.err.trace.append(self.alloc, trace_entry);
         }
+
         while (self.frames.count > 1) {
             _ = self.frames.pop();
         }
@@ -547,7 +525,7 @@ pub const Vm = struct {
                             try m.*.put(self.alloc, field_value, new_value);
                         },
                         .instance => |inst| {
-                            const field_name = field_value.obj.data.string;
+                            const field_name = field_value.asString() orelse return self.fail("Instance field name must be of type string but found '{s}'", .{field_value.typeName()});
                             if (inst.base.data.class.getFieldIndex(field_name)) |idx| {
                                 inst.fields[idx] = new_value;
                             } else {
@@ -585,11 +563,22 @@ pub const Vm = struct {
                 },
                 .string, .loc => {
                     const index = self.takeInt(C.CONSTANT);
-                    const str = if (op == .string) self.bytecode.constants[index].obj.*.data.string else self.loc_map.get(self.bytecode.uuids[index]) orelse return self.fail("Could not find localization id '{s}'", .{self.bytecode.uuids[index]});
-                    var count = self.takeInt(u8);
+                    const string_obj = self.bytecode.constants[index].obj;
+                    var str: []const u8 = string_obj.data.string;
 
+                    if (op == .loc) {
+                        if (!UUID.isEmpty(string_obj.id)) {
+                            if (self.loc_provider) |lp| {
+                                str = lp.map.get(string_obj.id) orelse str;
+                            }
+                        }
+                    }
+
+                    var count = self.takeInt(u8);
                     if (count == 0) {
-                        try self.push(.{ .const_string = str });
+                        if (op == .loc) {
+                            try self.push(self.bytecode.constants[index]);
+                        } else try self.push(.{ .const_string = str });
                         continue;
                     }
 
@@ -838,9 +827,9 @@ pub const Vm = struct {
                     var speaker: ?[]const u8 = null;
                     if (has_speaker) {
                         const speaker_value = try self.pop();
-                        if (speaker_value == .obj and speaker_value.obj.data != .string)
-                            return self.fail("Speaker must be of type string, but found '{s}'", .{speaker_value.typeName()});
-                        speaker = speaker_value.obj.data.string;
+                        const str = speaker_value.asString() orelse
+                            return self.fail("Speaker id must be of type string, but found '{s}'", .{speaker_value.typeName()});
+                        speaker = str;
                     }
 
                     const dialogue_value = try self.pop();
@@ -852,18 +841,16 @@ pub const Vm = struct {
                     var i: usize = 0;
                     while (i < tag_count) : (i += 1) {
                         const tag_value = try self.pop();
-                        if (tag_value != .obj and tag_value.obj.data != .string)
-                            return self.fail("Tag must be of type string, but found '{s}'", .{tag_value.typeName()});
-                        tags[tag_count - i - 1] = tag_value.obj.data.string;
+                        const str = tag_value.asString() orelse return self.fail("Tag must be of type string, but found '{s}'", .{tag_value.typeName()});
+                        tags[tag_count - i - 1] = str;
                     }
-                    const id_index = self.takeInt(C.CONSTANT);
                     if (is_in_jump) continue;
                     self.is_waiting = true;
                     self.runner.onLine(self, .{
                         .content = dialogue_str,
                         .speaker = speaker,
                         .tags = tags,
-                        .id = self.bytecode.uuids[id_index],
+                        .id = dialogue_value.obj.id,
                     });
                     return;
                 },
@@ -939,12 +926,10 @@ pub const Vm = struct {
                 .choice => {
                     const ip = self.takeInt(C.JUMP); // The skip-jump
                     const is_unique = self.takeInt(u8) == 1;
-                    const id_index = self.takeInt(C.CONSTANT);
 
                     const anchor_idx = self.takeInt(C.CONSTANT);
                     const anchor_val = self.bytecode.constants[anchor_idx];
                     const anchor = anchor_val.obj.data.anchor;
-
                     const visit_count = self.globals[anchor.visit_index].visit;
 
                     const content_value = try self.pop();
@@ -955,9 +940,9 @@ pub const Vm = struct {
                     var i: usize = 0;
                     while (i < tag_count) : (i += 1) {
                         const tag_value = try self.pop();
-                        if (tag_value != .obj and tag_value.obj.data != .string)
+                        const str = tag_value.asString() orelse
                             return self.fail("Tag must be of type string, but found '{s}'", .{tag_value.typeName()});
-                        tags[tag_count - i - 1] = tag_value.obj.data.string;
+                        tags[tag_count - i - 1] = str;
                     }
                     if (visit_count > 0 and is_unique) continue;
 
@@ -966,7 +951,7 @@ pub const Vm = struct {
                         .tags = tags,
                         .visit_count = visit_count,
                         .ip = ip,
-                        .id = self.bytecode.uuids[id_index],
+                        .id = content_value.obj.id,
                     });
                 },
                 .visit => {

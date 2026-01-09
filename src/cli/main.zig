@@ -47,7 +47,6 @@ fn usage(comptime msg: []const u8) !void {
     try print("   topi compile <file>           Compile dialogue to bytecode\n", .{});
     try print("       -d, --dry                 Do not write to file on end\n", .{});
     try print("       -o, --output <file>       Write to file on end\n", .{});
-    try print("       -l, --localize            Include localization in compiled bytecode\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi loc validate <file>      Validate dialogue localization ids\n", .{});
     try print("       -d, --dry                 Do not write to file on end\n", .{});
@@ -55,6 +54,11 @@ fn usage(comptime msg: []const u8) !void {
     try print("   topi loc export <file>        Export dialogue localization to csv\n", .{});
     try print("       -d, --dry                 Do not write to file on end\n", .{});
     try print("       -o, --output <file>       Write to file on end\n", .{});
+    try print("       -v, --verbose\n", .{});
+    try print("   topi loc bundle <file>        Export dialogue csv to topil files\n", .{});
+    try print("       -d, --dry                 Do not write to file on end\n", .{});
+    try print("       -f, --folder <folder>     Folder to output files\n", .{});
+    try print("       -k, --language-key        Bundle only a specific language key\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("\n", .{});
     if (!std.mem.eql(u8, msg, "")) {
@@ -69,7 +73,7 @@ const RunArgs = struct {
     auto: bool = false,
     file: ?[]const u8 = null,
     bough: ?[]const u8 = null,
-    language: ?[]const u8 = null,
+    language_key: ?[]const u8 = null,
     save: ?[]const u8 = null,
     load: ?[]const u8 = null,
     verbose: bool = false,
@@ -85,7 +89,7 @@ const RunArgs = struct {
             } else if (std.mem.eql(u8, arg, "-l") or std.mem.eql(u8, arg, "--load")) {
                 self.load = iter.next();
             } else if (std.mem.eql(u8, arg, "-k") or std.mem.eql(u8, arg, "--language-key")) {
-                self.language = iter.next();
+                self.language_key = iter.next();
             } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
                 self.verbose = true;
             } else self.file = arg;
@@ -98,7 +102,6 @@ const CompileArgs = struct {
     file: ?[]const u8 = null,
     output: ?[]const u8 = null,
     dry: bool = false,
-    loc: bool = false,
     verbose: bool = false,
 
     fn init(self: *CompileArgs, iter: *std.process.ArgIterator) !void {
@@ -107,8 +110,6 @@ const CompileArgs = struct {
                 self.output = iter.next();
             } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--dry")) {
                 self.dry = true;
-            } else if (std.mem.eql(u8, arg, "-l") or std.mem.eql(u8, arg, "--localize")) {
-                self.loc = true;
             } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
                 self.verbose = true;
             } else self.file = arg;
@@ -119,21 +120,25 @@ const CompileArgs = struct {
 
 const LocalizeArgs = struct {
     file: ?[]const u8 = null,
-    command: LocCommand = .@"export",
-    output: ?[]const u8 = null,
+    command: LocCommand = undefined,
+    folder: ?[]const u8 = null,
+    language_key: ?[]const u8 = null,
     dry: bool = false,
     verbose: bool = false,
     const LocCommand = enum {
         @"export",
         validate,
+        bundle,
     };
     fn init(self: *LocalizeArgs, iter: *std.process.ArgIterator) !void {
         const cmd = std.meta.stringToEnum(LocCommand, iter.next().?);
-        if (cmd == null) return usage("Missing export or validate command");
+        if (cmd == null) return usage("Missing 'export', 'validate', or 'bundle' command");
         self.command = cmd.?;
         while (iter.next()) |arg| {
-            if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
-                self.output = iter.next();
+            if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--folder")) {
+                self.folder = iter.next();
+            } else if (std.mem.eql(u8, arg, "-k") or std.mem.eql(u8, arg, "--language-key")) {
+                self.language_key = iter.next();
             } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--dry")) {
                 self.dry = true;
             } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
@@ -259,8 +264,11 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
         };
     }
 
-    try vm.start(args.bough);
-    try vm.setLocale(args.language);
+    const bough = args.bough orelse for (vm.bytecode.constants) |c| {
+        if (c == .obj and c.obj.data == .anchor) break c.obj.data.anchor.name;
+    } else null;
+    try vm.start(bough);
+    try vm.setLocale(args.language_key);
     while (vm.can_continue) {
         vm.run() catch {
             var buffer: [128]u8 = undefined;
@@ -277,7 +285,7 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
             try dir.makePath(dir_name);
         }
         var file = try dir.createFile(file_path, .{});
-        var buf : [128]u8 = undefined;
+        var buf: [128]u8 = undefined;
         var file_writer = file.writer(&buf);
         const writer = &file_writer.interface;
         defer file.close();
@@ -294,7 +302,6 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
         return if (args.verbose) err else {};
     };
     errdefer mod.deinit();
-    mod.use_loc = args.loc;
     var bytecode = mod.generateBytecode(alloc) catch |err| {
         try print("Could not generate bytecode", .{});
         return if (args.verbose) err else {};
@@ -371,6 +378,26 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
         return if (args.verbose) err else {};
     };
     switch (args.command) {
+        .bundle => {
+            const folder = args.folder orelse ".";
+            if (!args.dry) {
+                try std.fs.cwd().makePath(folder);
+            }
+            Locale.bundle(
+                alloc,
+                args.file.?,
+                folder,
+                args.language,
+                args.dry,
+            ) catch |err| {
+                try print("Error bundling localization: {}\n", .{err});
+                if (args.verbose) return err;
+                return;
+            };
+            if (args.dry) {
+                try print("Successfully bundled localilzation.", .{});
+            } else try print("Successfully bundled localization into {s}\n", .{folder});
+        },
         .@"export" => {
             if (args.dry) {
                 var buffer: [128]u8 = undefined;
@@ -388,7 +415,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                 const file = try dir.createFile(args.output.?, .{});
                 defer file.close();
 
-                var buffer: [128]u8 = undefined;
+                var buffer: [1028]u8 = undefined;
                 var file_writer = file.writer(&buffer);
                 const writer = &file_writer.interface;
                 Locale.exportFileAtPath(full_path, writer, alloc) catch |err| {

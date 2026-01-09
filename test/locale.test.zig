@@ -26,7 +26,7 @@ test "Localization Ids" {
     const update = try Locale.validateFile(file, std.testing.allocator);
     defer std.testing.allocator.free(update);
 }
-test "Update File Localization Ids" {
+test "Localization Id Updates" {
     const input =
         \\ const str = "testing"
         \\ var added = "one" + "two"
@@ -61,7 +61,7 @@ test "Update File Localization Ids" {
     try std.testing.expectEqual(606,(try file.stat()).size);
 }
 
-test "Export Localization CSV Tree" {
+test "Localization Export CSV Tree" {
     const input =
         \\ const num = 15
         \\ === START {

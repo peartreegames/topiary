@@ -1002,7 +1002,7 @@ test "Compile Classes" {
         for (case.constants, 0..) |constant, i| {
             switch (constant) {
                 .number => |n| try testing.expect(n == bytecode.constants[i + cl].number),
-                .string => |s| try testing.expectEqualStrings(s, bytecode.constants[i + cl].obj.data.string),
+                .string => |s| try testing.expectEqualStrings(s, bytecode.constants[i + cl].const_string),
                 .class => |c| try testing.expectEqualStrings(c, bytecode.constants[i + cl].obj.data.class.name),
             }
         }

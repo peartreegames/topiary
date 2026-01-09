@@ -174,12 +174,12 @@ pub export fn start(vm_ptr: *anyopaque, path_ptr: [*:0]const u8) callconv(.c) vo
 
 pub export fn run(vm_ptr: *anyopaque) callconv(.c) void {
     var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
-    vm.run() catch |err| {
+    vm.run() catch {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
-        runner.logger.log("Vm Error: {s}", .{@errorName(err)}, .err);
-        if (vm.err.msg) |msg| {
-            runner.logger.log("Error at line {}: {s}", .{ vm.err.line, msg }, .err);
-        }
+        var printer = std.Io.Writer.Allocating.init(alloc);
+        defer printer.deinit();
+        vm.err.print(&printer.writer);
+        runner.logger.log("{s}", .{printer.written()}, .err);
     };
 }
 

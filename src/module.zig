@@ -18,7 +18,6 @@ pub const Module = struct {
     arena: std.heap.ArenaAllocator,
     allocator: std.mem.Allocator,
     entry: *File,
-    use_loc: bool = false,
     includes: std.StringArrayHashMap(*File),
     allow_includes: bool = true,
 
@@ -55,7 +54,6 @@ pub const Module = struct {
         };
 
         var compiler = try Compiler.init(allocator, self);
-        compiler.use_loc = self.use_loc;
         defer compiler.deinit();
 
         compiler.compile() catch |e| {

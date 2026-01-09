@@ -87,6 +87,22 @@ That way we can have both lines localized appropriately.
 
 This will increase the localized word count,
 but with modern software like Translation Memory 
-and Repitition analysis,  it hopefully shouldn't be much of a problem.
+and Repitition analysis, it hopefully shouldn't be much of a problem.
 
 :::
+
+
+## Localization File Format (.topil)
+
+| Name         | Type   | Description                      |
+|--------------|--------|----------------------------------|
+| Entry Count  | u32    | Number of localized strings      |
+| Index Table  | Pair[] | UUID to Offset mapping           |
+| String Blob  | u8[]   | The actual UTF-8 string data     |
+
+### Pair
+| Name   | Type   | Description                    |
+|--------|--------|--------------------------------|
+| UUID   | u8[17] | The unique ID                  |
+| Offset | u32    | Byte offset in the String Blob |
+| Length | u32    | Length of the string in bytes  |
