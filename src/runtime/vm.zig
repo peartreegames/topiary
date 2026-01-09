@@ -154,12 +154,12 @@ pub const Vm = struct {
             if (std.mem.eql(u8, lp.path, path)) return;
         }
         self.removeLocale();
-        self.loc_provider = try LocaleProvider.load(self.alloc, path);
+        self.loc_provider = try LocaleProvider.init(self.alloc, path);
     }
 
     pub fn removeLocale(self: *Vm) void {
         if (self.loc_provider) |lp| {
-            lp.deinit();
+            lp.deinit(self.alloc);
             self.loc_provider = null;
         }
     }

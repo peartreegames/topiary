@@ -12,10 +12,9 @@ const Module = module.Module;
 const File = module.File;
 
 pub const LocaleProvider = struct {
-    alloc: std.mem.Allocator,
     path: []const u8,
     buffer: []u8,
-    map: std.AutoHashMap(UUID.ID, []const u8),
+    map: std.AutoHashMapUnmanaged(UUID.ID, []const u8),
 
     const IndexEntry = struct {
         id: UUID.ID,
@@ -23,7 +22,7 @@ pub const LocaleProvider = struct {
         length: u32,
     };
 
-    pub fn load(allocator: std.mem.Allocator, path: []const u8) !LocaleProvider {
+    pub fn init(allocator: std.mem.Allocator, path: []const u8) !*LocaleProvider {
         const file = try std.fs.cwd().openFile(path, .{});
         defer file.close();
 
@@ -35,7 +34,7 @@ pub const LocaleProvider = struct {
         var reader = fbs.reader();
 
         const count = try reader.readInt(C.CONSTANT, .little);
-        var map: std.AutoHashMap(UUID.ID, []const u8) = .empty;
+        var map: std.AutoHashMapUnmanaged(UUID.ID, []const u8) = .empty;
 
         const header_size = @sizeOf(C.CONSTANT);
         const table_size = count * @sizeOf(IndexEntry);
@@ -53,7 +52,6 @@ pub const LocaleProvider = struct {
 
         const lp = try allocator.create(LocaleProvider);
         lp.* = .{
-            .alloc = allocator,
             .path = try allocator.dupe(u8, path),
             .buffer = buffer,
             .map = map,
@@ -250,8 +248,8 @@ pub const Locale = struct {
         const header = lines_it.next() orelse return error.InvalidCsv;
 
         const LangMap = struct { key: []const u8, col: usize };
-        var lang_targets = std.ArrayList(LangMap).init(allocator);
-        defer lang_targets.deinit();
+        var lang_targets: std.ArrayList(LangMap) = .empty;
+        defer lang_targets.deinit(allocator);
 
         var header_it = std.mem.tokenizeAny(u8, header, ",");
         var col_idx: usize = 0;
@@ -262,15 +260,15 @@ pub const Locale = struct {
             // If a specific language was requested, skip others
             if (filter_lang) |f| if (!std.mem.eql(u8, key, f)) continue;
 
-            try lang_targets.append(.{ .key = key, .col = col_idx });
+            try lang_targets.append(allocator, .{ .key = key, .col = col_idx });
         }
 
         // 2. Generate a .topil file for each identified language
         for (lang_targets.items) |target| {
-            var entries = std.ArrayList(LocaleProvider.IndexEntry).init(allocator);
-            defer entries.deinit();
-            var strings = std.ArrayList(u8).init(allocator);
-            defer strings.deinit();
+            var entries: std.ArrayList(LocaleProvider.IndexEntry) = .empty;
+            defer entries.deinit(allocator);
+            var strings: std.ArrayList(u8) = .empty;
+            defer strings.deinit(allocator);
 
             lines_it = std.mem.tokenizeAny(u8, content, "\n\r");
             _ = lines_it.next(); // skip header
@@ -296,9 +294,9 @@ pub const Locale = struct {
                 if (id_str == null or target_val == null) continue;
 
                 const offset: u32 = @intCast(strings.items.len);
-                try strings.appendSlice(target_val.?);
+                try strings.appendSlice(allocator, target_val.?);
 
-                try entries.append(.{
+                try entries.append(allocator, .{
                     .id = UUID.fromString(id_str.?),
                     .offset = offset,
                     .length = @intCast(target_val.?.len),
@@ -309,9 +307,11 @@ pub const Locale = struct {
             const out_name = try std.fs.path.join(allocator, &.{ output_folder, try std.mem.concat(allocator, u8, &.{ target.key, ".topil" }) });
             defer allocator.free(out_name);
 
+            var buf: [1024]u8 = undefined;
             const out_file = try std.fs.cwd().createFile(out_name, .{});
             defer out_file.close();
-            var writer = out_file.writer();
+            var file_writer = out_file.writer(&buf);
+            var writer = &file_writer.interface;
 
             try writer.writeInt(C.CONSTANT, @intCast(entries.items.len), .little);
             for (entries.items) |entry| {

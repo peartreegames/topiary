@@ -35,30 +35,30 @@ fn usage(comptime msg: []const u8) !void {
     try print("Usage:\n", .{});
     try print("   topi version                  Print version\n", .{});
     try print("   topi run <file>               Run dialogue in terminal\n", .{});
-    try print("       -a, --auto                Automatically continue to the next line\n", .{});
-    try print("       -b, --bough <name>        Starting bough\n", .{});
-    try print("       -k, --language-key <key>  Localization language key\n", .{});
-    try print("       -l, --load <file>         Read save from file on start\n", .{});
-    try print("       -s, --save <file>         Write save to file on end\n", .{});
+    try print("       -a, --auto                    Automatically continue to the next line\n", .{});
+    try print("       -b, --bough <name>            Starting bough\n", .{});
+    try print("       -k, --locale-key-file <file>  Localization key file\n", .{});
+    try print("       -l, --load <file>             Read save from file on start\n", .{});
+    try print("       -s, --save <file>             Write save to file on end\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi test <file> <count>      Run dialogue <count> times, selecting random choices\n", .{});
-    try print("       -q, --quiet               Do not output visit tree on end\n", .{});
+    try print("       -q, --quiet                   Do not output visit tree on end\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi compile <file>           Compile dialogue to bytecode\n", .{});
-    try print("       -d, --dry                 Do not write to file on end\n", .{});
-    try print("       -o, --output <file>       Write to file on end\n", .{});
+    try print("       -d, --dry                     Do not write to file on end\n", .{});
+    try print("       -o, --output <file>           Write to file on end\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi loc validate <file>      Validate dialogue localization ids\n", .{});
-    try print("       -d, --dry                 Do not write to file on end\n", .{});
+    try print("       -d, --dry                     Do not write to file on end\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi loc export <file>        Export dialogue localization to csv\n", .{});
-    try print("       -d, --dry                 Do not write to file on end\n", .{});
-    try print("       -o, --output <file>       Write to file on end\n", .{});
+    try print("       -d, --dry                     Do not write to file on end\n", .{});
+    try print("       -o, --output <file>           Write to file on end\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi loc bundle <file>        Export dialogue csv to topil files\n", .{});
-    try print("       -d, --dry                 Do not write to file on end\n", .{});
-    try print("       -f, --folder <folder>     Folder to output files\n", .{});
-    try print("       -k, --language-key        Bundle only a specific language key\n", .{});
+    try print("       -d, --dry                     Do not write to file on end\n", .{});
+    try print("       -f, --folder <folder>         Folder to output files\n", .{});
+    try print("       -k, --locale-key              Bundle only a specific localization key\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("\n", .{});
     if (!std.mem.eql(u8, msg, "")) {
@@ -73,7 +73,7 @@ const RunArgs = struct {
     auto: bool = false,
     file: ?[]const u8 = null,
     bough: ?[]const u8 = null,
-    language_key: ?[]const u8 = null,
+    locale_file: ?[]const u8 = null,
     save: ?[]const u8 = null,
     load: ?[]const u8 = null,
     verbose: bool = false,
@@ -88,8 +88,8 @@ const RunArgs = struct {
                 self.save = iter.next();
             } else if (std.mem.eql(u8, arg, "-l") or std.mem.eql(u8, arg, "--load")) {
                 self.load = iter.next();
-            } else if (std.mem.eql(u8, arg, "-k") or std.mem.eql(u8, arg, "--language-key")) {
-                self.language_key = iter.next();
+            } else if (std.mem.eql(u8, arg, "-k") or std.mem.eql(u8, arg, "--locale-file")) {
+                self.locale_file = iter.next();
             } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
                 self.verbose = true;
             } else self.file = arg;
@@ -122,7 +122,8 @@ const LocalizeArgs = struct {
     file: ?[]const u8 = null,
     command: LocCommand = undefined,
     folder: ?[]const u8 = null,
-    language_key: ?[]const u8 = null,
+    locale_key: ?[]const u8 = null,
+    output: ?[]const u8 = null,
     dry: bool = false,
     verbose: bool = false,
     const LocCommand = enum {
@@ -135,10 +136,12 @@ const LocalizeArgs = struct {
         if (cmd == null) return usage("Missing 'export', 'validate', or 'bundle' command");
         self.command = cmd.?;
         while (iter.next()) |arg| {
-            if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--folder")) {
+            if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
+                self.output = iter.next();
+            } else if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--folder")) {
                 self.folder = iter.next();
-            } else if (std.mem.eql(u8, arg, "-k") or std.mem.eql(u8, arg, "--language-key")) {
-                self.language_key = iter.next();
+            } else if (std.mem.eql(u8, arg, "-k") or std.mem.eql(u8, arg, "--locale-key")) {
+                self.locale_key = iter.next();
             } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--dry")) {
                 self.dry = true;
             } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
@@ -268,7 +271,9 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
         if (c == .obj and c.obj.data == .anchor) break c.obj.data.anchor.name;
     } else null;
     try vm.start(bough);
-    try vm.setLocale(args.language_key);
+    if (args.locale_file) |file| {
+        try vm.setLocale(file);
+    }
     while (vm.can_continue) {
         vm.run() catch {
             var buffer: [128]u8 = undefined;
@@ -387,7 +392,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                 alloc,
                 args.file.?,
                 folder,
-                args.language,
+                args.locale_key,
                 args.dry,
             ) catch |err| {
                 try print("Error bundling localization: {}\n", .{err});
