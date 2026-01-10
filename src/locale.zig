@@ -256,9 +256,10 @@ pub const Locale = struct {
                 defer allocator.free(out_name);
                 const out_file = try std.fs.cwd().createFile(out_name, .{});
                 defer out_file.close();
-                var bw = std.io.bufferedWriter(out_file.writer());
-                try bundle(allocator, content, col_idx, bw.writer());
-                try bw.flush();
+                var file_buf: [1024]u8 = undefined;
+                var file_writer = out_file.writer(&file_buf);
+                const writer = &file_writer.interface;
+                try bundle(allocator, content, col_idx,  writer);
             }
         }
     }

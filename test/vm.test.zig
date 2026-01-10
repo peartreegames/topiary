@@ -153,8 +153,12 @@ test "Runtime Strings" {
         .{ .input = "\"test{123}\"", .value = "test123" },
         .{ .input = "\"{123}te{4 * 5}st{6 + 7}\"", .value = "123te20st13" },
         .{ .input = "\"test{\"test\"}ing", .value = "testtesting" },
-        .{ .input = "\"test{\"\"\"test\"\"\"}ing", .value = "test\"test\"ing" },
-        .{ .input = "\"test{\"quote\"\"test\"\"quote\"}ing", .value = "testquote\"test\"quoteing" },
+        .{ .input = "\"test{\"\\\"test\\\"\"}ing", .value = "test\"test\"ing" },
+        .{ .input = "\"test\\\"test\\\"ing", .value = "test\"test\"ing" },
+        .{ .input = "\"test\\\ting", .value = "test\ting" },
+        .{ .input = "\"test\\\ring", .value = "test\ring" },
+        .{ .input = "\"test\\{test\\}ing", .value = "test{test}ing" },
+        .{ .input = "\"test{\"quote\\\"test\\\"quote\"}ing", .value = "testquote\"test\"quoteing" },
         .{ .input = "var t = \"test\" t += \"ing\"", .value = "testing" },
         // .{ .input = "\"test\".has(\"tes\")", .value = true },
         // .{ .input = "\"test\".has(\"foo\")", .value = false },
@@ -767,7 +771,7 @@ test "Runtime Instance" {
         \\ assert(test.value == 5, "test.value == 5")
         \\ test.value += 1
         \\ assert(test.value == 6, "test.value == 6")
-        \\ assert(test.func() == "func", "test.func() == ""func""")
+        \\ assert(test.func() == "func", "test.func() == \"func\"")
         \\ test.incr(1)
         \\ assert(test.value == 7, "test.value == 7")
         \\ test.list.add(1)

@@ -1057,15 +1057,31 @@ pub const Compiler = struct {
                 for (s.expressions) |*item| {
                     try self.compileExpression(item);
                 }
-                const obj = try self.alloc.create(Value.Obj);
-                // remove secondary escape double quotes
+
                 var value = try std.ArrayList(u8).initCapacity(self.alloc, s.value.len);
-                defer value.deinit(self.alloc);
+                errdefer value.deinit(self.alloc);
                 var i: usize = 0;
-                while (i < s.value.len) : (i += 1) {
-                    if (s.value[i] == '"') i += 1;
-                    value.appendAssumeCapacity(s.value[i]);
+                while (i < s.value.len) {
+                    if (s.value[i] == '\\' and i + 1 < s.value.len) {
+                        i += 1; // skip escape
+                        const escaped = switch (s.value[i]) {
+                            'n' => '\n',
+                            't' => '\t',
+                            'r' => '\r',
+                            '\\' => '\\',
+                            '"' => '"',
+                            '{' => '{',
+                            '}' => '}',
+                            else => s.value[i],
+                        };
+                        value.appendAssumeCapacity(escaped);
+                    } else {
+                        value.appendAssumeCapacity(s.value[i]);
+                    }
+                    i += 1;
                 }
+
+                const obj = try self.alloc.create(Value.Obj);
                 obj.* = .{ .data = .{ .string = try value.toOwnedSlice(self.alloc) } };
                 const index = try self.addConstant(.{ .obj = obj });
                 try self.writeOp(.string, token);

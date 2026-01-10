@@ -539,7 +539,16 @@ pub const Parser = struct {
         var exprs = std.ArrayList(Expression).empty;
         var expr_index: usize = 0;
         errdefer exprs.deinit(self.allocator);
-        for (self.file.source[token.start..token.end], 0..) |char, i| {
+        var i: usize = 0;
+
+        const str_source = self.file.source[token.start..token.end];
+        while (i < str_source.len) : (i += 1) {
+            const char = str_source[i];
+            if (char == '\\') {
+                i += 1;
+                continue;
+            }
+
             if (char == '{') {
                 if (depth == 0) {
                     value = try std.fmt.allocPrint(self.allocator, "{s}{s}{{{d}}}", .{ value, self.file.source[start..(token.start + i)], expr_index });

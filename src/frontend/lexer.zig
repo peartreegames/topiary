@@ -199,11 +199,13 @@ pub const Lexer = struct {
         while (true) {
             // multi line strings not supported
             if (self.char == '\n' or self.char == 0) break;
-            // two double quotes '""' become single double quotes
-            if (self.char == '"' and self.peekChar() != '"' and count == 0) break;
-            if (self.char == '"' and self.peekChar() == '"') {
-                self.readChar();
+            if (self.char == '\\') {
+                self.readChar(); // consume '\'
+                self.readChar(); // consume the escaped character
+                continue;
             }
+
+            if (self.char == '"' and count == 0) break;
             if (self.char == '}' or self.char == '{') {
                 is_string = !is_string;
                 if (!is_string) {

@@ -151,10 +151,16 @@ pub const Vm = struct {
 
     pub fn setLocale(self: *Vm, path: []const u8) !void {
         if (self.loc_provider) |lp| {
-            if (std.mem.eql(u8, lp.path, path)) return;
+            if (std.mem.eql(u8, lp.key, path)) return;
         }
+        const file = try std.fs.cwd().openFile(path, .{});
+        defer file.close();
+
+        const size = (try file.stat()).size;
+        const buffer = try self.alloc.alloc(u8, size);
+        _ = try file.readAll(buffer);
         self.removeLocale();
-        self.loc_provider = try LocaleProvider.init(self.alloc, path);
+        self.loc_provider = try LocaleProvider.init(self.alloc, path, buffer);
     }
 
     pub fn removeLocale(self: *Vm) void {
@@ -735,7 +741,7 @@ pub const Vm = struct {
                                         try self.push(target);
                                     } else if (std.mem.eql(u8, name, "count")) {
                                         try self.push(.{ .number = @as(f32, @floatFromInt(o.data.string.len)) });
-                                    } else return self.fail("Unknown method '{s}' on string. Only \"count\", \"has\" are allowed.", .{index.obj.data.string});
+                                    } else return self.fail("Unknown method '{s}' on string. Only 'count', 'has' are allowed.", .{index.obj.data.string});
                                 }
                             },
                             .list => |l| {
@@ -743,7 +749,7 @@ pub const Vm = struct {
                                     if (builtins.methods.get(name)) |method_value| {
                                         try self.push(method_value);
                                         try self.push(target);
-                                    } else return self.fail("Unknown method '{s}' on list. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
+                                    } else return self.fail("Unknown method '{s}' on list. Only 'count', 'add', 'remove', 'has', or 'clear' are allowed.", .{index.obj.data.string});
                                 } else if (index == .number) {
                                     const i = @as(u32, @intFromFloat(index.number));
                                     if (i < 0 or i >= l.items.len) {
@@ -761,12 +767,12 @@ pub const Vm = struct {
                                     } else if (builtins.methods.get(name)) |method_value| {
                                         try self.push(method_value);
                                         try self.push(target);
-                                    } else return self.fail("Unknown method '{s}' on map. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
+                                    } else return self.fail("Unknown method '{s}' on map. Only 'count', 'add', 'remove', 'has', or 'clear' are allowed.", .{index.obj.data.string});
                                 } else try self.push(Nil);
                             },
                             .set => {
                                 const name = index.asString() orelse return self.fail("Can only query set methods by string name, found '{s}'", .{index.typeName()});
-                                const method = builtins.methods.get(name) orelse return self.fail("Unknown method '{s}' on set. Only \"count\", \"add\", \"remove\", \"has\", or \"clear\" are allowed.", .{index.obj.data.string});
+                                const method = builtins.methods.get(name) orelse return self.fail("Unknown method '{s}' on set. Only 'count', 'add', 'remove', 'has', or 'clear' are allowed.", .{index.obj.data.string});
                                 try self.push(method);
                                 try self.push(target);
                             },
