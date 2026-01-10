@@ -19,7 +19,7 @@ const ExportString = export_runner.ExportString;
 const ExportLine = export_runner.ExportLine;
 const ExportChoice = export_runner.ExportChoice;
 
-var alloc = std.heap.c_allocator;
+var alloc = std.heap.smp_allocator;
 const Result = enum(u8) {
     ok = 0,
     allocation_failed = 1,
