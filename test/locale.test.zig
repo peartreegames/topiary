@@ -2,6 +2,9 @@ const std = @import("std");
 const parser_test = @import("parser.test.zig");
 const topi = @import("topi");
 const Locale = topi.locale.Locale;
+const LocaleProvider = topi.locale.LocaleProvider;
+const C = topi.utils.C;
+const UUID = topi.utils.UUID;
 
 test "Localization Ids" {
     const input =
@@ -58,8 +61,22 @@ test "Localization Id Updates" {
     try file.seekTo(0);
     try file.writeAll(validated);
 
-    try std.testing.expectEqual(606,(try file.stat()).size);
+    try std.testing.expectEqual(606, (try file.stat()).size);
 }
+
+const csv_output =
+    \\"id","speaker","raw","en"
+    \\"8R955KPX-2WI5R816","NONE","A person approaches.","A person approaches."
+    \\"C5I6VN71-IP0HPJHE","Stranger","Hey there.","Hey there."
+    \\"JTCCIIS7-NHTNWTBL","CHOICE","Greet them.","Greet them."
+    \\"8T8YW3LX-RNGWJE68","Drew","Oh, uh, nice to meet you. My name is Drew.","Oh, uh, nice to meet you. My name is Drew."
+    \\"8LIQ3QJV-5U3AJJKV","Drew","Sorry, I thought you were someone I knew.","Sorry, I thought you were someone I knew."
+    \\"YPTY00G5-1WX98ONH","Drew","I'd love to stay and chat, but this is just a short demo.","I'd love to stay and chat, but this is just a short demo."
+    \\"AEPZ4SNT-UFN9U9YW","CHOICE","Say nothing.","Say nothing."
+    \\"S6MF4G1X-34IOPNOJ","NONE","The person acts as though they were addressing someone else.","The person acts as though they were addressing someone else."
+    \\"KPTQNK2P-69OMTGXF","NONE","They walk away... Counting down from {num}","They walk away... Counting down from {0}"
+    \\
+;
 
 test "Localization Export CSV Tree" {
     const input =
@@ -88,18 +105,25 @@ test "Localization Export CSV Tree" {
     defer output.deinit();
     try Locale.exportFile(file, &output.writer);
 
-    const expected =
-        \\"id","speaker","raw","en"
-        \\"8R955KPX-2WI5R816","NONE","A person approaches.","A person approaches."
-        \\"C5I6VN71-IP0HPJHE","Stranger","Hey there.","Hey there."
-        \\"JTCCIIS7-NHTNWTBL","CHOICE","Greet them.","Greet them."
-        \\"8T8YW3LX-RNGWJE68","Drew","Oh, uh, nice to meet you. My name is Drew.","Oh, uh, nice to meet you. My name is Drew."
-        \\"8LIQ3QJV-5U3AJJKV","Drew","Sorry, I thought you were someone I knew.","Sorry, I thought you were someone I knew."
-        \\"YPTY00G5-1WX98ONH","Drew","I'd love to stay and chat, but this is just a short demo.","I'd love to stay and chat, but this is just a short demo."
-        \\"AEPZ4SNT-UFN9U9YW","CHOICE","Say nothing.","Say nothing."
-        \\"S6MF4G1X-34IOPNOJ","NONE","The person acts as though they were addressing someone else.","The person acts as though they were addressing someone else."
-        \\"KPTQNK2P-69OMTGXF","NONE","They walk away... Counting down from {num}","They walk away... Counting down from {0}"
-        \\
-        ;
-    try std.testing.expectEqualSlices(u8, expected, output.written());
+    try std.testing.expectEqualSlices(u8, csv_output, output.written());
+}
+
+test "Localization Bundle and Provider" {
+    const alloc = std.testing.allocator;
+    var allocating = std.Io.Writer.Allocating.init(alloc);
+    const writer = &allocating.writer;
+    defer allocating.deinit();
+
+    const ids = &[_][]const u8{ "8R955KPX-2WI5R816", "C5I6VN71-IP0HPJHE", "JTCCIIS7-NHTNWTBL", "8T8YW3LX-RNGWJE68", "8LIQ3QJV-5U3AJJKV", "YPTY00G5-1WX98ONH", "AEPZ4SNT-UFN9U9YW", "S6MF4G1X-34IOPNOJ", "KPTQNK2P-69OMTGXF", };
+    const texts = &[_][]const u8{ "A person approaches.", "Hey there.", "Greet them.", "Oh, uh, nice to meet you. My name is Drew.", "Sorry, I thought you were someone I knew.", "I'd love to stay and chat, but this is just a short demo.", "Say nothing.", "The person acts as though they were addressing someone else.", "They walk away... Counting down from {0}", };
+
+    try Locale.bundle(alloc, csv_output, 3, writer);
+    const written = try allocating.toOwnedSlice();
+
+    const lp = try LocaleProvider.init(alloc, "en", written);
+    defer lp.deinit(alloc);
+
+    for (ids, 0..) |id, i| {
+        try std.testing.expectEqualSlices(u8, lp.map.get(UUID.fromString(id)).?, texts[i]);
+    }
 }

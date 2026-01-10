@@ -388,7 +388,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
             if (!args.dry) {
                 try std.fs.cwd().makePath(folder);
             }
-            Locale.bundle(
+            Locale.bundleAtPath(
                 alloc,
                 args.file.?,
                 folder,
