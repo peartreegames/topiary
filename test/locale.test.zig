@@ -108,7 +108,7 @@ test "Localization Export CSV Tree" {
     try std.testing.expectEqualSlices(u8, csv_output, output.written());
 }
 
-test "Localization Bundle and Provider" {
+test "Localization Generate and Provider" {
     const alloc = std.testing.allocator;
     var allocating = std.Io.Writer.Allocating.init(alloc);
     const writer = &allocating.writer;
@@ -117,7 +117,7 @@ test "Localization Bundle and Provider" {
     const ids = &[_][]const u8{ "8R955KPX-2WI5R816", "C5I6VN71-IP0HPJHE", "JTCCIIS7-NHTNWTBL", "8T8YW3LX-RNGWJE68", "8LIQ3QJV-5U3AJJKV", "YPTY00G5-1WX98ONH", "AEPZ4SNT-UFN9U9YW", "S6MF4G1X-34IOPNOJ", "KPTQNK2P-69OMTGXF", };
     const texts = &[_][]const u8{ "A person approaches.", "Hey there.", "Greet them.", "Oh, uh, nice to meet you. My name is Drew.", "Sorry, I thought you were someone I knew.", "I'd love to stay and chat, but this is just a short demo.", "Say nothing.", "The person acts as though they were addressing someone else.", "They walk away... Counting down from {0}", };
 
-    try Locale.bundle(alloc, csv_output, 3, writer);
+    try Locale.generate(alloc, csv_output, 3, writer);
     const written = try allocating.toOwnedSlice();
 
     const lp = try LocaleProvider.init(alloc, "en", written);

@@ -228,7 +228,7 @@ pub const Locale = struct {
         }
     }
 
-    pub fn bundleAtPath(
+    pub fn generateAtPath(
         allocator: std.mem.Allocator,
         csv_path: []const u8,
         output_folder: []const u8,
@@ -236,6 +236,7 @@ pub const Locale = struct {
         dry: bool,
     ) !void {
         const file = try std.fs.cwd().openFile(csv_path, .{});
+        const file_name = std.mem.trimEnd(u8, std.fs.path.basename(csv_path), ".topi.csv");
         defer file.close();
 
         const content = try file.readToEndAlloc(allocator, std.math.maxInt(u32));
@@ -252,19 +253,19 @@ pub const Locale = struct {
             if (filter_lang) |f| if (!std.mem.eql(u8, key, f)) continue;
 
             if (!dry) {
-                const out_name = try std.fmt.allocPrint(allocator, "{s}/{s}.topil", .{ output_folder, key });
+                const out_name = try std.fmt.allocPrint(allocator, "{s}/{s}.{s}.topil", .{ output_folder, file_name, key });
                 defer allocator.free(out_name);
                 const out_file = try std.fs.cwd().createFile(out_name, .{});
                 defer out_file.close();
                 var file_buf: [1024]u8 = undefined;
                 var file_writer = out_file.writer(&file_buf);
                 const writer = &file_writer.interface;
-                try bundle(allocator, content, col_idx,  writer);
+                try generate(allocator, content, col_idx,  writer);
             }
         }
     }
 
-    pub fn bundle(allocator: std.mem.Allocator, content: []const u8, lang_col: usize, writer: *std.Io.Writer) !void {
+    pub fn generate(allocator: std.mem.Allocator, content: []const u8, lang_col: usize, writer: *std.Io.Writer) !void {
         var lines_it = std.mem.tokenizeAny(u8, content, "\n\r");
         _ = lines_it.next(); // skip header
 

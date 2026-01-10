@@ -582,9 +582,7 @@ pub const Vm = struct {
 
                     var count = self.takeInt(u8);
                     if (count == 0) {
-                        if (op == .loc) {
-                            try self.push(self.bytecode.constants[index]);
-                        } else try self.push(.{ .const_string = str });
+                        try self.push(.{ .const_string = str });
                         continue;
                     }
 
@@ -856,7 +854,6 @@ pub const Vm = struct {
                         .content = dialogue_str,
                         .speaker = speaker,
                         .tags = tags,
-                        .id = dialogue_value.obj.id,
                     });
                     return;
                 },
@@ -957,7 +954,6 @@ pub const Vm = struct {
                         .tags = tags,
                         .visit_count = visit_count,
                         .ip = ip,
-                        .id = content_value.obj.id,
                     });
                 },
                 .visit => {

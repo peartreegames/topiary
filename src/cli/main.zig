@@ -25,7 +25,7 @@ const AutoTestRunner = runner.AutoTestRunner;
 const Command = enum {
     run,
     compile,
-    localize,
+    loc,
     @"test",
     version,
 };
@@ -55,10 +55,10 @@ fn usage(comptime msg: []const u8) !void {
     try print("       -d, --dry                     Do not write to file on end\n", .{});
     try print("       -o, --output <file>           Write to file on end\n", .{});
     try print("       -v, --verbose\n", .{});
-    try print("   topi loc bundle <file>        Export dialogue csv to topil files\n", .{});
+    try print("   topi loc generate <file>      Export dialogue csv to topil files\n", .{});
     try print("       -d, --dry                     Do not write to file on end\n", .{});
     try print("       -f, --folder <folder>         Folder to output files\n", .{});
-    try print("       -k, --locale-key              Bundle only a specific localization key\n", .{});
+    try print("       -k, --locale-key              Generate only a specific localization key\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("\n", .{});
     if (!std.mem.eql(u8, msg, "")) {
@@ -73,7 +73,7 @@ const RunArgs = struct {
     auto: bool = false,
     file: ?[]const u8 = null,
     bough: ?[]const u8 = null,
-    locale_file: ?[]const u8 = null,
+    locale_key_file: ?[]const u8 = null,
     save: ?[]const u8 = null,
     load: ?[]const u8 = null,
     verbose: bool = false,
@@ -88,8 +88,8 @@ const RunArgs = struct {
                 self.save = iter.next();
             } else if (std.mem.eql(u8, arg, "-l") or std.mem.eql(u8, arg, "--load")) {
                 self.load = iter.next();
-            } else if (std.mem.eql(u8, arg, "-k") or std.mem.eql(u8, arg, "--locale-file")) {
-                self.locale_file = iter.next();
+            } else if (std.mem.eql(u8, arg, "-k") or std.mem.eql(u8, arg, "--locale-key-file")) {
+                self.locale_key_file = iter.next();
             } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
                 self.verbose = true;
             } else self.file = arg;
@@ -129,11 +129,11 @@ const LocalizeArgs = struct {
     const LocCommand = enum {
         @"export",
         validate,
-        bundle,
+        generate,
     };
     fn init(self: *LocalizeArgs, iter: *std.process.ArgIterator) !void {
         const cmd = std.meta.stringToEnum(LocCommand, iter.next().?);
-        if (cmd == null) return usage("Missing 'export', 'validate', or 'bundle' command");
+        if (cmd == null) return usage("Missing 'export', 'validate', or 'generate' command");
         self.command = cmd.?;
         while (iter.next()) |arg| {
             if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
@@ -217,7 +217,7 @@ pub fn main() !void {
             };
             try testCommand(args, arena.allocator());
         },
-        .localize => {
+        .loc => {
             var args = LocalizeArgs{};
             args.init(&iter) catch |err| {
                 return if (args.verbose) err else {};
@@ -271,7 +271,7 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
         if (c == .obj and c.obj.data == .anchor) break c.obj.data.anchor.name;
     } else null;
     try vm.start(bough);
-    if (args.locale_file) |file| {
+    if (args.locale_key_file) |file| {
         try vm.setLocale(file);
     }
     while (vm.can_continue) {
@@ -383,12 +383,12 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
         return if (args.verbose) err else {};
     };
     switch (args.command) {
-        .bundle => {
+        .generate => {
             const folder = args.folder orelse ".";
             if (!args.dry) {
                 try std.fs.cwd().makePath(folder);
             }
-            Locale.bundleAtPath(
+            Locale.generateAtPath(
                 alloc,
                 args.file.?,
                 folder,
@@ -400,8 +400,8 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                 return;
             };
             if (args.dry) {
-                try print("Successfully bundled localilzation.", .{});
-            } else try print("Successfully bundled localization into {s}\n", .{folder});
+                try print("Successfully generated localilzation.", .{});
+            } else try print("Successfully generated localization into {s}\n", .{folder});
         },
         .@"export" => {
             if (args.dry) {

@@ -1,12 +1,10 @@
 const Vm = @import("vm.zig").Vm;
-const ID = @import("../utils/index.zig").UUID.ID;
 const Value = @import("../types/index.zig").Value;
 
 pub const Line = struct {
     speaker: ?[]const u8,
     content: []const u8,
     tags: [][]const u8,
-    id: ID,
 };
 
 pub const Choice = struct {
@@ -14,7 +12,6 @@ pub const Choice = struct {
     tags: [][]const u8,
     visit_count: u32,
     ip: u32,
-    id: ID,
 };
 
 pub const Runner = struct {

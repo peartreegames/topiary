@@ -6,11 +6,11 @@ Localization is very experimental, even moreso than the rest of topiary
 
 :::
 
-There are four steps to adding localization to topiary. Validate - Export - Compile - Run
+There are five steps to adding localization to topiary. Validate - Export - Compile - Generate - Run
 
 ## Validation
 
-Each piece dialogue line and choice can automatically be given an ID which will be
+Each dialogue line and choice can automatically be given an ID which will be
 appended to the string content with an `@` by using the [cli](./cli.md) `loc validate` command.
 
 eg. `:Speaker: "Dialogue line content"@12345678-ABCDEFGH`
@@ -18,45 +18,35 @@ eg. `:Speaker: "Dialogue line content"@12345678-ABCDEFGH`
 ## Export
 
 Once a file has been updated with all necessary IDs a CSV file can be exported.
-Currently the name and path of the CSV *MUST* be the same of the tile with `.csv` appended.
+Currently, the name and path of the CSV *MUST* be the same of the tile with `.csv` appended.
 
 eg. `hello.topi` > `hello.topi.csv`
 
-Once the file is exported add the rest of the languages by adding a new column.
+Once the file is exported, add the rest of the languages by adding a new column.
 Each row will have the ID, the Speaker (or `CHOICE`), the raw text from topi, and the base language value.
 
-## Compile
+## Generate
 
-When compiling pass in the `--loc` flag to specify localization is being used.
-This will append all the CSV files used for the module at the end of the bytecode.
+Once the CSV is filled out you can then generate individual `.topil` files for each language. 
+(See below for file format)
 
-:::note
-
-This can obviously duplicate a lot of lines and data.
-Another option would be to let the client handle keeping track of and
-collating the CSVs for the module, and providing them to the VM.
-
-However since we only load each Dialogue as needed we're mostly using
-disk space and not much memory.
-
-:::
+`topi loc generate ./examples/locale/hello.topi.csv --folder ./examples/locale/`
 
 ## Run
 
-When running topiary pass in the `--lang language-key` flag
+When running topiary with the cli, pass in the `--locale-key-file <path>` flag
 
-eg `topi run ./examples/locale/locale.topi --lang fr`
-
+eg `topi run -a ./examples/locale/locale.topi --locale-key-file ./examples/locale/locale.fr_FR.topil`
 
 ## Tips
 
 When writing with localization in mind you have to remember that
 languages don't work the same. Before going further if you're
-new to localization (as I still am), I recommend reading this fantastic article by 
+new to localization (as I still am), I recommend reading this fantastic article by
 [multilingual.com](https://multilingual.com/articles/improving-translation-of-variables-in-interactive-games/).
 
-Instead of encoding language pieces into string variables, Topiary opts for the
-simplest most direct way, it doesn't localize strings, only dialogue Lines and Choices.
+Instead of encoding language pieces into string variables, Topiary opts for the 
+simplest, most direct way; it doesn't localize strings, only dialogue Lines and Choices.
 Full lines need to be rewritten instead of interpolating strings within strings.
 
 ```topi
@@ -86,23 +76,23 @@ That way we can have both lines localized appropriately.
 ::: Note
 
 This will increase the localized word count,
-but with modern software like Translation Memory 
-and Repitition analysis, it hopefully shouldn't be much of a problem.
+but with modern software like translation memory
+and repetition analysis, it hopefully shouldn't be much of a problem.
 
 :::
 
+## File Format (.topil)
 
-## Localization File Format (.topil)
+| Name        | Type    | Description    |
+|-------------|---------|----------------|
+| Entry Count | u32     | Count          |
+| Index Table | Entry[] | Entry Mappings |
+| Blob        | u8[]    | String data    |
 
-| Name         | Type   | Description                      |
-|--------------|--------|----------------------------------|
-| Entry Count  | u32    | Number of localized strings      |
-| Index Table  | Pair[] | UUID to Offset mapping           |
-| String Blob  | u8[]   | The actual UTF-8 string data     |
+### Entry
 
-### Pair
-| Name   | Type   | Description                    |
-|--------|--------|--------------------------------|
-| UUID   | u8[17] | The unique ID                  |
-| Offset | u32    | Byte offset in the String Blob |
-| Length | u32    | Length of the string in bytes  |
+| Name   | Type   | Description   |
+|--------|--------|---------------|
+| UUID   | u8[17] | ID            |
+| Offset | u32    | Blob Offset   |
+| Length | u32    | String Length |
