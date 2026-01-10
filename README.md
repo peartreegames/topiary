@@ -69,7 +69,7 @@ and [LoLa](https://github.com/MasterQ32/LoLa/tree/master) both of which are cred
 
 ## Contributing
 
-Download and install [Zig](https://ziglang.org). Currently Topiary uses version `0.13.0`
+Download and install [Zig](https://ziglang.org). Currently Topiary uses version `0.15.2`
 
 ```
 git clone https://github.com/peartreegames/topiary
