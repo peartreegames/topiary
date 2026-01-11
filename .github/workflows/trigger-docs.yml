@@ -18,6 +18,6 @@ jobs:
             await github.rest.actions.createWorkflowDispatch({
               owner: 'peartreegames',
               repo: 'website',
-              workflow_id: '.github/workflows/main.yml',
+              workflow_id: 'update-docs.yml',
               ref: 'main'
             })
