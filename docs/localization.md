@@ -18,9 +18,9 @@ eg. `:Speaker: "Dialogue line content"@12345678-ABCDEFGH`
 ## Export
 
 Once a file has been updated with all necessary IDs a CSV file can be exported.
-Currently, the name and path of the CSV *MUST* be the same of the tile with `.csv` appended.
+The CLI `loc export` command allows you to specify any output path, though keeping it relative to your source is recommended.
 
-eg. `hello.topi` > `hello.topi.csv`
+eg. `topi loc export hello.topi -o hello.topi.csv`
 
 Once the file is exported, add the rest of the languages by adding a new column.
 Each row will have the ID, the Speaker (or `CHOICE`), the raw text from topi, and the base language value.
@@ -36,7 +36,7 @@ Once the CSV is filled out you can then generate individual `.topil` files for e
 
 When running topiary with the cli, pass in the `--locale-key-file <path>` flag
 
-eg `topi run -a ./examples/locale/locale.topi --locale-key-file ./examples/locale/locale.fr_FR.topil`
+eg `topi run ./examples/locale/hello.topi --locale-key-file ./examples/locale/hello.fr_FR.topil`
 
 ## Tips
 

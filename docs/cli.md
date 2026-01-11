@@ -9,23 +9,33 @@ To run the CLI:
 ```shell
 topi - command line topiary processor
 Usage:
-        topi <command> <file> [flags]
-
-Commands:
-        topi version
-        topi run <file> [start_bough] [--auto|-a] [--lang language_key] [--verbose]
-        topi test <file> <count> [--quiet] [--verbose]
-        topi compile <file> <output_file|--dry|-d> [--loc] [--verbose] 
-        topi loc validate <file> [--verbose]
-        topi loc export <file> <output_file|--dry|-d> [--verbose]
-
-Flags:
-        --verbose: Output debug logs
-        --auto, -a: Automatically continue to next line
-        --lang: Localization language key
-        --loc: Include localization in compiled bytecode
-        --dry, -d: Compile only without output file
-        --quiet: Do not output results
+   topi version                  Print version
+   topi run <file>               Run dialogue in terminal
+       -a, --auto                    Automatically continue to the next line
+       -b, --bough <name>            Starting bough
+       -k, --locale-key-file <file>  Localization key file
+       -l, --load <file>             Read save from file on start
+       -s, --save <file>             Write save to file on end
+       -v, --verbose
+   topi test <file> <count>      Run dialogue <count> times, selecting random choices
+       -q, --quiet                   Do not output visit tree on end
+       -v, --verbose
+   topi compile <file>           Compile dialogue to bytecode
+       -d, --dry                     Do not write to file on end
+       -o, --output <file>           Write to file on end
+       -v, --verbose
+   topi loc validate <file>      Validate dialogue localization ids
+       -d, --dry                     Do not write to file on end
+       -v, --verbose
+   topi loc export <file>        Export dialogue localization to csv
+       -d, --dry                     Do not write to file on end
+       -o, --output <file>           Write to file on end
+       -v, --verbose
+   topi loc generate <file>      Export dialogue csv to topil files
+       -d, --dry                     Do not write to file on end
+       -f, --folder <folder>         Folder to output files
+       -k, --locale-key              Generate only a specific localization key
+       -v, --verbose
 ```
 
 While running a topi file you can press `enter` for the next line, and select a choice with `0-9` then `enter`
