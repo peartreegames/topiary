@@ -1743,6 +1743,7 @@ test "Runtime Save and Load State" {
 test "Runtime Includes" {
     const main_contents =
         \\ include "./test1.topi"
+        \\ include "./test2.topi" // will be skipped in compilation, but good to do
         \\ var m = Test.Main
         \\ assert(m == Test.Main, "m == Test.Main")
         \\ assert(t1 == Test.One, "t1 == Test.One")

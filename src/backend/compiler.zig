@@ -12,7 +12,9 @@ const fmt = utils.fmt;
 
 const builtins = @import("../runtime/index.zig").builtins;
 
-const Module = @import("../module.zig").Module;
+const mod = @import("../module.zig");
+const Module = mod.Module;
+const File = mod.File;
 
 const types = @import("../types/index.zig");
 const Value = types.Value;
@@ -48,13 +50,14 @@ pub const Compiler = struct {
     constants: std.ArrayList(Value) = .empty,
     constants_map: std.StringHashMapUnmanaged(C.CONSTANT) = .empty,
     literal_cache: std.ArrayHashMapUnmanaged(Value, C.CONSTANT, Value.Adapter, true) = .empty,
-    err: *CompilerErrors,
     scope: *Scope,
     root_scope: *Scope,
     chunk: *Chunk,
     locals_count: usize = 0,
 
     module: *Module,
+    current_file: *File,
+    emitted_files: std.StringArrayHashMapUnmanaged(void) = .empty,
     path_stack: std.ArrayList([]const u8) = .empty,
     anon_counters: std.ArrayList(usize) = .empty,
 
@@ -133,6 +136,7 @@ pub const Compiler = struct {
     pub const Error = error{
         ParserError,
         CompilerError,
+        NotInitialized,
         IllegalOperation,
         OutOfScope,
         NoSpaceLeft,
@@ -144,7 +148,7 @@ pub const Compiler = struct {
     };
 
     pub fn init(alloc: std.mem.Allocator, module: *Module) !Compiler {
-        if (!module.entry.tree_loaded) return error.CompilerError;
+        if (module.entry.tree == null) return error.CompilerError;
         const root_chunk = try Compiler.Chunk.init(alloc, null, module);
         const root_scope = try Scope.create(alloc, null, .global);
         return .{
@@ -152,8 +156,8 @@ pub const Compiler = struct {
             .chunk = root_chunk,
             .scope = root_scope,
             .root_scope = root_scope,
-            .err = &module.entry.errors,
             .module = module,
+            .current_file = module.entry,
         };
     }
 
@@ -171,7 +175,7 @@ pub const Compiler = struct {
         while (iter.next()) |name| {
             self.alloc.free(name.*);
         }
-
+        self.emitted_files.deinit(self.alloc);
         self.constants_map.deinit(self.alloc);
         self.literal_cache.deinit(self.alloc);
         self.constants.deinit(self.alloc);
@@ -180,12 +184,12 @@ pub const Compiler = struct {
     }
 
     fn fail(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype) Error {
-        try self.err.add(msg, token, .err, args);
+        try self.module.errors.add(self.current_file.path, msg, token, .err, args);
         return Error.CompilerError;
     }
 
     fn failError(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype, err: Error) Error {
-        try self.err.add(msg, token, .err, args);
+        try self.module.errors.add(self.current_file.path, msg, token, .err, args);
         return err;
     }
 
@@ -209,7 +213,7 @@ pub const Compiler = struct {
     }
 
     pub fn compile(self: *Compiler) Error!void {
-        const tree = self.module.entry.tree;
+        const tree = self.module.entry.tree orelse return Error.IllegalOperation;
         for (builtins.keys()) |name| {
             const obj = try self.alloc.create(Value.Obj);
             obj.* = .{ .data = builtins.get(name).?.obj.data };
@@ -218,6 +222,7 @@ pub const Compiler = struct {
         for (tree.root) |stmt| {
             try self.prepass(stmt);
         }
+        self.emitted_files.clearRetainingCapacity();
 
         for (tree.root) |stmt| {
             try self.compileStatement(stmt);
@@ -256,14 +261,18 @@ pub const Compiler = struct {
     fn prepass(self: *Compiler, stmt: Statement) Error!void {
         switch (stmt.type) {
             .include => |i| {
-                const tmp = self.err;
-                if (self.module.includes.get(i.path)) |file| {
-                    self.err = &file.errors;
-                } else {
-                    return self.fail("Unknown include file {s}", stmt.token, .{i.path});
-                }
-                for (i.contents) |s| try self.prepass(s);
-                self.err = tmp;
+                const tmp = self.current_file;
+                defer self.current_file = tmp;
+
+                const file = self.module.includes.get(i) orelse
+                    return self.fail("Unknown include file {s}", stmt.token, .{i});
+
+                if (self.emitted_files.contains(i)) return;
+                try self.emitted_files.put(self.alloc, i, {});
+
+                self.current_file = file;
+                const tree = file.tree orelse return Error.NotInitialized;
+                for (tree.root) |s| try self.prepass(s);
             },
             .function => |f| {
                 const full_name = try self.getQualifiedName(f.name);
@@ -344,14 +353,19 @@ pub const Compiler = struct {
         const token = stmt.token;
         switch (stmt.type) {
             .include => |i| {
-                const tmp = self.err;
-                if (self.module.includes.get(i.path)) |file| {
-                    self.err = &file.errors;
-                } else {
-                    return self.fail("Unknown include file {s}", stmt.token, .{i.path});
-                }
-                try self.compileBlock(i.contents);
-                self.err = tmp;
+                const tmp_file = self.current_file;
+                defer self.current_file = tmp_file;
+
+                const file = self.module.includes.get(i) orelse
+                    return self.fail("Unknown include file {s}", stmt.token, .{i});
+
+                if (self.emitted_files.contains(i)) return;
+                try self.emitted_files.put(self.alloc, i, {});
+
+                self.current_file = file;
+
+                const tree = file.tree orelse return Error.NotInitialized;
+                for (tree.root) |s| try self.compileStatement(s);
             },
             .@"if" => |i| {
                 try self.compileExpression(i.condition);
@@ -783,7 +797,7 @@ pub const Compiler = struct {
                 if (self.constants_map.get(id)) |idx| {
                     return self.constants.items[idx];
                 }
-                return self.failError("Identifier '{s}' cannot be resolved at compile-time", token, .{id}, Error.CompilerError);
+                return self.failError("Identifier '{s}' cannot be resolved", token, .{id}, Error.CompilerError);
             },
             .indexer => |idx| {
                 // Handle Enum.Value references
@@ -801,9 +815,19 @@ pub const Compiler = struct {
                                 }
                             }
                         }
+                        if (target_val == .obj and target_val.obj.data == .class) {
+                            const class_obj = target_val.obj.data.class;
+                            const field_name = idx.index.type.identifier;
+
+                            for (class_obj.fields) |member| {
+                                if (std.mem.eql(u8, member.name, field_name)) {
+                                    return member.value;
+                                }
+                            }
+                        }
                     }
                 }
-                return self.failError("Expression cannot be evaluated at compile-time", token, .{}, Error.IllegalOperation);
+                return self.failError("Expression cannot be evaluated", token, .{}, Error.IllegalOperation);
             },
             .nil => return .nil,
             .list => |l| {

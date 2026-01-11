@@ -73,7 +73,6 @@ pub const Locale = struct {
     // Would need to modify so every node in the ast writes its output
     pub fn validateFileAtPath(full_path: []const u8, allocator: std.mem.Allocator) ![]const u8 {
         var mod = try Module.init(allocator, full_path);
-        mod.allow_includes = false;
         defer mod.deinit();
         try mod.entry.loadSource();
         try mod.entry.buildTree();
@@ -81,14 +80,14 @@ pub const Locale = struct {
     }
 
     pub fn validateFile(file: *module.File, alloc: std.mem.Allocator) ![]const u8 {
-        if (!file.source_loaded) return error.FileSourceNotLoaded;
-        if (!file.tree_loaded) return error.FileTreeNotLoaded;
+        const source = file.source orelse return error.FileSourceNotLoaded;
+        const tree = file.tree orelse return error.FileTreeNotLoaded;
         var buf: std.ArrayList(u8) = .empty;
         defer buf.deinit(alloc);
-        try buf.writer(alloc).writeAll(file.source);
+        try buf.writer(alloc).writeAll(source);
         var count: usize = 0;
 
-        for (file.tree.root) |stmt| {
+        for (tree.root) |stmt| {
             try localizeStatement(alloc, stmt, &count, &buf);
         }
         return buf.toOwnedSlice(alloc);
@@ -166,7 +165,6 @@ pub const Locale = struct {
 
     pub fn exportFileAtPath(full_path: []const u8, writer: *std.Io.Writer, allocator: std.mem.Allocator) !void {
         var mod = try Module.init(allocator, full_path);
-        mod.allow_includes = false;
         defer mod.deinit();
         try mod.entry.loadSource();
         try mod.entry.buildTree();
@@ -178,8 +176,9 @@ pub const Locale = struct {
     // and only update the raw/base values, rather than replace the entire file
     // base language should be configurable as well
     pub fn exportFile(file: *File, writer: *std.Io.Writer) !void {
+        const tree = file.tree orelse return error.NotInitialized;
         try writer.writeAll("\"id\",\"speaker\",\"raw\",\"en\"\n");
-        for (file.tree.root) |stmt| {
+        for (tree.root) |stmt| {
             try exportStatement(stmt, writer);
         }
     }

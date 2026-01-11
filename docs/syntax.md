@@ -579,7 +579,8 @@ print(john.fullName()) // "Johnny Doe"
 ## Multiple Files
 
 Multiple files can be joined together to create a single story using `include "[PATH]"`.
-All files are added into global scope, meaning you can't have the same variable names in both files.
+All files are added into the global scope, meaning you can't have the same variable names in multiple files.
+This is due to variables engine integration, which would not know how to distinguish between 'file1.variable' and 'file2.variable'.
 
 Currently circular dependencies are not allowed.
 
@@ -587,10 +588,16 @@ Currently circular dependencies are not allowed.
 // main.topi
 include "./other.topi"
 sum(1, 5)
+=> START
 
 // other.topi
 fn sum |x, y| return x + y
+=== START {
+    :: "Hello" 
+}
 ```
+
+Note circular includes are not allowed.
 
 **Not allowed**
 

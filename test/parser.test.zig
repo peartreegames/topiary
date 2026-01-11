@@ -20,12 +20,9 @@ pub fn parseSource(source: []const u8) !*Module {
         .path = "",
         .name = "",
         .dir_name = "",
-        .dir = undefined,
         .source = source,
-        .source_loaded = true,
-        .errors = Errors.init(mod.arena.allocator()),
     };
-    try file.errors.add("Unexpected token '{s}'\n", .{
+    try mod.errors.add("", "Unexpected token '{s}'\n", .{
         .start = 0,
         .end = 1,
         .token_type = .identifier,
@@ -42,9 +39,38 @@ pub fn parseSource(source: []const u8) !*Module {
 }
 
 test "Parse Include" {
-    const input = "include \"./globals.topi\"";
-    const err = parseSource(input);
-    try testing.expectError(Parser.Error.ParserError, err);
+    const input =
+        \\ include "./globals.topi"
+        \\ one
+        ;
+    const mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    const global = try mod.arena.allocator().create(File);
+    global.* = .{
+        .module = mod,
+        .path = "globals.topi",
+        .name = "globals",
+        .dir_name = ".",
+        .source = "var one = 1",
+    };
+    try mod.includes.put("globals.topi", global);
+
+    const file = try mod.arena.allocator().create(File);
+    file.* = .{
+        .module = mod,
+        .path = "_test_",
+        .name = "",
+        .dir_name = ".",
+        .source = input,
+    };
+    mod.entry = file;
+
+    file.buildTree() catch |err| {
+        return err;
+    };
+    const tree = file.tree.?;
+    const include = tree.root[0].type.include;
+    try testing.expectEqualSlices(u8, "globals.topi", include);
 }
 
 test "Parse Declaration" {
@@ -66,7 +92,7 @@ test "Parse Declaration" {
     const mod = try parseSource(t);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
     try testing.expect(tree.root.len == 7);
     try testing.expect(!tree.root[0].type.variable.is_mutable);
     try testing.expect(tree.root[1].type.variable.is_mutable);
@@ -97,7 +123,7 @@ test "Parse Function Declaration" {
     const mod = try parseSource(t);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
     try testing.expect(tree.root.len == 2);
     try testing.expectEqualStrings("x", tree.root[0].type.function.parameters[0]);
     try testing.expectEqualStrings("y", tree.root[0].type.function.parameters[1]);
@@ -112,7 +138,7 @@ test "Parse Function Arguments" {
     const mod = try parseSource(t);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
     try testing.expect(tree.root.len == 2);
     try testing.expect(tree.root[1].type.expression.type.binary.operator == .add);
     const bin = tree.root[1].type.expression.type.binary;
@@ -135,7 +161,7 @@ test "Parse Enums" {
     const mod = try parseSource(t);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
     try testing.expect(tree.root.len == 2);
     const e = tree.root[0].type.@"enum";
     try testing.expectEqualStrings("Test", e.name);
@@ -159,7 +185,7 @@ test "Parse Iterable Types" {
         const mod = try parseSource(case.input);
         defer mod.deinit();
         const file = mod.entry;
-        const tree = file.tree;
+        const tree = file.tree.?;
         const node = tree.root[0].type.variable;
         try testing.expectEqualStrings(case.id, node.name);
 
@@ -183,7 +209,7 @@ test "Parse Empty Iterable Types" {
     const mod = try parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
     var decl = tree.root[0].type.variable;
     try testing.expectEqualStrings("emptyMap", decl.name);
     try testing.expect(decl.initializer.type.map.len == 0);
@@ -200,7 +226,7 @@ test "Parse Nested Iterable Types" {
     const mod = try parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
 
     try testing.expect(tree.root[0].type.expression.type == .list);
     try testing.expect(tree.root[0].type.expression.type.list[0].type == .list);
@@ -222,7 +248,7 @@ test "Parse Enum" {
     const mod = try parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
     var decl = tree.root[0].type.@"enum";
     try testing.expectEqualStrings("E", decl.name);
     try testing.expectEqualStrings("one", decl.values[0]);
@@ -256,7 +282,7 @@ test "Parse If" {
     const mod = try parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
 
     var if_stmt = tree.root[1].type.@"if";
     try testing.expect(if_stmt.condition.type.boolean);
@@ -282,7 +308,7 @@ test "Parse Call expression" {
     const mod = try parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
 
     const call = tree.root[0].type.expression.type.call;
     try testing.expectEqualStrings("add", call.target.type.identifier);
@@ -305,7 +331,7 @@ test "Parse For loop" {
     const mod = try parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
 
     var loop = tree.root[0].type.@"for";
     try testing.expectEqualStrings("list", loop.iterator.type.identifier);
@@ -328,7 +354,7 @@ test "Parse While loop" {
     const mod = try parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
 
     const loop = tree.root[0].type.@"while";
     try testing.expect(loop.condition.type.binary.operator == .less_than);
@@ -342,7 +368,7 @@ test "Parse Indexing" {
     const mod = try parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
 
     var idx = tree.root[0].type.expression.type.indexer;
     const values = [_][]const u8{ "final", "third", "other" };
@@ -363,7 +389,7 @@ test "Parse Bough" {
     const mod = try parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
     const bough = tree.root[0].type.bough;
     try testing.expectEqualStrings(bough.name, "BOUGH");
 
@@ -384,7 +410,7 @@ test "Parse No Speaker" {
     const mod = try parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
     const line = tree.root[0].type.bough.body[0].type.dialogue;
     try testing.expect(line.speaker == null);
     try testing.expectEqualStrings("Text goes here", line.content.type.string.value);
@@ -398,7 +424,7 @@ test "Parse divert" {
     const mod = try parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
     const divert = tree.root[1].type.divert.path;
     try testing.expectEqualStrings("BOUGH", divert[0]);
 }
@@ -418,7 +444,7 @@ test "Parse Forks" {
     const mod = try parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
 
     const fork = tree.root[0].type.bough.body[0].type.fork;
     try testing.expect(fork.name == null);
@@ -447,7 +473,7 @@ test "Parse Divert" {
     const mod = try parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
     const body = tree.root[0].type.bough.body;
     const divert = body[0].type.divert;
     try testing.expectEqualStrings("INNER", divert.path[0]);
@@ -464,7 +490,7 @@ test "Parse Inline Code" {
     const mod = try parseSource(input);
     defer mod.deinit();
     const file = mod.entry;
-    const tree = file.tree;
+    const tree = file.tree.?;
     const dialogue = tree.root[0].type.bough.body[0].type.dialogue;
     const string = dialogue.content.type.string;
     try testing.expectEqualStrings("sayHello", string.expressions[0].type.call.target.type.identifier);

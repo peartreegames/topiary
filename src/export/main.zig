@@ -68,30 +68,10 @@ pub export fn compile(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, log_p
 }
 
 fn createModule(path: []const u8, logger: ExportLogger) ?*Module {
-    const full_path = alloc.dupe(u8, path) catch |err| {
-        logger.log("Could not allocate file full_path: {s}", .{@errorName(err)}, .err);
-        return null;
-    };
-    defer alloc.free(full_path);
-
-    var arena = std.heap.ArenaAllocator.init(alloc);
-    const arena_alloc = arena.allocator();
-    var mod = alloc.create(Module) catch |err| {
+    var mod = Module.init(alloc, path) catch |err| {
         logger.log("Could not allocate module: {s}", .{@errorName(err)}, .err);
         return null;
     };
-    mod.* = Module{
-        .arena = arena,
-        .allocator = alloc,
-        .entry = undefined,
-        .includes = std.StringArrayHashMap(*File).init(arena_alloc),
-    };
-    const file = File.create(mod, full_path) catch |err| {
-        logger.log("Could not create Module File: {s}", .{@errorName(err)}, .err);
-        return null;
-    };
-    mod.entry = file;
-    mod.includes.putNoClobber(file.path, file) catch unreachable;
 
     mod.entry.loadSource() catch |err| {
         logger.log("Could not load file source: {s}", .{@errorName(err)}, .err);

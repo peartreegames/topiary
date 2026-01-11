@@ -78,7 +78,7 @@ pub const Parser = struct {
     }
 
     inline fn fail(self: *Parser, comptime msg: []const u8, token: Token, args: anytype) Error {
-        try self.file.errors.add(msg, token, .err, args);
+        try self.file.module.errors.add(self.file.path, msg, token, .err, args);
         return Error.ParserError;
     }
 
@@ -100,7 +100,7 @@ pub const Parser = struct {
     }
 
     fn getStringValue(self: *Parser) ![]const u8 {
-        return try self.allocator.dupe(u8, self.file.source[self.current_token.start..self.current_token.end]);
+        return try self.allocator.dupe(u8, self.file.source.?[self.current_token.start..self.current_token.end]);
     }
 
     pub fn statement(self: *Parser) Error!Statement {
@@ -142,31 +142,17 @@ pub const Parser = struct {
         const start = self.current_token;
         self.next();
 
-        const path = self.file.source[self.current_token.start..self.current_token.end];
-        if (!self.file.module.allow_includes) {
-            return .{
-                .token = start,
-                .type = .{
-                    .include = .{
-                        .path = path,
-                        .contents = &.{},
-                    },
-                },
-            };
-        }
+        const path = try self.getStringValue();
 
         if (self.file.path.len == 0) return self.fail("Cannot include. Current file path not set", start, .{});
         const full_path = try std.fs.path.resolve(self.allocator, &.{ self.file.dir_name, path });
         defer self.allocator.free(full_path);
 
-        if (self.file.module.includes.getKey(full_path)) |k| {
+        if (self.file.module.includes.get(full_path)) |f| {
             return .{
                 .token = start,
                 .type = .{
-                    .include = .{
-                        .path = k,
-                        .contents = &.{},
-                    },
+                    .include = f.path,
                 },
             };
         }
@@ -184,10 +170,7 @@ pub const Parser = struct {
         return .{
             .token = start,
             .type = .{
-                .include = .{
-                    .path = file.path,
-                    .contents = file.tree.root,
-                },
+                .include = file.path,
             },
         };
     }
@@ -232,12 +215,7 @@ pub const Parser = struct {
         return .{
             .token = start,
             .type = .{
-                .class = .{
-                    .name = name,
-                    .field_names = try names.toOwnedSlice(self.allocator),
-                    .fields = try fields.toOwnedSlice(self.allocator),
-                    .methods = try methods.toOwnedSlice(self.allocator)
-                },
+                .class = .{ .name = name, .field_names = try names.toOwnedSlice(self.allocator), .fields = try fields.toOwnedSlice(self.allocator), .methods = try methods.toOwnedSlice(self.allocator) },
             },
         };
     }
@@ -381,7 +359,7 @@ pub const Parser = struct {
         var left: Expression = switch (self.current_token.token_type) {
             .identifier => try self.identifierExpression(),
             .number => blk: {
-                const string_number = self.file.source[self.current_token.start..self.current_token.end];
+                const string_number = self.file.source.?[self.current_token.start..self.current_token.end];
                 const value = try std.fmt.parseFloat(f32, string_number);
                 break :blk .{
                     .token = start,
@@ -541,7 +519,7 @@ pub const Parser = struct {
         errdefer exprs.deinit(self.allocator);
         var i: usize = 0;
 
-        const str_source = self.file.source[token.start..token.end];
+        const str_source = self.file.source.?[token.start..token.end];
         while (i < str_source.len) : (i += 1) {
             const char = str_source[i];
             if (char == '\\') {
@@ -551,7 +529,7 @@ pub const Parser = struct {
 
             if (char == '{') {
                 if (depth == 0) {
-                    value = try std.fmt.allocPrint(self.allocator, "{s}{s}{{{d}}}", .{ value, self.file.source[start..(token.start + i)], expr_index });
+                    value = try std.fmt.allocPrint(self.allocator, "{s}{s}{{{d}}}", .{ value, self.file.source.?[start..(token.start + i)], expr_index });
                     start = token.start + i + 1;
                     expr_index += 1;
                 }
@@ -560,17 +538,17 @@ pub const Parser = struct {
             if (char == '}') {
                 depth -= 1;
                 if (depth == 0) {
-                    try self.parseInterpolatedExpression(self.file.source[start..(token.start + i)], &exprs, start);
+                    try self.parseInterpolatedExpression(self.file.source.?[start..(token.start + i)], &exprs, start);
                     start = token.start + i + 1;
                 }
             }
         }
-        value = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ value, self.file.source[start..token.end] });
+        value = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ value, self.file.source.?[start..token.end] });
         return .{
             .token = token,
             .type = .{
                 .string = .{
-                    .raw = try self.allocator.dupe(u8, self.file.source[token.start..token.end]),
+                    .raw = try self.allocator.dupe(u8, self.file.source.?[token.start..token.end]),
                     .value = value,
                     .expressions = try exprs.toOwnedSlice(self.allocator),
                 },
@@ -818,7 +796,7 @@ pub const Parser = struct {
 
         const id: UUID.ID = if (self.peekIs(.at)) blk: {
             self.next();
-            break :blk UUID.fromString(self.file.source[self.current_token.start..self.current_token.end]);
+            break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
         } else blk: {
             var new_id = UUID.create(std.hash.Wyhash.hash(0, text.type.string.raw));
             UUID.setAuto(&new_id);
@@ -864,7 +842,7 @@ pub const Parser = struct {
         const text = try self.stringExpression();
         const id: UUID.ID = if (self.peekIs(.at)) blk: {
             self.next();
-            break :blk UUID.fromString(self.file.source[self.current_token.start..self.current_token.end]);
+            break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
         } else blk: {
             var new_id = UUID.create(std.hash.Wyhash.hash(0, text.type.string.raw));
             UUID.setAuto(&new_id);

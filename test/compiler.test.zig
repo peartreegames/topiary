@@ -29,11 +29,8 @@ pub fn compileSource(source: []const u8, mod: *Module) !Bytecode {
         .path = "",
         .name = "",
         .dir_name = "",
-        .dir = undefined,
         .source = source,
-        .source_loaded = true,
         .module = mod,
-        .errors = Errors.init(allocator),
     };
     mod.entry = file;
     try mod.includes.putNoClobber(file.path, file);

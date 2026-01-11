@@ -166,10 +166,7 @@ pub const Statement = struct {
             then_branch: []const Statement,
             else_branch: ?[]const Statement,
         },
-        include: struct {
-            path: []const u8,
-            contents: []const Statement,
-        },
+        include: []const u8,
         divert: struct {
             path: [][]const u8,
             is_backup: bool,
