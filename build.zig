@@ -23,6 +23,7 @@ pub fn build(b: *std.Build) void {
 
     const topilib = b.addLibrary(.{
         .name = name,
+        .linkage = .dynamic,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/export/main.zig"),
             .target = target,
