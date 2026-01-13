@@ -58,7 +58,6 @@ pub const Token = struct {
             .number => "[number]",
             .string => "[string]",
 
-            .as => "as",
             .@"and" => "and",
             .@"break" => "break",
             .@"const" => "const",
@@ -142,7 +141,6 @@ pub const TokenType = enum {
     number,
     string,
 
-    as,
     @"and",
     @"break",
     @"const",
@@ -183,7 +181,6 @@ pub const TokenType = enum {
 };
 
 pub const Keywords = std.StaticStringMap(TokenType).initComptime(.{
-    .{ "as", .as },
     .{ "and", .@"and" },
     .{ "bough", .bough },
     .{ "break", .@"break" },
