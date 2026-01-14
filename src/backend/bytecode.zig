@@ -50,7 +50,7 @@ pub const Bytecode = struct {
     }
 
     fn writeDebug(self: *Bytecode, writer: *std.Io.Writer) !void {
-        try writer.writeInt(u16, @as(u16, @intCast(self.debug_info.len)), .little);
+        try writer.writeInt(u32, @as(u32, @intCast(self.debug_info.len)), .little);
         for (self.debug_info) |debug| try debug.serialize(writer);
     }
 
