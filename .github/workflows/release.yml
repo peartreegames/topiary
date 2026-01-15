@@ -22,31 +22,31 @@ jobs:
         run: zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-windows -p ./x86_64-windows
 
       - name: Package x64_64-windows
-        run: zip -r x86_64-windows ./x86_64-windows
+        run: zip -r topiary-x86_64-windows ./x86_64-windows
 
       - name: Build x86_64-linux
         run: zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux -p ./x86_64-linux
 
       - name: Package x86_64-linux
-        run: tar -czvf x86_64-linux.tar.gz ./x86_64-linux
+        run: tar -czvf topiary-x86_64-linux.tar.gz ./x86_64-linux
 
       - name: Build x86_64-macos
         run: zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-macos -p ./x86_64-macos
 
       - name: Package x64_64-macos
-        run: tar -czvf x86_64-macos.tar.gz ./x86_64-macos
+        run: tar -czvf topiary-x86_64-macos.tar.gz ./x86_64-macos
 
       - name: Build aarch64-macos
         run: zig build -Doptimize=ReleaseSafe -Dtarget=aarch64-macos -p ./aarch64-macos
 
       - name: Package aarch64-macos
-        run: tar -czvf aarch64-macos.tar.gz ./aarch64-macos
+        run: tar -czvf topiary-aarch64-macos.tar.gz ./aarch64-macos
 
       - name: Package all zip
-        run : zip -r topi-all.zip ./x86_64-linux ./x86_64-macos ./aarch64-macos ./x86_64-windows
+        run : zip -r topiary-all.zip ./x86_64-linux ./x86_64-macos ./aarch64-macos ./x86_64-windows
 
       - name: Package all tar
-        run : tar -czvf topi-all.tar.gz ./x86_64-linux ./x86_64-macos ./aarch64-macos ./x86_64-windows
+        run : tar -czvf topiary-all.tar.gz ./x86_64-linux ./x86_64-macos ./aarch64-macos ./x86_64-windows
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -54,7 +54,9 @@ jobs:
           prerelease: true
           generate_release_notes: true
           files: |
-            x86_64-windows.zip
-            x86_64-linux.tar.gz
-            x86_64-macos.tar.gz
-            aarch64-macos.tar.gz
+            topiary-x86_64-windows.zip
+            topiary-x86_64-linux.tar.gz
+            topiary-x86_64-macos.tar.gz
+            topiary-aarch64-macos.tar.gz
+            topiary-all.zip
+            topiary-all.tar.gz
