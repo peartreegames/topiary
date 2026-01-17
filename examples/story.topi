@@ -54,7 +54,7 @@ var archer = new Character{}
 	:: "As you move through the forest you feel the ground move about your feet."
 	if torchLit :: "As you look down the roots are moving like snakes, encircling around your party."
 	:Archer: "AHH! Something has me! Help!!"
-	fork ^ {
+	fork^ {
 		~ "Fighter, grab him!" {
 			:: "Fighter holds onto Archer."
 			:: "As he struggles to maintain a grip you feels around in the dark at Archer's feet, stabbing blindly into the ground."
@@ -100,7 +100,7 @@ var archer = new Character{}
 			}
 		}
 	} 
-	:Figher: "Let's keep moving"
+	:Fighter: "Let's keep moving"
     :: "Ahead, you find a hidden chest barely hidden behind some shrubs."
 	:Rogue: "Do we open it?"
     fork^ CHEST {
