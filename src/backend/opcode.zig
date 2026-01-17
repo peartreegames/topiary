@@ -50,6 +50,7 @@ pub const OpCode = enum(u8) {
     return_void,
     return_value,
     visit,
+    end,
     fin,
 
     pub fn toString(self: OpCode) []const u8 {
@@ -103,6 +104,7 @@ pub const OpCode = enum(u8) {
             .return_value => "OP_RETURN_VALUE",
             .visit => "OP_VISIT",
             .divert => "OP_DIVERT",
+            .end => "OP_END",
             .fin => "OP_FIN",
         };
     }

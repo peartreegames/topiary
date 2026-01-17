@@ -42,6 +42,7 @@ fn usage(comptime msg: []const u8) !void {
     try print("       -s, --save <file>             Write save to file on end\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi test <file> <count>      Run dialogue <count> times, selecting random choices\n", .{});
+    try print("       -b, --bough <name>            Starting bough\n", .{});
     try print("       -q, --quiet                   Do not output visit tree on end\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi compile <file>           Compile dialogue to bytecode\n", .{});
@@ -66,7 +67,6 @@ fn usage(comptime msg: []const u8) !void {
         try print(msg, .{});
         try print("\n", .{});
     }
-    return error.InvalidArguments;
 }
 
 const RunArgs = struct {
@@ -155,15 +155,19 @@ const LocalizeArgs = struct {
 const TestArgs = struct {
     file: ?[]const u8 = null,
     count: usize = 0,
+    bough: ?[]const u8 = null,
     quiet: bool = false,
     verbose: bool = false,
     fn init(self: *TestArgs, iter: *std.process.ArgIterator) !void {
-        self.count = try std.fmt.parseInt(usize, iter.next().?, 10);
         while (iter.next()) |arg| {
             if (std.mem.eql(u8, arg, "-q") or std.mem.eql(u8, arg, "--quiet")) {
                 self.quiet = true;
+            } else if (std.mem.eql(u8, arg, "-b") or std.mem.eql(u8, arg, "--bough")) {
+                self.bough = iter.next();
             } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
                 self.verbose = true;
+            } else if (std.fmt.parseInt(usize, arg, 10) catch null) |count| {
+                self.count = count;
             } else self.file = arg;
         }
         if (self.file == null) return usage("Missing file");
@@ -178,6 +182,13 @@ pub fn print(comptime msg: []const u8, args: anytype) !void {
         std.debug.print("Could not print message", .{});
     };
     try stdout.flush();
+}
+
+pub fn writeErrors(mod: *Module) !void {
+    var buffer: [128]u8 = undefined;
+    var writer = std.fs.File.stdout().writer(&buffer);
+    const stdout = &writer.interface;
+    try mod.writeErrors(stdout);
 }
 
 pub fn main() !void {
@@ -237,13 +248,14 @@ fn createModule(alloc: std.mem.Allocator, args: anytype) !*Module {
 
 fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
     var mod = createModule(alloc, args) catch |err| {
-        try print("Could not create module\n", .{});
+        try print("Could not create module {t}\n", .{err});
         return if (args.verbose) err else {};
     };
     errdefer mod.deinit();
 
     var bytecode = mod.generateBytecode(alloc) catch |err| {
-        try print("Could not generate bytecode\n", .{});
+        try print("Could not create bytecode {t}\n", .{err});
+        try writeErrors(mod);
         return if (args.verbose) err else {};
     };
     mod.deinit();
@@ -267,10 +279,7 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
         };
     }
 
-    const bough = args.bough orelse for (vm.bytecode.constants) |c| {
-        if (c == .obj and c.obj.data == .anchor) break c.obj.data.anchor.name;
-    } else null;
-    try vm.start(bough);
+    try vm.start(args.bough);
     if (args.locale_key_file) |file| {
         try vm.setLocale(file);
     }
@@ -309,6 +318,7 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
     errdefer mod.deinit();
     var bytecode = mod.generateBytecode(alloc) catch |err| {
         try print("Could not generate bytecode", .{});
+        try writeErrors(mod);
         return if (args.verbose) err else {};
     };
     mod.deinit();
@@ -334,11 +344,14 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
 
 fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
     var mod = createModule(alloc, args) catch |err| {
+        try print("Could not create module {t}", .{err});
         return if (args.verbose) err else {};
     };
     errdefer mod.deinit();
 
     var bytecode = mod.generateBytecode(alloc) catch |err| {
+        try print("Could not create bytecode {t}", .{err});
+        try writeErrors(mod);
         return if (args.verbose) err else {};
     };
     mod.deinit();
@@ -351,13 +364,16 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
         var auto_runner = AutoTestRunner.init();
         var vm = try Vm.init(alloc, bytecode, &auto_runner.runner);
         defer vm.deinit();
-        vm.interpret() catch {
-            var buffer: [128]u8 = undefined;
-            var writer = std.fs.File.stdout().writer(&buffer);
-            const stdout = &writer.interface;
-            vm.err.print(stdout);
-            return;
-        };
+        try vm.start(args.bough);
+        while (vm.can_continue) {
+            vm.run() catch {
+                var buffer: [128]u8 = undefined;
+                var writer = std.fs.File.stdout().writer(&buffer);
+                const stdout = &writer.interface;
+                vm.err.print(stdout);
+                return;
+            };
+        }
         if (args.quiet) continue;
         for (vm.globals, 0..) |g, idx| {
             if (g == .visit) {

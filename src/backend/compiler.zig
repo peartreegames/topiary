@@ -228,11 +228,11 @@ pub const Compiler = struct {
             try self.compileStatement(stmt);
         }
 
-        // Add one final fin at the end of file to grab the initial jump_request
+        // Add one final end at the end of file to grab the initial jump_request
         if (self.chunk.debug_markers.items.len > 0) {
             const dupe = self.chunk.debug_markers.items[self.chunk.debug_markers.items.len - 1];
             try self.chunk.debug_markers.append(self.alloc, dupe);
-            try self.chunk.instructions.append(self.alloc, @intFromEnum(OpCode.fin));
+            try self.chunk.instructions.append(self.alloc, @intFromEnum(OpCode.end));
         }
     }
 
@@ -328,9 +328,7 @@ pub const Compiler = struct {
                 const full_name = try self.getQualifiedName(name);
                 self.registerAnchor(full_name) catch |err| return self.fail("Could not register anchor {s}: {t}", stmt.token, .{ name, err });
                 try self.path_stack.append(self.alloc, name);
-                try self.anon_counters.append(self.alloc, 0);
                 defer _ = self.path_stack.pop();
-                defer _ = self.anon_counters.pop();
                 for (c.body) |s| try self.prepass(s);
             },
             .@"if" => |i| {
@@ -626,6 +624,9 @@ pub const Compiler = struct {
                 const full_name = try self.getQualifiedName(name);
                 defer self.alloc.free(full_name);
 
+                try self.path_stack.append(self.alloc, name);
+                defer _ = self.path_stack.pop();
+
                 const entry_ip = self.instructionPos();
                 const anchor_idx = try self.resolveConstant(full_name) orelse return self.fail("Could not find anchor {s}", token, .{full_name});
                 self.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
@@ -664,7 +665,7 @@ pub const Compiler = struct {
 
                 try self.compileVisit(anchor_idx, token);
                 try self.compileBlock(c.body);
-                try self.writeOp(.fin, token);
+                try self.writeOp(.end, token);
                 try self.exitScope();
                 try self.replaceValue(jump_pos, C.JUMP, self.instructionPos());
             },
@@ -691,7 +692,7 @@ pub const Compiler = struct {
                 try self.compileVisit(anchor_idx, token);
 
                 try self.compileBlock(b.body);
-                try self.writeOp(.fin, token);
+                try self.writeOp(.end, token);
                 try self.exitScope();
 
                 const end = self.instructionPos();

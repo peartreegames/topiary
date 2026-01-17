@@ -987,7 +987,7 @@ pub const Vm = struct {
                     }
                     try self.jump_backups.append(self.alloc, ip);
                 },
-                .fin => {
+                .end => {
                     if (self.anchor_stack.items.len > 0) {
                         _ = self.anchor_stack.pop();
                     }
@@ -1003,6 +1003,10 @@ pub const Vm = struct {
                     self.end();
                     break;
                 },
+                .fin => {
+                    self.end();
+                    break;
+                }
             }
         }
         self.end();

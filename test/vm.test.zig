@@ -998,7 +998,7 @@ test "Runtime Boughs" {
 test "Runtime Bough Nested Starts with Backups" {
     const input =
         \\ === START {
-        \\    => OUTER^
+        \\    =>^ OUTER
         \\    var val = "value"
         \\    === OUTER {
         \\        fork^ {
@@ -1197,6 +1197,36 @@ test "Runtime Forks" {
             ,
             .expected = &[_][]const u8{"Question","You chose one", "You chose one", "You chose one", "Done"},
         },
+        .{
+            .input =
+            \\ === START {
+            \\    fork^ {
+            \\        ~ "_0" {
+            \\            fork^ {
+            \\              ~ "_0_0" {
+            \\                 :speaker: "_0_0"
+            \\              }
+            \\              ~ "_0_1" {
+            \\                 :speaker: "_0_1"
+            \\              }
+            \\            }
+            \\        }
+            \\        ~ "_1" {
+            \\            fork^ {
+            \\              ~ "_1_0" {
+            \\                 :speaker: "_1_0"
+            \\              }
+            \\              ~ "_1_1" {
+            \\                 :speaker: "_1_1"
+            \\              }
+            \\            }
+            \\        }
+            \\    }
+            \\    :: "Done"
+            \\ }
+            ,
+            .expected = &[_][]const u8{"_0_0","Done"},
+        }
     };
 
     inline for (test_cases) |case| {
@@ -1280,7 +1310,7 @@ test "Runtime Visits" {
             \\            }
             \\        }
             \\    }
-            \\ => INNER^
+            \\ =>^ INNER
             \\ assert(START == 1, "START == 1")
             \\ assert(START.INNER == 1, "START.INNER == 1")
             \\ assert(START.INNER._0.ONE == 1, "START.INNER._0.ONE == 1")
@@ -1339,7 +1369,7 @@ test "Runtime Jump Backups" {
             .input =
             \\ === START {
             \\     :speaker: "Question"
-            \\     => MIDDLE^
+            \\     =>^ MIDDLE
             \\     :speaker: "Continue here after divert"
             \\ }
             \\ === MIDDLE {
@@ -1376,7 +1406,7 @@ test "Runtime Jump Backups" {
             \\            :speaker: "You chose one"
             \\            if count == 0 {
             \\                count += 1
-            \\                => NAMED^
+            \\                =>^ NAMED
             \\            }
             \\            else :speaker: "Else branch"
             \\        }
@@ -1469,12 +1499,13 @@ test "Runtime Jump Code" {
         .{
             .input =
             \\ === START {
-            \\    => INNER^
-            \\    :: "Fin executed correctly"
+            \\    =>^ INNER
+            \\    =>^ INNER
             \\    === INNER {
-            \\        if INNER == 1 fin
-            \\        :: "Fin did not work!"
+            \\        if INNER == 1 :: "Fin executed correctly"
+            \\        if INNER == 2 fin
             \\    }
+            \\    :: "Fin did not work!"
             \\ }
             ,
             .expected = &[_][]const u8{"Fin executed correctly"}

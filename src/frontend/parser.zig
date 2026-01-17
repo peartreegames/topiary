@@ -731,19 +731,20 @@ pub const Parser = struct {
         const start_token = self.current_token;
         var list = std.ArrayList([]const u8).empty;
         errdefer list.deinit(self.allocator);
-
-        try self.expectPeek(.identifier);
-
-        try list.append(self.allocator, try self.getStringValue());
-        while (self.peekIs(.dot)) {
-            self.next();
-            self.next();
-            try list.append(self.allocator, try self.getStringValue());
-        }
         var is_backup: bool = false;
         if (self.peekIs(.caret)) {
             is_backup = true;
             self.next();
+        }
+
+        try self.expectPeek(.identifier);
+
+        try list.append(self.allocator, try self.getStringValue());
+
+        while (self.peekIs(.dot)) {
+            self.next();
+            self.next();
+            try list.append(self.allocator, try self.getStringValue());
         }
 
         return .{
