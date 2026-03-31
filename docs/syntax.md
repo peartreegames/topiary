@@ -23,7 +23,7 @@ Tags are also optional and can be omitted or multiple can be separated each with
 ### Jumps
 
 Boughs can be started with jumps, denoted with `=> [Name]`. The first jump must be passed in to the `start` function,
-or if using the CLI the second parameter of the run command.
+or if using the CLI, the `bough` flag of the run command.
 
 ```topi
 # topi run file.topi --bough GATEHOUSE
@@ -31,15 +31,20 @@ or if using the CLI the second parameter of the run command.
 === GATEHOUSE {
     :Gardener: "I was just pruning the hydrangeas, I swear!" #nervous
     :Detective: "With a blood-stained trowel, Mr. Higgins?"
+    => FLEE
+}
+
+=== FLEE {
+    :: "The gardener dashes away, making his escape through the shrubbery"
 }
 ```
 
-### Nesting
+#### Nesting
 
 Boughs can be nested and jumped to with `.` like so:
 
 ```topi
-# topi run file.topi ESTATE.MAZE
+# topi run file.topi --bough ESTATE.MAZE
 
 === ESTATE {
     === MAZE {
@@ -144,20 +149,23 @@ We can do that by adding a caret `^` to a jump `=>^ [NAME]` (meaning jump then c
 }
 ```
 
-Backups can also be applied to forks with `fork^ ?[NAME]`.
+Backups can also be applied to forks with `fork^`.
 
 ```topi
-=== START {
-    :Jane: "Which way do you want to go?"
-    fork^ {
-        ~ "Easy route" {
-            :John: "Nice and easy"
-        }
-        ~ "Hard route" {
-            :John: "Nothing easy was ever worth doing."
-        }
-    }
-    :Jane: "Good choice."
+=== GARDEN_PATH { 
+    :Detective: "Before we go on, let's review what we think we know." 
+    fork^ { 
+        ~ "Inspect the muddy footprints" { 
+            :: "The prints are narrow—fashionable boots, not gardening clogs." 
+        } 
+        ~ "Re-read the torn letter" { 
+            :: "Only three words remain legible: 'meet me—midnight—'" 
+        } 
+        ~ "Pocket the silver key and move on" { 
+            :: "You tuck it away. It feels heavier than it should." 
+        } 
+    } 
+    :Detective: "Right. Back to our suspect—before the roses start listening." 
 }
 ```
 
@@ -325,7 +333,8 @@ switch suspicion {
 switch lady_margery_location { 
     "Kitchen", "Cellar", "Stable": :: "She has no alibi for the time of the murder.", 
     "Conservatory", "Parlor": :: "The staff confirm she was taking tea.", 
-    else: :: "Her whereabouts remain a mystery." }
+    else: :: "Her whereabouts remain a mystery." 
+}
 ```
 
 ### Strings and Inline Code
@@ -342,11 +351,12 @@ var location = "Library"
 }
 ```
 
-Double quotation marks can be added by 'escaping' them with backslash `/` `"/"Hello/", he said."` will output `"Hello", he said`
+Double quotation marks can be added by 'escaping' them with backslash `/` -- `"/"Hello/", he said."` will output `"Hello", he said`
 
 ### Functions
 
 `fn [NAME] | ?[PARAMETER,] | { }`
+
 Braces are optional if only one line is used.
 
 **Functions cannot contain Boughs only logic.**
@@ -379,8 +389,8 @@ Used for static state values,
 while `enumseq` for state values that only move forward.
 
 Sequences are useful in that all previous states are inferred from the current.
-If the player is investigating, they must have discovered the arrived on the scene.
-Same if they accused, they must have investigated, and so on.
+If the player is investigating, they must have arrived on the scene.
+Same if they are accusing someone, they must have investigated, and so on.
 For more information you can watch this great talk by [Inkle's Jon Ingold](https://www.youtube.com/watch?v=HZft_U4Fc-U).
 
 ```topi
