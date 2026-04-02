@@ -83,31 +83,65 @@ pub const Expression = struct {
                 b.left.print(writer, "LEFT:: ", depth + 1);
                 b.right.print(writer, "RIGHT:: ", depth + 1);
             },
+            .unary => |u| {
+                writer.print("UNARY:: {s}", .{u.operator.toString()});
+                u.value.print(writer, "VALUE:: ", depth + 1);
+            },
             .call => |c| {
                 writer.print("CALL::", .{});
-                c.target.print(writer, "TARGET::", depth + 1);
+                c.target.print(writer, "TARGET:: ", depth + 1);
                 for (c.arguments) |arg| {
-                    arg.print(writer, "ARG::", depth + 1);
+                    arg.print(writer, "ARG:: ", depth + 1);
                 }
             },
             .indexer => |i| {
-                writer.print("INDEXER:: ", .{});
+                writer.print("INDEXER::", .{});
                 i.target.print(writer, "TARGET:: ", depth + 1);
                 i.index.print(writer, "INDEX:: ", depth + 1);
             },
             .identifier => |i| writer.print("IDENTIFIER:: {s}", .{i}),
             .number => |n| writer.print("NUM:: {d}", .{n}),
+            .boolean => |b| writer.print("BOOL:: {}", .{b}),
+            .nil => writer.print("NIL", .{}),
             .string => |s| {
                 writer.print("STRING:: {s}", .{s.raw});
                 for (s.expressions) |e| e.print(writer, "EXP:: ", depth + 1);
             },
-            .function => |f| {
-                writer.print("FUNCTION:: {s}", .{f.parameters});
-                for (f.body) |s| {
-                    s.print(writer, "", depth + 1);
+            .instance => |i| {
+                writer.print("INSTANCE:: {s}", .{i.name});
+                for (i.field_names, i.fields) |name, field| {
+                    field.print(writer, name, depth + 1);
                 }
             },
-            else => writer.print("{any}", .{self}),
+            .list => |l| {
+                writer.print("LIST::", .{});
+                for (l) |item| item.print(writer, "ITEM:: ", depth + 1);
+            },
+            .set => |s| {
+                writer.print("SET::", .{});
+                for (s) |item| item.print(writer, "ITEM:: ", depth + 1);
+            },
+            .map => |m| {
+                writer.print("MAP::", .{});
+                for (m) |pair| pair.print(writer, "PAIR:: ", depth + 1);
+            },
+            .map_pair => |p| {
+                writer.print("MAP_PAIR::", .{});
+                p.key.print(writer, "KEY:: ", depth + 1);
+                p.value.print(writer, "VALUE:: ", depth + 1);
+            },
+            .range => |r| {
+                writer.print("RANGE::", .{});
+                r.left.print(writer, "FROM:: ", depth + 1);
+                r.right.print(writer, "TO:: ", depth + 1);
+            },
+            .@"if" => |i| {
+                writer.print("TERNARY::", .{});
+                i.condition.print(writer, "COND:: ", depth + 1);
+                i.then_value.print(writer, "THEN:: ", depth + 1);
+                i.else_value.print(writer, "ELSE:: ", depth + 1);
+            },
+            .@"extern" => writer.print("EXTERN", .{}),
         }
     }
 };
@@ -210,37 +244,94 @@ pub const Statement = struct {
         }
         writer.print("{s}", .{prefix});
         switch (self.type) {
-            .include => |i| {
-                writer.print("INCLUDE:: {s}", .{i.path});
-                for (i.contents) |c| c.print(writer, "", depth + 1);
-            },
+            .include => |path| writer.print("INCLUDE:: {s}", .{path}),
             .block => |b| {
+                writer.print("BLOCK::", .{});
                 for (b) |s| s.print(writer, "", depth + 1);
+            },
+            .bough => |b| {
+                writer.print("BOUGH:: {s}", .{b.name});
+                for (b.body) |s| s.print(writer, "", depth + 1);
+            },
+            .fork => |f| {
+                writer.print("FORK:: {s}", .{f.name orelse "(anon)"});
+                for (f.body) |s| s.print(writer, "", depth + 1);
+            },
+            .choice => |c| {
+                writer.print("CHOICE:: {s}", .{c.name orelse "(anon)"});
+                c.content.print(writer, "CONTENT:: ", depth + 1);
+                for (c.body) |s| s.print(writer, "", depth + 1);
+            },
+            .dialogue => |d_| {
+                writer.print("DIALOGUE:: speaker={s}", .{d_.speaker orelse "(none)"});
+                d_.content.print(writer, "CONTENT:: ", depth + 1);
+            },
+            .function => |f| {
+                writer.print("FUNCTION:: {s}(", .{f.name});
+                for (f.parameters, 0..) |p, i| {
+                    if (i > 0) writer.print(", ", .{});
+                    writer.print("{s}", .{p});
+                }
+                writer.print(")", .{});
+                for (f.body) |s| s.print(writer, "", depth + 1);
+            },
+            .class => |c| {
+                writer.print("CLASS:: {s}", .{c.name});
+                for (c.field_names, c.fields) |name, field| {
+                    field.print(writer, name, depth + 1);
+                }
+                for (c.methods) |m| m.print(writer, "METHOD:: ", depth + 1);
+            },
+            .@"enum" => |e| {
+                writer.print("ENUM:: {s} [", .{e.name});
+                for (e.values) |v| writer.print("{s},", .{v});
+                writer.print("]", .{});
+            },
+            .variable => |v| {
+                writer.print("VARIABLE:: {s} mutable={}", .{ v.name, v.is_mutable });
+                v.initializer.print(writer, "INIT:: ", depth + 1);
             },
             .expression => |e| e.print(writer, "EXPRESSION:: ", depth),
             .@"if" => |i| {
-                writer.print("IF:: ", .{});
+                writer.print("IF::", .{});
                 i.condition.print(writer, "CONDITION:: ", depth + 1);
                 for (i.then_branch) |s| s.print(writer, "THEN:: ", depth + 1);
                 if (i.else_branch) |eb| {
                     for (eb) |s| s.print(writer, "ELSE:: ", depth + 1);
                 }
             },
-            .@"enum" => |e| {
-                writer.print("ENUM:: {s} [", .{e.name});
-                for (e.values) |v| {
-                    writer.print("{s},", .{v});
-                }
-                writer.print("]", .{});
+            .@"while" => |w| {
+                writer.print("WHILE::", .{});
+                w.condition.print(writer, "CONDITION:: ", depth + 1);
+                for (w.body) |s| s.print(writer, "", depth + 1);
             },
-            .return_expression => |re| re.print(writer, "RETURN VALUE:: ", depth + 1),
+            .@"for" => |f| {
+                writer.print("FOR:: {s}", .{f.capture});
+                f.iterator.print(writer, "IN:: ", depth + 1);
+                for (f.body) |s| s.print(writer, "", depth + 1);
+            },
+            .divert => |d_| {
+                writer.print("DIVERT:: ", .{});
+                for (d_.path) |p| writer.print("{s}.", .{p});
+            },
+            .return_expression => |re| re.print(writer, "RETURN:: ", depth + 1),
             .return_void => writer.print("RETURN VOID", .{}),
-            .variable => |v| {
-                writer.print("VARIABLE:: {s}", .{v.name});
-                v.initializer.print(writer, "", depth + 1);
+            .fin => writer.print("FIN", .{}),
+            .@"break" => writer.print("BREAK", .{}),
+            .@"continue" => writer.print("CONTINUE", .{}),
+            .comment => |c| writer.print("COMMENT:: {s}", .{c}),
+            .@"switch" => |s| {
+                writer.print("SWITCH::", .{});
+                s.capture.print(writer, "CAPTURE:: ", depth + 1);
+                for (s.prongs) |p| p.print(writer, "PRONG:: ", depth + 1);
             },
-            else => {
-                writer.print("{any}", .{self});
+            .switch_prong => |p| {
+                if (p.values) |vals| {
+                    for (vals) |v| v.print(writer, "VALUE:: ", depth + 1);
+                } else {
+                    writer.print("DEFAULT::", .{});
+                }
+                for (p.body) |s| s.print(writer, "", depth + 1);
             },
         }
     }
