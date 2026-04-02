@@ -207,6 +207,7 @@ pub const Parser = struct {
         defer if (free_rel) self.allocator.free(rel_path);
 
         if (self.file.module.includes.get(rel_path)) |f| {
+            try self.file.module.errors.add(self.file.path, "'{s}' already included, skipping", start, .info, .{rel_path});
             return .{
                 .token = start,
                 .type = .{

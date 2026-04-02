@@ -307,7 +307,9 @@ pub const Compiler = struct {
             .function => |f| {
                 const full_name = try self.getQualifiedName(f.name);
                 defer self.alloc.free(full_name);
-                try self.addNamedConstant(full_name, .nil);
+                self.addNamedConstant(full_name, .nil) catch {
+                    return self.fail("'{s}' is already declared", stmt.token, .{full_name});
+                };
                 if (f.is_extern) {
                     _ = try self.addConstant(.{ .obj = try self.compileExternFunctionObj(stmt) });
                 }
@@ -315,12 +317,16 @@ pub const Compiler = struct {
             .class => |c| {
                 const full_name = try self.getQualifiedName(c.name);
                 defer self.alloc.free(full_name);
-                try self.addNamedConstant(full_name, .nil);
+                self.addNamedConstant(full_name, .nil) catch {
+                    return self.fail("'{s}' is already declared", stmt.token, .{full_name});
+                };
             },
             .@"enum" => |e| {
                 const full_name = try self.getQualifiedName(e.name);
                 defer self.alloc.free(full_name);
-                try self.addNamedConstant(full_name, .nil);
+                self.addNamedConstant(full_name, .nil) catch {
+                    return self.fail("'{s}' is already declared", stmt.token, .{full_name});
+                };
             },
             .bough => |b| {
                 const full_name = try self.getQualifiedName(b.name);

@@ -676,6 +676,7 @@ pub const Vm = struct {
                 },
                 .iter_start => {
                     var value = try self.pop();
+                    if (self.iterators.count >= iterator_size) return self.fail("Iterator overflow: too many nested iterators (max {d})", .{iterator_size});
                     self.iterators.push(.{
                         .value = value,
                         .index = 0,
@@ -875,6 +876,7 @@ pub const Vm = struct {
                                 );
                             }
                             const frame = try Frame.create(value.obj, self.stack.count - arg_count);
+                            if (self.frames.count >= frame_size) return self.fail("Stack overflow: too many nested function calls (max {d})", .{frame_size});
                             self.frames.push(frame);
                             self.stack.count = frame.bp + f.locals_count;
                         },
