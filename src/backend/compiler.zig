@@ -30,14 +30,17 @@ const CompilerErrors = @import("error.zig").CompilerErrors;
 const Bytecode = @import("bytecode.zig").Bytecode;
 const OpCode = @import("opcode.zig").OpCode;
 
-const BREAK_HOLDER = 9000;
-const CONTINUE_HOLDER = 9001;
-const CHOICE_HOLDER = 9002;
-const FORK_HOLDER = 9003;
-const DIVERT_HOLDER = 9004;
-const PRONG_HOLDER = 9005;
-const SWITCH_END_HOLDER = 9006;
-const JUMP_HOLDER = 9999;
+// Placeholder values for jump targets that get patched later.
+// Use values near maxInt(u32) to avoid collisions with real instruction addresses.
+const max_jump = std.math.maxInt(C.JUMP);
+const BREAK_HOLDER: C.JUMP = max_jump - 0;
+const CONTINUE_HOLDER: C.JUMP = max_jump - 1;
+const CHOICE_HOLDER: C.JUMP = max_jump - 2;
+const FORK_HOLDER: C.JUMP = max_jump - 3;
+const DIVERT_HOLDER: C.JUMP = max_jump - 4;
+const PRONG_HOLDER: C.JUMP = max_jump - 5;
+const SWITCH_END_HOLDER: C.JUMP = max_jump - 6;
+const JUMP_HOLDER: C.JUMP = max_jump - 7;
 
 fn arrayContains(comptime T: type, haystack: []const []const T, needle: []const T) bool {
     for (haystack) |element| {
@@ -67,6 +70,7 @@ pub const Compiler = struct {
         parent: ?*Chunk,
         module: *Module,
         alloc: std.mem.Allocator,
+        last_op_pos: ?usize = null,
 
         const Marker = struct {
             file_index: u32,
@@ -926,16 +930,16 @@ pub const Compiler = struct {
     }
 
     fn lastIs(self: *Compiler, op: OpCode) !bool {
-        var inst = self.chunk.instructions;
-        const last = inst.getLastOrNull();
-        if (last) |l| return l == @intFromEnum(op);
-        return false;
+        const pos = self.chunk.last_op_pos orelse return false;
+        return self.chunk.instructions.items[pos] == @intFromEnum(op);
     }
 
     fn removeLast(self: *Compiler, op: OpCode) !void {
         if (try self.lastIs(op)) {
-            var inst = self.chunk.instructions;
-            self.chunk.instructions.items = inst.items[0 .. inst.items.len - 1];
+            const pos = self.chunk.last_op_pos.?;
+            self.chunk.instructions.items.len = pos;
+            self.chunk.debug_markers.items.len = pos;
+            self.chunk.last_op_pos = null;
         }
     }
 
@@ -1365,6 +1369,7 @@ pub const Compiler = struct {
 
     fn writeOp(self: *Compiler, op: OpCode, token: Token) !void {
         var chunk = self.chunk;
+        chunk.last_op_pos = chunk.instructions.items.len;
         try chunk.debug_markers.append(self.alloc, .{ .file_index = @intCast(token.file_index), .line = @intCast(token.line) });
         try chunk.instructions.append(self.alloc, @intFromEnum(op));
     }

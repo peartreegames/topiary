@@ -123,6 +123,12 @@ pub const Parser = struct {
             .@"return" => try self.returnStatement(),
             .@"break" => try self.breakStatement(),
             .@"continue" => try self.continueStatement(),
+            .comment => .{
+                .token = self.current_token,
+                .type = .{
+                    .comment = self.file.source.?[self.current_token.start..self.current_token.end],
+                },
+            },
             .left_brace => .{
                 .token = self.current_token,
                 .type = .{
@@ -145,10 +151,29 @@ pub const Parser = struct {
         const path = try self.getStringValue();
 
         if (self.file.path.len == 0) return self.fail("Cannot include. Current file path not set", start, .{});
-        const full_path = try std.fs.path.resolve(self.allocator, &.{ self.file.dir_name, path });
+
+        // Resolve the include path relative to the current file's directory,
+        // then normalize to be relative to the module root directory.
+        // This ensures consistent keys in the includes map regardless of
+        // which file the include appears in.
+        const current_file_dir = if (self.file.module.dir_path.len > 0)
+            try std.fs.path.resolve(self.allocator, &.{ self.file.module.dir_path, self.file.dir_name })
+        else
+            try self.allocator.dupe(u8, self.file.dir_name);
+        defer self.allocator.free(current_file_dir);
+
+        const full_path = try std.fs.path.resolve(self.allocator, &.{ current_file_dir, path });
         defer self.allocator.free(full_path);
 
-        if (self.file.module.includes.get(full_path)) |f| {
+        // Make path relative to module root for consistent storage
+        const rel_path = if (self.file.module.dir_path.len > 0)
+            std.fs.path.relative(self.allocator, self.file.module.dir_path, full_path) catch full_path
+        else
+            full_path;
+        const free_rel = rel_path.ptr != full_path.ptr;
+        defer if (free_rel) self.allocator.free(rel_path);
+
+        if (self.file.module.includes.get(rel_path)) |f| {
             return .{
                 .token = start,
                 .type = .{
@@ -157,7 +182,7 @@ pub const Parser = struct {
             };
         }
 
-        const file = self.file.module.addFileAtPath(full_path) catch |err| {
+        const file = self.file.module.addFileAtPath(rel_path) catch |err| {
             return self.fail("Could not create include file '{s}': {}", self.current_token, .{ path, err });
         };
         file.loadSource() catch |err| {

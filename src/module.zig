@@ -20,6 +20,7 @@ pub const Module = struct {
     errors: CompilerErrors,
     entry: *File,
     dir: fs.Dir,
+    dir_path: []const u8,
     includes: std.StringArrayHashMap(*File),
 
     pub fn init(allocator: std.mem.Allocator, entry_path: []const u8) !*Module {
@@ -30,6 +31,7 @@ pub const Module = struct {
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
             .dir = try std.fs.openDirAbsolute(dir_name, .{}),
+            .dir_path = try allocator.dupe(u8, dir_name),
             .entry = undefined,
             .includes = std.StringArrayHashMap(*File).init(allocator),
             .errors = CompilerErrors.init(allocator),
@@ -46,6 +48,7 @@ pub const Module = struct {
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
             .dir = undefined,
+            .dir_path = "",
             .entry = undefined,
             .includes = std.StringArrayHashMap(*File).init(allocator),
             .errors = CompilerErrors.init(allocator),
@@ -91,6 +94,7 @@ pub const Module = struct {
     pub fn deinit(self: *Module) void {
         self.errors.deinit();
         self.includes.deinit();
+        if (self.dir_path.len > 0) self.allocator.free(self.dir_path);
         var arena = self.arena;
         arena.deinit();
         self.allocator.destroy(self);
