@@ -127,6 +127,7 @@ test "Lexer Check supported tokens" {
         .{ .token_type = .comma, .start = 286, .end = 286, .line = 26, .column = 9, .file_index = 0 },
         .{ .token_type = .number, .start = 288, .end = 289, .line = 26, .column = 11, .file_index = 0 },
         .{ .token_type = .right_brace, .start = 289, .end = 289, .line = 26, .column = 12, .file_index = 0 },
+        .{ .token_type = .comment, .start = 292, .end = 302, .line = 27, .column = 3, .file_index = 0 },
         .{ .token_type = .class, .start = 304, .end = 309, .line = 28, .column = 3, .file_index = 0 },
         .{ .token_type = .identifier, .start = 310, .end = 321, .line = 28, .column = 9, .file_index = 0 },
         .{ .token_type = .left_brace, .start = 322, .end = 322, .line = 28, .column = 21, .file_index = 0 },

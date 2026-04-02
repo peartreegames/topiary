@@ -262,21 +262,47 @@ pub const Compiler = struct {
         old_scope.destroy();
     }
 
+    fn resolveForkName(self: *Compiler, name: ?[]const u8) Error![]const u8 {
+        if (name) |n| return self.alloc.dupe(u8, n);
+        const current_depth = self.anon_counters.items.len - 1;
+        const count = self.anon_counters.items[current_depth];
+        const fork_name = try std.fmt.allocPrint(self.alloc, "_{d}", .{count});
+        self.anon_counters.items[current_depth] += 1;
+        return fork_name;
+    }
+
+    fn pushPathScope(self: *Compiler, name: []const u8) Error!void {
+        try self.path_stack.append(self.alloc, name);
+        try self.anon_counters.append(self.alloc, 0);
+    }
+
+    fn popPathScope(self: *Compiler) void {
+        _ = self.path_stack.pop();
+        _ = self.anon_counters.pop();
+    }
+
+    const IncludeResult = struct {
+        file: *File,
+        tree: []const Statement,
+    };
+
+    fn resolveInclude(self: *Compiler, name: []const u8, token: Token) Error!?IncludeResult {
+        const file = self.module.includes.get(name) orelse
+            return self.fail("Unknown include file {s}", token, .{name});
+        if (self.emitted_files.contains(name)) return null;
+        try self.emitted_files.put(self.alloc, name, {});
+        const tree = file.tree orelse return Error.NotInitialized;
+        return .{ .file = file, .tree = tree.root };
+    }
+
     fn prepass(self: *Compiler, stmt: Statement) Error!void {
         switch (stmt.type) {
             .include => |i| {
+                const result = try self.resolveInclude(i, stmt.token) orelse return;
                 const tmp = self.current_file;
                 defer self.current_file = tmp;
-
-                const file = self.module.includes.get(i) orelse
-                    return self.fail("Unknown include file {s}", stmt.token, .{i});
-
-                if (self.emitted_files.contains(i)) return;
-                try self.emitted_files.put(self.alloc, i, {});
-
-                self.current_file = file;
-                const tree = file.tree orelse return Error.NotInitialized;
-                for (tree.root) |s| try self.prepass(s);
+                self.current_file = result.file;
+                for (result.tree) |s| try self.prepass(s);
             },
             .function => |f| {
                 const full_name = try self.getQualifiedName(f.name);
@@ -299,31 +325,18 @@ pub const Compiler = struct {
             .bough => |b| {
                 const full_name = try self.getQualifiedName(b.name);
                 self.registerAnchor(full_name) catch |err| return self.fail("Could not register anchor {s}: {t}", stmt.token, .{ b.name, err });
-                try self.path_stack.append(self.alloc, b.name);
-                try self.anon_counters.append(self.alloc, 0);
-                defer _ = self.path_stack.pop();
-                defer _ = self.anon_counters.pop();
+                try self.pushPathScope(b.name);
+                defer self.popPathScope();
                 for (b.body) |s| try self.prepass(s);
             },
             .fork => |f| {
-                var fork_name: []const u8 = undefined;
-                if (f.name) |name| {
-                    fork_name = try self.alloc.dupe(u8, name);
-                } else {
-                    const current_depth = self.anon_counters.items.len - 1;
-                    const count = self.anon_counters.items[current_depth];
-                    fork_name = try std.fmt.allocPrint(self.alloc, "_{d}", .{count});
-                    self.anon_counters.items[current_depth] += 1;
-                }
-
+                const fork_name = try self.resolveForkName(f.name);
                 defer self.alloc.free(fork_name);
 
                 const full_name = try self.getQualifiedName(fork_name);
                 self.registerAnchor(full_name) catch |err| return self.fail("Could not register anchor {s}: {t}", stmt.token, .{ fork_name, err });
-                try self.path_stack.append(self.alloc, fork_name);
-                try self.anon_counters.append(self.alloc, 0);
-                defer _ = self.path_stack.pop();
-                defer _ = self.anon_counters.pop();
+                try self.pushPathScope(fork_name);
+                defer self.popPathScope();
 
                 for (f.body) |s| try self.prepass(s);
             },
@@ -355,19 +368,11 @@ pub const Compiler = struct {
         const token = stmt.token;
         switch (stmt.type) {
             .include => |i| {
+                const result = try self.resolveInclude(i, stmt.token) orelse return;
                 const tmp_file = self.current_file;
                 defer self.current_file = tmp_file;
-
-                const file = self.module.includes.get(i) orelse
-                    return self.fail("Unknown include file {s}", stmt.token, .{i});
-
-                if (self.emitted_files.contains(i)) return;
-                try self.emitted_files.put(self.alloc, i, {});
-
-                self.current_file = file;
-
-                const tree = file.tree orelse return Error.NotInitialized;
-                for (tree.root) |s| try self.compileStatement(s);
+                self.current_file = result.file;
+                for (result.tree) |s| try self.compileStatement(s);
             },
             .@"if" => |i| {
                 try self.compileExpression(i.condition);
@@ -579,24 +584,14 @@ pub const Compiler = struct {
                 try self.replaceConstant(full_name, .{ .obj = obj }, token);
             },
             .fork => |f| {
-                var fork_name: []const u8 = undefined;
-                if (f.name) |name| {
-                    fork_name = try self.alloc.dupe(u8, name);
-                } else {
-                    const current_depth = self.anon_counters.items.len - 1;
-                    const count = self.anon_counters.items[current_depth];
-                    fork_name = try std.fmt.allocPrint(self.alloc, "_{d}", .{count});
-                    self.anon_counters.items[current_depth] += 1;
-                }
+                const fork_name = try self.resolveForkName(f.name);
                 defer self.alloc.free(fork_name);
 
                 const path = try self.getQualifiedName(fork_name);
                 defer self.alloc.free(path);
 
-                try self.path_stack.append(self.alloc, fork_name);
-                try self.anon_counters.append(self.alloc, 0);
-                defer _ = self.path_stack.pop();
-                defer _ = self.anon_counters.pop();
+                try self.pushPathScope(fork_name);
+                defer self.popPathScope();
 
                 const start_pos = self.instructionPos();
                 const anchor_idx = try self.resolveConstant(path);
@@ -677,10 +672,8 @@ pub const Compiler = struct {
                 const full_name = try self.getQualifiedName(b.name);
                 defer self.alloc.free(full_name);
 
-                try self.path_stack.append(self.alloc, b.name);
-                try self.anon_counters.append(self.alloc, 0);
-                defer _ = self.path_stack.pop();
-                defer _ = self.anon_counters.pop();
+                try self.pushPathScope(b.name);
+                defer self.popPathScope();
 
                 try self.writeOp(.jump, token);
                 const start_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
@@ -1011,10 +1004,10 @@ pub const Compiler = struct {
                                 }
                             }
                             try self.compileExpression(bin.right);
+                            try self.writeOp(.dup, token);
                             try self.compileExpression(bin.left);
                             try self.removeLast(.index);
                             try self.writeOp(.set_property, token);
-                            try self.compileExpression(bin.left);
                             return;
                         },
                         else => unreachable,
@@ -1064,10 +1057,10 @@ pub const Compiler = struct {
                                         }
                                     }
                                 }
+                                try self.writeOp(.dup, token);
                                 try self.compileExpression(bin.left);
                                 try self.removeLast(.index);
                                 try self.writeOp(.set_property, token);
-                                try self.compileExpression(bin.left);
                                 return;
                             },
                             else => return self.fail("Cannot assign value of type '{s}'", bin.left.token, .{@tagName(bin.left.type)}),
@@ -1407,7 +1400,7 @@ pub const Compiler = struct {
         var i: usize = 0;
         const jump = @intFromEnum(OpCode.jump);
         while (i < instructions.len) : (i += 1) {
-            if (instructions[i] == jump and std.mem.readVarInt(C.JUMP, instructions[(i + 1)..(i + @sizeOf(C.JUMP))], .little) == old_pos) {
+            if (instructions[i] == jump and std.mem.readVarInt(C.JUMP, instructions[(i + 1)..(i + 1 + @sizeOf(C.JUMP))], .little) == old_pos) {
                 var buf: [@sizeOf(C.JUMP)]u8 = undefined;
                 std.mem.writeInt(C.JUMP, buf[0..], new_pos, .little);
                 for (buf, 0..) |v, index| {

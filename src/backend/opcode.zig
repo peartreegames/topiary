@@ -3,6 +3,7 @@ const std = @import("std");
 pub const OpCode = enum(u8) {
     constant,
     pop,
+    dup,
     add,
     subtract,
     multiply,
@@ -57,6 +58,7 @@ pub const OpCode = enum(u8) {
         return switch (self) {
             .constant => "OP_CONSTANT",
             .pop => "OP_POP",
+            .dup => "OP_DUP",
             .add => "OP_ADD",
             .subtract => "OP_SUBTRACT",
             .multiply => "OP_MULTIPLY",

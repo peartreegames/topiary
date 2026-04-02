@@ -369,6 +369,10 @@ pub const Vm = struct {
                     try self.push(value);
                 },
                 .pop => _ = try self.pop(),
+                .dup => {
+                    const value = self.stack.items[self.stack.items.len - 1];
+                    try self.push(value);
+                },
                 .add => {
                     var right = try self.pop();
                     var left = try self.pop();

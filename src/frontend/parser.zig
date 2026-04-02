@@ -90,6 +90,9 @@ pub const Parser = struct {
     pub fn next(self: *Parser) void {
         self.current_token = self.peek_token;
         self.peek_token = self.lexer.next(self.file_index);
+        while (self.peek_token.token_type == .comment) {
+            self.peek_token = self.lexer.next(self.file_index);
+        }
     }
 
     fn consumeIdentifier(self: *Parser) ![]const u8 {
@@ -123,11 +126,9 @@ pub const Parser = struct {
             .@"return" => try self.returnStatement(),
             .@"break" => try self.breakStatement(),
             .@"continue" => try self.continueStatement(),
-            .comment => .{
-                .token = self.current_token,
-                .type = .{
-                    .comment = self.file.source.?[self.current_token.start..self.current_token.end],
-                },
+            .comment => {
+                self.next();
+                return self.statement();
             },
             .left_brace => .{
                 .token = self.current_token,
