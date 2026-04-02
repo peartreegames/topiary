@@ -13,10 +13,10 @@ const UUID = @import("../utils/index.zig").UUID;
 
 const Precedence = enum(u4) {
     lowest,
+    assign,
     range,
     @"or",
     @"and",
-    assign,
     equals,
     less_greater,
     sum,
@@ -35,7 +35,7 @@ fn findPrecedence(token_type: TokenType) Precedence {
         .dot_dot => .range,
         .@"or" => .@"or",
         .@"and" => .@"and",
-        .equal, .plus_equal, .minus_equal, .slash_equal, .star_equal => .assign,
+        .equal, .plus_equal, .minus_equal, .slash_equal, .star_equal, .percent_equal => .assign,
         .equal_equal, .bang_equal => .equals,
         .less, .greater, .less_equal, .greater_equal => .less_greater,
         .plus, .minus => .sum,
@@ -56,6 +56,7 @@ pub const Parser = struct {
     file_index: usize = 0,
     depth: usize = 0,
     mode: Mode = .standard,
+    had_error: bool = false,
 
     pub const Error = error{
         ParserError,
@@ -78,8 +79,39 @@ pub const Parser = struct {
     }
 
     inline fn fail(self: *Parser, comptime msg: []const u8, token: Token, args: anytype) Error {
+        self.had_error = true;
         try self.file.module.errors.add(self.file.path, msg, token, .err, args);
         return Error.ParserError;
+    }
+
+    pub fn synchronize(self: *Parser) void {
+        while (!self.currentIs(.eof)) {
+            switch (self.current_token.token_type) {
+                .include,
+                .class,
+                .@"enum",
+                .enumseq,
+                .@"var",
+                .@"const",
+                .bough,
+                .divert,
+                .colon,
+                .tilde,
+                .fork,
+                .@"extern",
+                .@"fn",
+                .@"for",
+                .fin,
+                .@"if",
+                .@"switch",
+                .@"while",
+                .@"return",
+                .left_brace,
+                .comment,
+                => return,
+                else => self.next(),
+            }
+        }
     }
 
     fn print(self: *Parser, msg: []const u8) void {
@@ -429,13 +461,36 @@ pub const Parser = struct {
             else => return self.fail("Unexpected token in expression: {}", self.current_token, .{self.current_token.token_type}),
         };
 
-        const can_not_assign = self.peek_token.token_type == .equal and left.type != .identifier;
-        if (can_not_assign) return self.fail("Cannot assign to {}", self.current_token, .{left.token.token_type});
         while (prec.val() < findPrecedence(self.peek_token.token_type).val()) {
             left = switch (self.peek_token.token_type) {
                 .left_paren => try self.callExpression(left),
                 .left_bracket, .dot => try self.indexExpression(left),
                 .dot_dot => try self.range(left),
+                .equal,
+                .plus_equal,
+                .minus_equal,
+                .slash_equal,
+                .star_equal,
+                .percent_equal,
+                => blk: {
+                    if (left.type != .identifier and left.type != .indexer)
+                        return self.fail("Cannot assign to {}", left.token, .{left.token.token_type});
+                    self.next();
+                    const start_token = self.current_token;
+                    const op = ast.BinaryOp.fromToken(self.current_token);
+                    self.next();
+                    const allocated = try self.allocate(left);
+                    break :blk .{
+                        .token = start_token,
+                        .type = .{
+                            .binary = .{
+                                .operator = op,
+                                .left = allocated,
+                                .right = try self.allocate(try self.expression(.lowest)),
+                            },
+                        },
+                    };
+                },
                 .plus,
                 .minus,
                 .slash,
@@ -449,12 +504,6 @@ pub const Parser = struct {
                 .greater_equal,
                 .@"and",
                 .@"or",
-                .equal,
-                .plus_equal,
-                .minus_equal,
-                .slash_equal,
-                .star_equal,
-                .percent_equal,
                 => blk: {
                     self.next();
                     const start_token = self.current_token;

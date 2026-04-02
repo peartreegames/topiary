@@ -156,13 +156,21 @@ pub const File = struct {
         var nodes: std.ArrayList(Statement) = .empty;
         errdefer nodes.deinit(alloc);
 
-        while (!parser.currentIs(.eof)) : (parser.next()) {
-            try nodes.append(alloc, try parser.statement());
+        while (!parser.currentIs(.eof)) {
+            if (parser.statement()) |stmt| {
+                try nodes.append(alloc, stmt);
+                parser.next();
+            } else |err| switch (err) {
+                error.ParserError => parser.synchronize(),
+                else => return err,
+            }
         }
 
         self.tree = Tree{
             .root = try nodes.toOwnedSlice(alloc),
         };
+
+        if (parser.had_error) return error.ParserError;
     }
 
     pub fn unloadTree(self: *File) void {

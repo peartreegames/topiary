@@ -38,6 +38,191 @@ pub fn parseSource(source: []const u8) !*Module {
     return mod;
 }
 
+fn parseSourceClean(source: []const u8) !*Module {
+    const mod = try Module.initEmpty(allocator);
+    errdefer mod.deinit();
+    const file = try mod.arena.allocator().create(File);
+    file.* = .{
+        .module = mod,
+        .path = "_test_",
+        .name = "",
+        .dir_name = ".",
+        .source = source,
+    };
+    mod.entry = file;
+
+    file.buildTree() catch |err| {
+        return err;
+    };
+    return mod;
+}
+
+fn expectParseError(source: []const u8) !*Module {
+    const mod = try Module.initEmpty(allocator);
+    errdefer mod.deinit();
+    const file = try mod.arena.allocator().create(File);
+    file.* = .{
+        .module = mod,
+        .path = "_test_",
+        .name = "",
+        .dir_name = ".",
+        .source = source,
+    };
+    mod.entry = file;
+
+    if (file.buildTree()) {
+        return error.TestExpectedError;
+    } else |_| {}
+    return mod;
+}
+
+test "Assignment precedence: assignment binds lower than or" {
+    const mod = try parseSourceClean(
+        \\ var x = true or false
+    );
+    defer mod.deinit();
+    const tree = mod.entry.tree.?;
+    // The initializer should be a binary `or` expression, not just `true`
+    const init = tree.root[0].type.variable.initializer;
+    try testing.expect(init.type.binary.operator == .@"or");
+}
+
+test "Assignment precedence: assignment binds lower than and" {
+    const mod = try parseSourceClean(
+        \\ var x = true and false
+    );
+    defer mod.deinit();
+    const tree = mod.entry.tree.?;
+    const init = tree.root[0].type.variable.initializer;
+    try testing.expect(init.type.binary.operator == .@"and");
+}
+
+test "Assignment precedence: chained assignment is right-associative" {
+    const mod = try parseSourceClean(
+        \\ var a = 0
+        \\ var b = 0
+        \\ a = b = 5
+    );
+    defer mod.deinit();
+    const tree = mod.entry.tree.?;
+    // a = (b = 5): outer assign, right side is also assign
+    const outer = tree.root[2].type.expression.type.binary;
+    try testing.expect(outer.operator == .assign);
+    try testing.expectEqualStrings("a", outer.left.type.identifier);
+    try testing.expect(outer.right.type.binary.operator == .assign);
+    try testing.expectEqualStrings("b", outer.right.type.binary.left.type.identifier);
+    try testing.expect(outer.right.type.binary.right.type.number == 5);
+}
+
+test "Assignment precedence: property assignment works" {
+    const mod = try parseSourceClean(
+        \\ class Obj { x = 0 }
+        \\ var o = new Obj{}
+        \\ o.x = 10
+    );
+    defer mod.deinit();
+    const tree = mod.entry.tree.?;
+    const assign = tree.root[2].type.expression.type.binary;
+    try testing.expect(assign.operator == .assign);
+    try testing.expect(assign.left.type == .indexer);
+    try testing.expect(assign.right.type.number == 10);
+}
+
+test "Assignment precedence: compound assignment to identifier" {
+    const mod = try parseSourceClean(
+        \\ var x = 10
+        \\ x += 5
+    );
+    defer mod.deinit();
+    const tree = mod.entry.tree.?;
+    const assign = tree.root[1].type.expression.type.binary;
+    try testing.expect(assign.operator == .assign_add);
+    try testing.expectEqualStrings("x", assign.left.type.identifier);
+    try testing.expect(assign.right.type.number == 5);
+}
+
+test "Assignment precedence: cannot assign to non-lvalue" {
+    const mod = try expectParseError(
+        \\ 5 = 10
+    );
+    defer mod.deinit();
+    try testing.expect(mod.errors.list.items.len > 0);
+}
+
+test "Error recovery: reports multiple errors with messages" {
+    const mod = try expectParseError(
+        \\ var x = +
+        \\ var y = 10
+        \\ var z = *
+    );
+    defer mod.deinit();
+    const errors = mod.errors.list.items;
+    // Should report exactly 2 errors (one for each invalid expression)
+    try testing.expectEqual(2, errors.len);
+    // Both errors should identify the unexpected token
+    try testing.expect(std.mem.indexOf(u8, errors[0].fmt, "Unexpected token") != null);
+    try testing.expect(std.mem.indexOf(u8, errors[1].fmt, "Unexpected token") != null);
+    // Errors should reference the correct tokens
+    try testing.expect(std.mem.indexOf(u8, errors[0].fmt, "plus") != null);
+    try testing.expect(std.mem.indexOf(u8, errors[1].fmt, "star") != null);
+}
+
+test "Error recovery: valid statements still parsed after error" {
+    const mod = try expectParseError(
+        \\ var x = +
+        \\ var y = 10
+    );
+    defer mod.deinit();
+    const errors = mod.errors.list.items;
+    try testing.expectEqual(1, errors.len);
+    try testing.expect(std.mem.indexOf(u8, errors[0].fmt, "Unexpected token") != null);
+
+    const tree = mod.entry.tree.?;
+    // The valid `var y = 10` should have been parsed despite the error in var x
+    try testing.expect(tree.root.len >= 1);
+    const last = tree.root[tree.root.len - 1];
+    try testing.expect(last.type == .variable);
+    try testing.expectEqualStrings("y", last.type.variable.name);
+    try testing.expect(last.type.variable.initializer.type.number == 10);
+}
+
+test "Error recovery: continues after multiple bad statements" {
+    const mod = try expectParseError(
+        \\ var a = @
+        \\ var b = @
+        \\ var c = 42
+    );
+    defer mod.deinit();
+    const errors = mod.errors.list.items;
+    try testing.expectEqual(2, errors.len);
+    // Both errors should be on different lines
+    try testing.expect(errors[0].token.line != errors[1].token.line);
+
+    const tree = mod.entry.tree.?;
+    // var c = 42 should still be parsed
+    const last = tree.root[tree.root.len - 1];
+    try testing.expect(last.type == .variable);
+    try testing.expectEqualStrings("c", last.type.variable.name);
+}
+
+test "Error recovery: assignment to non-lvalue reports error" {
+    const mod = try expectParseError(
+        \\ var x = 1
+        \\ 5 = 10
+        \\ var y = 2
+    );
+    defer mod.deinit();
+    const errors = mod.errors.list.items;
+    try testing.expectEqual(1, errors.len);
+    try testing.expect(std.mem.indexOf(u8, errors[0].fmt, "Cannot assign") != null);
+
+    const tree = mod.entry.tree.?;
+    // Both valid var declarations should be in the tree
+    try testing.expectEqual(2, tree.root.len);
+    try testing.expectEqualStrings("x", tree.root[0].type.variable.name);
+    try testing.expectEqualStrings("y", tree.root[1].type.variable.name);
+}
+
 test "Parse Include" {
     const input =
         \\ include "./globals.topi"
