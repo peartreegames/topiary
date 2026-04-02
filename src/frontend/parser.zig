@@ -185,29 +185,13 @@ pub const Parser = struct {
 
         if (self.file.path.len == 0) return self.fail("Cannot include. Current file path not set", start, .{});
 
-        // Resolve the include path relative to the current file's directory,
-        // then normalize to be relative to the module root directory.
-        // This ensures consistent keys in the includes map regardless of
-        // which file the include appears in.
-        const current_file_dir = if (self.file.module.dir_path.len > 0)
-            try std.fs.path.resolve(self.allocator, &.{ self.file.module.dir_path, self.file.dir_name })
-        else
-            try self.allocator.dupe(u8, self.file.dir_name);
-        defer self.allocator.free(current_file_dir);
+        // Resolve path to module-root-relative form.
+        // The file should already exist in module.includes from the resolution phase.
+        const resolved = self.file.module.resolveIncludePath(self.file, path) catch {
+            return self.fail("Could not resolve include path '{s}'", start, .{path});
+        };
 
-        const full_path = try std.fs.path.resolve(self.allocator, &.{ current_file_dir, path });
-        defer self.allocator.free(full_path);
-
-        // Make path relative to module root for consistent storage
-        const rel_path = if (self.file.module.dir_path.len > 0)
-            std.fs.path.relative(self.allocator, self.file.module.dir_path, full_path) catch full_path
-        else
-            full_path;
-        const free_rel = rel_path.ptr != full_path.ptr;
-        defer if (free_rel) self.allocator.free(rel_path);
-
-        if (self.file.module.includes.get(rel_path)) |f| {
-            try self.file.module.errors.add(self.file.path, "'{s}' already included, skipping", start, .info, .{rel_path});
+        if (self.file.module.includes.get(resolved)) |f| {
             return .{
                 .token = start,
                 .type = .{
@@ -216,22 +200,7 @@ pub const Parser = struct {
             };
         }
 
-        const file = self.file.module.addFileAtPath(rel_path) catch |err| {
-            return self.fail("Could not create include file '{s}': {}", self.current_token, .{ path, err });
-        };
-        file.loadSource() catch |err| {
-            return self.fail("Could not load include file '{s}': {}", self.current_token, .{ path, err });
-        };
-        file.buildTree() catch |err| {
-            return self.fail("Could not build include file tree '{s}': {}", self.current_token, .{ path, err });
-        };
-
-        return .{
-            .token = start,
-            .type = .{
-                .include = file.path,
-            },
-        };
+        return self.fail("Include file '{s}' not found", start, .{resolved});
     }
 
     fn classDeclaration(self: *Parser) Error!Statement {

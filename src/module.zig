@@ -65,13 +65,16 @@ pub const Module = struct {
     }
 
     pub fn generateBytecode(self: *Module, allocator: std.mem.Allocator) !Bytecode {
+        // Phase 1: Resolve all includes and load sources
+        try self.resolveIncludes();
+
+        // Phase 2: Build parse trees for all files
         var it = self.includes.iterator();
         while (it.next()) |kvp| {
-            const file = kvp.value_ptr.*;
-            try file.loadSource();
-            try file.buildTree();
+            try kvp.value_ptr.*.buildTree();
         }
 
+        // Phase 3: Compile
         var compiler = try Compiler.init(allocator, self);
         defer compiler.deinit();
 
@@ -79,6 +82,67 @@ pub const Module = struct {
             return e;
         };
         return try compiler.bytecode();
+    }
+
+    /// Resolve all include directives transitively by scanning tokens.
+    /// Loads source for each discovered file. After this completes,
+    /// all files are in self.includes with their sources loaded.
+    pub fn resolveIncludes(self: *Module) !void {
+        var i: usize = 0;
+        while (i < self.includes.count()) : (i += 1) {
+            const file = self.includes.values()[i];
+            try file.loadSource();
+            const paths = try self.scanForIncludes(file);
+            for (paths) |raw_path| {
+                const resolved = try self.resolveIncludePath(file, raw_path);
+                _ = try self.addFileAtPath(resolved);
+            }
+        }
+    }
+
+    /// Lightweight lexer scan that finds all include "path" patterns
+    /// without doing a full parse.
+    fn scanForIncludes(self: *Module, file: *File) ![][]const u8 {
+        const source = file.source orelse return &.{};
+        var lexer = Lexer.init(source, 0);
+        var paths: std.ArrayList([]const u8) = .empty;
+        const alloc = self.arena.allocator();
+
+        while (true) {
+            const tok = lexer.next(0);
+            if (tok.token_type == .eof) break;
+            if (tok.token_type == .include) {
+                const next_tok = lexer.next(0);
+                if (next_tok.token_type == .string) {
+                    try paths.append(alloc, source[next_tok.start..next_tok.end]);
+                }
+            }
+        }
+        return try paths.toOwnedSlice(alloc);
+    }
+
+    /// Resolve an include path relative to the including file's directory,
+    /// then normalize to be relative to the module root directory.
+    pub fn resolveIncludePath(self: *Module, including_file: *File, raw_path: []const u8) ![]const u8 {
+        const alloc = self.arena.allocator();
+
+        if (self.dir_path.len > 0) {
+            const current_file_dir = try std.fs.path.resolve(alloc, &.{ self.dir_path, including_file.dir_name });
+            defer alloc.free(current_file_dir);
+
+            const full_path = try std.fs.path.resolve(alloc, &.{ current_file_dir, raw_path });
+            defer alloc.free(full_path);
+
+            return std.fs.path.relative(alloc, self.dir_path, full_path) catch
+                try alloc.dupe(u8, full_path);
+        } else {
+            // initEmpty case (tests): resolve relative to dir_name directly
+            const current_file_dir = including_file.dir_name;
+            const full_path = try std.fs.path.resolve(alloc, &.{ current_file_dir, raw_path });
+            defer alloc.free(full_path);
+
+            return try alloc.dupe(u8, full_path);
+        }
     }
 
     pub fn writeErrors(self: *Module, writer: *std.Io.Writer) !void {
