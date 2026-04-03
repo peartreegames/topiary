@@ -437,13 +437,22 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                 if (std.fs.path.dirname(args.output.?)) |dir_name| {
                     try dir.makePath(dir_name);
                 }
+
+                // Read existing CSV before truncating for merge
+                const existing_csv: ?[]const u8 = blk: {
+                    const existing = dir.openFile(args.output.?, .{}) catch break :blk null;
+                    defer existing.close();
+                    break :blk existing.readToEndAlloc(alloc, std.math.maxInt(u32)) catch null;
+                };
+                defer if (existing_csv) |csv| alloc.free(csv);
+
                 const file = try dir.createFile(args.output.?, .{});
                 defer file.close();
 
                 var buffer: [1028]u8 = undefined;
                 var file_writer = file.writer(&buffer);
                 const writer = &file_writer.interface;
-                Locale.exportFileAtPath(full_path, writer, alloc, args.lang) catch |err| {
+                Locale.exportFileAtPathWithMerge(full_path, writer, alloc, args.lang, existing_csv) catch |err| {
                     if (args.verbose) return err;
                     return;
                 };

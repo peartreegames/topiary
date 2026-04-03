@@ -185,6 +185,47 @@ pub const Locale = struct {
         }
     };
 
+    const MergeExportContext = struct {
+        writer: *std.Io.Writer,
+        index: *const CsvIndex,
+
+        pub const Error = error{WriteFailure};
+
+        fn onLeaf(ctx: MergeExportContext, stmt: Statement) @This().Error!void {
+            const id: UUID.ID = switch (stmt.type) {
+                .choice => |c| c.id,
+                .dialogue => |d| d.id,
+                else => unreachable,
+            };
+            if (UUID.isEmpty(id) or UUID.isAuto(id)) return error.WriteFailure;
+
+            // Write base 4 columns (no trailing newline)
+            switch (stmt.type) {
+                .choice => |c| {
+                    const str = c.content.type.string;
+                    ctx.writer.print("\"{s}\",\"CHOICE\",\"{s}\",\"{s}\"", .{ &c.id, str.raw, str.value }) catch return error.WriteFailure;
+                },
+                .dialogue => |d| {
+                    const str = d.content.type.string;
+                    ctx.writer.print("\"{s}\",\"{s}\",\"{s}\",\"{s}\"", .{ &d.id, d.speaker orelse "NONE", str.raw, str.value }) catch return error.WriteFailure;
+                },
+                else => unreachable,
+            }
+
+            // Write extra translation columns
+            if (ctx.index.rows.get(id)) |extra_values| {
+                for (extra_values) |val| {
+                    ctx.writer.print(",\"{s}\"", .{val}) catch return error.WriteFailure;
+                }
+            } else {
+                for (0..ctx.index.extra_headers.len) |_| {
+                    ctx.writer.writeAll(",\"\"") catch return error.WriteFailure;
+                }
+            }
+            ctx.writer.writeAll("\n") catch return error.WriteFailure;
+        }
+    };
+
     pub fn exportFileAtPath(full_path: []const u8, writer: *std.Io.Writer, allocator: std.mem.Allocator, base_lang: []const u8) !void {
         var mod = try Module.init(allocator, full_path);
         defer mod.deinit();
@@ -193,13 +234,40 @@ pub const Locale = struct {
         try exportFile(mod.entry, writer, base_lang);
     }
 
-    // Basic implementation
-    // Ideally this would check for existing ids already in the file
-    // and only update the raw/base values, rather than replace the entire file
+    pub fn exportFileAtPathWithMerge(full_path: []const u8, writer: *std.Io.Writer, allocator: std.mem.Allocator, base_lang: []const u8, existing_csv: ?[]const u8) !void {
+        var mod = try Module.init(allocator, full_path);
+        defer mod.deinit();
+        try mod.entry.loadSource();
+        try mod.entry.buildTree();
+        if (existing_csv) |csv| {
+            try exportFileWithMerge(mod.entry, writer, base_lang, csv, allocator);
+        } else {
+            try exportFile(mod.entry, writer, base_lang);
+        }
+    }
+
     pub fn exportFile(file: *File, writer: *std.Io.Writer, base_lang: []const u8) !void {
         const tree = file.tree orelse return error.NotInitialized;
         try writer.print("\"id\",\"speaker\",\"raw\",\"{s}\"\n", .{base_lang});
         try walkLocalizable(tree.root, ExportContext{ .writer = writer }, ExportContext.onLeaf);
+    }
+
+    pub fn exportFileWithMerge(file: *File, writer: *std.Io.Writer, base_lang: []const u8, existing_csv: []const u8, allocator: std.mem.Allocator) !void {
+        const tree = file.tree orelse return error.NotInitialized;
+        var index = try CsvIndex.init(allocator, existing_csv);
+        defer index.deinit();
+
+        // Write header: base columns + extra translation columns
+        try writer.print("\"id\",\"speaker\",\"raw\",\"{s}\"", .{base_lang});
+        for (index.extra_headers) |h| {
+            try writer.print(",\"{s}\"", .{h});
+        }
+        try writer.writeAll("\n");
+
+        try walkLocalizable(tree.root, MergeExportContext{
+            .writer = writer,
+            .index = &index,
+        }, MergeExportContext.onLeaf);
     }
 
     fn stripBom(content: []const u8) []const u8 {
@@ -232,6 +300,113 @@ pub const Locale = struct {
         return null;
     }
 
+    const CsvCellIterator = struct {
+        line: []const u8,
+        pos: usize,
+
+        fn init(line: []const u8) CsvCellIterator {
+            return .{ .line = line, .pos = 0 };
+        }
+
+        /// Returns the next cell content. For quoted cells, returns content
+        /// between outer quotes (with "" escapes preserved). For unquoted
+        /// cells, returns raw content. Returns null when exhausted.
+        fn next(self: *CsvCellIterator) ?[]const u8 {
+            if (self.pos >= self.line.len) return null;
+
+            if (self.line[self.pos] == '"') {
+                self.pos += 1; // skip opening quote
+                const content_start = self.pos;
+                while (self.pos < self.line.len) : (self.pos += 1) {
+                    if (self.line[self.pos] == '"') {
+                        if (self.pos + 1 < self.line.len and self.line[self.pos + 1] == '"') {
+                            self.pos += 1; // skip escaped quote
+                        } else {
+                            break; // closing quote
+                        }
+                    }
+                }
+                const content_end = self.pos;
+                if (self.pos < self.line.len) self.pos += 1; // skip closing quote
+                if (self.pos < self.line.len and self.line[self.pos] == ',') self.pos += 1;
+                return self.line[content_start..content_end];
+            } else {
+                const start = self.pos;
+                while (self.pos < self.line.len and self.line[self.pos] != ',') : (self.pos += 1) {}
+                const end = self.pos;
+                if (self.pos < self.line.len and self.line[self.pos] == ',') self.pos += 1;
+                return self.line[start..end];
+            }
+        }
+    };
+
+    const CsvIndex = struct {
+        extra_headers: []const []const u8,
+        rows: std.AutoHashMapUnmanaged(UUID.ID, []const []const u8),
+        allocator: std.mem.Allocator,
+
+        fn init(allocator: std.mem.Allocator, csv_content: []const u8) !CsvIndex {
+            const content = stripBom(csv_content);
+            var pos: usize = 0;
+
+            const header_line = nextCsvLine(content, &pos) orelse return error.InvalidCsv;
+            var headers: std.ArrayList([]const u8) = .empty;
+            defer headers.deinit(allocator);
+
+            var header_iter = CsvCellIterator.init(header_line);
+            var col: usize = 0;
+            while (header_iter.next()) |cell| : (col += 1) {
+                if (col < 4) continue; // skip id, speaker, raw, base_lang
+                try headers.append(allocator, cell);
+            }
+
+            var rows: std.AutoHashMapUnmanaged(UUID.ID, []const []const u8) = .empty;
+            errdefer {
+                var it = rows.iterator();
+                while (it.next()) |entry| allocator.free(entry.value_ptr.*);
+                rows.deinit(allocator);
+            }
+
+            while (nextCsvLine(content, &pos)) |line| {
+                var cell_iter = CsvCellIterator.init(line);
+                var cell_idx: usize = 0;
+                var id: ?UUID.ID = null;
+                var extra_values: std.ArrayList([]const u8) = .empty;
+                defer extra_values.deinit(allocator);
+
+                while (cell_iter.next()) |cell| : (cell_idx += 1) {
+                    if (cell_idx == 0) {
+                        if (cell.len >= UUID.Size) {
+                            id = UUID.fromString(cell[0..UUID.Size]);
+                        }
+                    } else if (cell_idx >= 4) {
+                        try extra_values.append(allocator, cell);
+                    }
+                }
+
+                if (id) |valid_id| {
+                    while (extra_values.items.len < headers.items.len) {
+                        try extra_values.append(allocator, "");
+                    }
+                    try rows.put(allocator, valid_id, try extra_values.toOwnedSlice(allocator));
+                }
+            }
+
+            return .{
+                .extra_headers = try headers.toOwnedSlice(allocator),
+                .rows = rows,
+                .allocator = allocator,
+            };
+        }
+
+        fn deinit(self: *CsvIndex) void {
+            self.allocator.free(self.extra_headers);
+            var it = self.rows.iterator();
+            while (it.next()) |entry| self.allocator.free(entry.value_ptr.*);
+            self.rows.deinit(self.allocator);
+        }
+    };
+
     pub fn generateAtPath(
         allocator: std.mem.Allocator,
         csv_path: []const u8,
@@ -250,10 +425,10 @@ pub const Locale = struct {
         var pos: usize = 0;
         const header = nextCsvLine(content, &pos) orelse return error.InvalidCsv;
 
-        var header_it = std.mem.tokenizeAny(u8, header, ",");
+        var header_iter = CsvCellIterator.init(header);
         var col_idx: usize = 0;
-        while (header_it.next()) |h| : (col_idx += 1) {
-            const key = std.mem.trim(u8, h, "\" ");
+        while (header_iter.next()) |h| : (col_idx += 1) {
+            const key = std.mem.trim(u8, h, " ");
             if (std.mem.eql(u8, key, "id") or std.mem.eql(u8, key, "speaker") or std.mem.eql(u8, key, "raw")) continue;
             if (filter_lang) |f| if (!std.mem.eql(u8, key, f)) continue;
 
@@ -281,50 +456,21 @@ pub const Locale = struct {
         defer strings.deinit(allocator);
 
         while (nextCsvLine(content, &pos)) |line| {
+            var cell_iter = CsvCellIterator.init(line);
             var current_cell: usize = 0;
             var id_str: ?[]const u8 = null;
             var target_val: ?[]const u8 = null;
 
-            var i: usize = 0;
-            while (i < line.len) {
-                const start = i;
-                var end = i;
-                if (line[i] == '"') {
-                    i += 1;
-                    while (i < line.len) : (i += 1) {
-                        if (line[i] == '"') {
-                            // Handle escaped quotes ("") in CSV
-                            if (i + 1 < line.len and line[i + 1] == '"') {
-                                i += 1; // skip the second quote, loop advances past it
-                            } else {
-                                break; // closing quote
-                            }
-                        }
-                    }
-                    end = i;
-                    if (i < line.len) i += 1; // skip closing quote
-                } else {
-                    while (i < line.len and line[i] != ',') : (i += 1) {}
-                    end = i;
-                }
-
-                const cell = line[start..end];
-                const trimmed = std.mem.trim(u8, cell, "\" ");
-
+            while (cell_iter.next()) |cell| : (current_cell += 1) {
                 if (current_cell == 0) {
-                    if (trimmed.len >= UUID.Size) {
-                        id_str = trimmed[0..UUID.Size];
+                    if (cell.len >= UUID.Size) {
+                        id_str = cell[0..UUID.Size];
                     }
                 }
                 if (current_cell == lang_col) {
-                    target_val = trimmed;
+                    target_val = cell;
                 }
-
-                // Skip the comma for the next iteration
-                if (i < line.len and line[i] == ',') i += 1;
-                current_cell += 1;
-
-                if (id_str != null and target_val != null and current_cell > lang_col) break;
+                if (id_str != null and target_val != null and current_cell >= lang_col) break;
             }
 
             if (id_str == null or target_val == null) continue;

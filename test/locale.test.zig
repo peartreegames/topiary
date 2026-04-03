@@ -211,3 +211,110 @@ test "Localization Generate and Provider" {
         try std.testing.expectEqualSlices(u8, lp.map.get(UUID.fromString(id)).?, texts[i]);
     }
 }
+
+// Shared topi input for merge tests (same as "Export CSV Tree" test)
+const merge_topi_input =
+    \\ const num = 15
+    \\ === START {
+    \\     :: "A person approaches."@8R955KPX-2WI5R816
+    \\     :Stranger: "Hey there."@C5I6VN71-IP0HPJHE
+    \\     fork^ {
+    \\         ~ "Greet them."@JTCCIIS7-NHTNWTBL {
+    \\             :Drew: "Oh, uh, nice to meet you. My name is Drew."@8T8YW3LX-RNGWJE68
+    \\             :Drew: "Sorry, I thought you were someone I knew."@8LIQ3QJV-5U3AJJKV
+    \\             :Drew: "I'd love to stay and chat, but this is just a short demo."@YPTY00G5-1WX98ONH
+    \\         }
+    \\         ~ "Say nothing."@AEPZ4SNT-UFN9U9YW {
+    \\             :: "The person acts as though they were addressing someone else."@S6MF4G1X-34IOPNOJ
+    \\         }
+    \\     }
+    \\     :: "They walk away... Counting down from {num}"@KPTQNK2P-69OMTGXF
+    \\ }
+;
+
+test "Localization Export CSV Merge Preserves Translations" {
+    const existing_csv =
+        \\"id","speaker","raw","en","fr"
+        \\"8R955KPX-2WI5R816","NONE","A person approaches.","A person approaches.","Une personne approche."
+        \\"C5I6VN71-IP0HPJHE","Stranger","Hey there.","Hey there.","Salut."
+        \\"JTCCIIS7-NHTNWTBL","CHOICE","Greet them.","Greet them.","Les saluer."
+        \\"8T8YW3LX-RNGWJE68","Drew","Oh, uh, nice to meet you. My name is Drew.","Oh, uh, nice to meet you. My name is Drew.","Oh, euh, ravi de vous rencontrer."
+        \\"8LIQ3QJV-5U3AJJKV","Drew","Sorry, I thought you were someone I knew.","Sorry, I thought you were someone I knew.","Desole, je pensais vous connaitre."
+        \\"YPTY00G5-1WX98ONH","Drew","I'd love to stay and chat, but this is just a short demo.","I'd love to stay and chat, but this is just a short demo.","J'adorerais rester discuter."
+        \\"AEPZ4SNT-UFN9U9YW","CHOICE","Say nothing.","Say nothing.","Ne rien dire."
+        \\"S6MF4G1X-34IOPNOJ","NONE","The person acts as though they were addressing someone else.","The person acts as though they were addressing someone else.","La personne fait comme si."
+        \\"KPTQNK2P-69OMTGXF","NONE","They walk away... Counting down from {num}","They walk away... Counting down from {0}","Ils s'eloignent... Decompte depuis {0}"
+        \\
+    ;
+
+    const expected =
+        \\"id","speaker","raw","en","fr"
+        \\"8R955KPX-2WI5R816","NONE","A person approaches.","A person approaches.","Une personne approche."
+        \\"C5I6VN71-IP0HPJHE","Stranger","Hey there.","Hey there.","Salut."
+        \\"JTCCIIS7-NHTNWTBL","CHOICE","Greet them.","Greet them.","Les saluer."
+        \\"8T8YW3LX-RNGWJE68","Drew","Oh, uh, nice to meet you. My name is Drew.","Oh, uh, nice to meet you. My name is Drew.","Oh, euh, ravi de vous rencontrer."
+        \\"8LIQ3QJV-5U3AJJKV","Drew","Sorry, I thought you were someone I knew.","Sorry, I thought you were someone I knew.","Desole, je pensais vous connaitre."
+        \\"YPTY00G5-1WX98ONH","Drew","I'd love to stay and chat, but this is just a short demo.","I'd love to stay and chat, but this is just a short demo.","J'adorerais rester discuter."
+        \\"AEPZ4SNT-UFN9U9YW","CHOICE","Say nothing.","Say nothing.","Ne rien dire."
+        \\"S6MF4G1X-34IOPNOJ","NONE","The person acts as though they were addressing someone else.","The person acts as though they were addressing someone else.","La personne fait comme si."
+        \\"KPTQNK2P-69OMTGXF","NONE","They walk away... Counting down from {num}","They walk away... Counting down from {0}","Ils s'eloignent... Decompte depuis {0}"
+        \\
+    ;
+
+    const mod = try parser_test.parseSource(merge_topi_input);
+    defer mod.deinit();
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try Locale.exportFileWithMerge(mod.entry, &output.writer, "en", existing_csv, std.testing.allocator);
+
+    try std.testing.expectEqualSlices(u8, expected, output.written());
+}
+
+test "Localization Export CSV Merge New Entries Get Empty Translations" {
+    // Existing CSV only has first 2 rows — remaining should get empty fr column
+    const existing_csv =
+        \\"id","speaker","raw","en","fr"
+        \\"8R955KPX-2WI5R816","NONE","A person approaches.","A person approaches.","Une personne approche."
+        \\"C5I6VN71-IP0HPJHE","Stranger","Hey there.","Hey there.","Salut."
+        \\
+    ;
+
+    const mod = try parser_test.parseSource(merge_topi_input);
+    defer mod.deinit();
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try Locale.exportFileWithMerge(mod.entry, &output.writer, "en", existing_csv, std.testing.allocator);
+
+    const result = output.written();
+    // Header should have fr column
+    try std.testing.expect(std.mem.startsWith(u8, result, "\"id\",\"speaker\",\"raw\",\"en\",\"fr\"\n"));
+    // First row should have French translation
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"Une personne approche.\"") != null);
+    // A new row (not in existing CSV) should have empty fr column
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"Greet them.\",\"\"") != null);
+}
+
+test "Localization Export CSV Merge Drops Removed Entries" {
+    // Existing CSV has a row with ID not in the AST — it should be dropped
+    const existing_csv =
+        \\"id","speaker","raw","en","fr"
+        \\"8R955KPX-2WI5R816","NONE","A person approaches.","A person approaches.","Une personne approche."
+        \\"XXXXXXXXX-XXXXXXXXX","NONE","Removed line.","Removed line.","Ligne supprimee."
+        \\"C5I6VN71-IP0HPJHE","Stranger","Hey there.","Hey there.","Salut."
+        \\
+    ;
+
+    const mod = try parser_test.parseSource(merge_topi_input);
+    defer mod.deinit();
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try Locale.exportFileWithMerge(mod.entry, &output.writer, "en", existing_csv, std.testing.allocator);
+
+    const result = output.written();
+    // Removed row should not appear
+    try std.testing.expect(std.mem.indexOf(u8, result, "Removed line.") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "Ligne supprimee.") == null);
+    // Existing rows should still be present with translations
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"Une personne approche.\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"Salut.\"") != null);
+}
