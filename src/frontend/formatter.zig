@@ -221,7 +221,11 @@ pub const Formatter = struct {
                 try self.writeExpression(s.capture);
                 try self.write(" {\n");
                 self.indent += 1;
-                try self.writeStatements(s.prongs);
+                for (s.prongs, 0..) |prong, i| {
+                    try self.writeStatement(prong);
+                    if (i < s.prongs.len - 1) try self.write(",");
+                    try self.write("\n");
+                }
                 self.indent -= 1;
                 try self.writeIndent();
                 try self.write("}");
@@ -236,9 +240,9 @@ pub const Formatter = struct {
                 } else {
                     try self.write("else");
                 }
-                try self.write(":");
+                try self.write(": ");
                 if (p.body.len == 1) {
-                    try self.write(" ");
+                    self.suppress_indent = true;
                     try self.writeStatement(p.body[0]);
                 } else {
                     try self.write("\n");
