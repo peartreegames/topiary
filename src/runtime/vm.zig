@@ -478,10 +478,11 @@ pub const Vm = struct {
                     if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{index});
                     const value = try self.pop();
                     // global already set from loaded state
-                    if (value == .obj) try self.notifiable_objects.put(self.alloc, value.obj.id, @intCast(index));
                     if (self.globals[index] != .void) {
+                        if (self.globals[index] == .obj) try self.notifiable_objects.put(self.alloc, self.globals[index].obj.id, @intCast(index));
                         continue;
                     }
+                    if (value == .obj) try self.notifiable_objects.put(self.alloc, value.obj.id, @intCast(index));
                     self.globals[index] = value;
                 },
                 .set_global => {

@@ -1768,7 +1768,7 @@ test "Runtime Save and Load State" {
     defer data2.deinit();
     const size = try State.calculateSize(&vm2);
     try State.serialize(&vm2, &data2.writer);
-    try testing.expectEqual(572, size);
+    try testing.expectEqual(451, size);
 }
 
 test "Runtime Includes" {

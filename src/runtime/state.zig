@@ -142,38 +142,26 @@ pub const State = struct {
                 try stream.beginObject();
                 try stream.objectField("name");
                 try stream.write(c.name);
-                try stream.objectField("fields");
+                try stream.objectField("field_names");
                 try stream.beginArray();
-                for (c.fields) |f| {
-                    try stream.beginObject();
-                    try stream.objectField("name");
-                    try stream.write(f.name);
-                    try stream.objectField("value");
-                    try serializeValue(allocator, f.value, stream, references);
-                    try stream.endObject();
-                }
-                try stream.endArray();
-
-                try stream.objectField("methods");
-                try stream.beginArray();
-                for (c.methods) |m| {
-                    try stream.beginObject();
-                    try stream.objectField("name");
-                    try stream.write(m.name);
-                    try stream.objectField("value");
-                    try serializeValue(allocator, m.value, stream, references);
-                    try stream.endObject();
-                }
+                for (c.fields) |f| try stream.write(f.name);
                 try stream.endArray();
                 try stream.endObject();
             },
             .instance => |i| {
                 try stream.beginObject();
-                try stream.objectField("base");
-                try serializeValue(allocator, .{ .obj = i.base }, stream, references);
+                try stream.objectField("class_name");
+                try stream.write(i.base.data.class.name);
                 try stream.objectField("fields");
                 try stream.beginArray();
-                for (i.fields) |f| try serializeValue(allocator, f, stream, references);
+                for (i.fields, 0..) |f, idx| {
+                    try stream.beginObject();
+                    try stream.objectField("name");
+                    try stream.write(i.base.data.class.fields[idx].name);
+                    try stream.objectField("value");
+                    try serializeValue(allocator, f, stream, references);
+                    try stream.endObject();
+                }
                 try stream.endArray();
                 try stream.endObject();
             },
@@ -220,6 +208,15 @@ pub const State = struct {
             else => return error.NotImplemented,
         }
         try stream.endObject();
+    }
+
+    fn resolveClassByName(vm: *Vm, name: []const u8) ?Value {
+        for (vm.bytecode.constants) |c| {
+            if (c == .obj and c.obj.data == .class) {
+                if (std.mem.eql(u8, c.obj.data.class.name, name)) return c;
+            }
+        }
+        return null;
     }
 
     pub fn deserialize(vm: *Vm, reader: *std.Io.Reader) !void {
@@ -320,84 +317,76 @@ pub const State = struct {
             try refs.put(vm.alloc, id.?, result);
             return result;
         }
-        if (entry.object.get("function")) |v| {
-            const arity = v.object.get("arity").?.integer;
-            const inst = v.object.get("inst").?.string;
-            const locals_count = v.object.get("locals_count").?.integer;
-            const is_method = v.object.get("is_method").?.bool;
-            const inst_alloc = try vm.alloc.alloc(u8, try std.base64.standard.Decoder.calcSizeForSlice(inst));
-            try std.base64.standard.Decoder.decode(inst_alloc, inst);
-
-            const debug_items = v.object.get("debug").?.array.items;
-            const debug_info = try vm.alloc.alloc(DebugInfo, debug_items.len);
-            for (debug_items, 0..) |d, i| {
-                const file = d.object.get("file").?.string;
-                const range_items = d.object.get("ranges").?.array.items;
-                const ranges = try std.ArrayList(DebugInfo.Range).initCapacity(vm.alloc, range_items.len);
-                for (range_items, 0..) |r, ri| ranges.items[ri] = .{
-                    .start = @intCast(r.array.items[0].integer),
-                    .end = @intCast(r.array.items[1].integer),
-                    .line = @intCast(r.array.items[2].integer),
-                };
-                debug_info[i] = .{
-                    .allocator = vm.alloc,
-                    .file = file,
-                    .ranges = ranges,
-                };
-            }
-
-            var result = try vm.gc.create(vm, .{ .function = .{
-                .arity = @intCast(arity),
-                .instructions = inst_alloc,
-                .locals_count = @intCast(locals_count),
-                .debug_info = debug_info,
-                .is_method = is_method,
-            } });
-            result.obj.id = id.?;
-            try refs.put(vm.alloc, id.?, result);
-            return result;
-        }
         if (entry.object.get("class")) |v| {
-            const name = try vm.alloc.dupe(u8, v.object.get("name").?.string);
-            const ser_fields = v.object.get("fields").?.array.items;
-            var fields = try vm.alloc.alloc(Class.Member, ser_fields.len);
-            for (ser_fields, 0..) |f, i| {
-                fields[i].name = try vm.alloc.dupe(u8, f.object.get("name").?.string);
-                fields[i].value = try deserializeEntry(vm, root, f.object.get("value").?, refs, null);
+            const name = v.object.get("name").?.string;
+            // Resolve class from module constants if available (correct methods)
+            if (resolveClassByName(vm, name)) |class_value| {
+                if (id) |uuid| try refs.put(vm.alloc, uuid, class_value);
+                return class_value;
             }
-            const ser_methods = v.object.get("methods").?.array.items;
-            var methods = try vm.alloc.alloc(Class.Member, ser_methods.len);
-            for (ser_methods, 0..) |m, i| {
-                methods[i].name = try vm.alloc.dupe(u8, m.object.get("name").?.string);
-                methods[i].value = try deserializeEntry(vm, root, m.object.get("value").?, refs, null);
+            // Create stub class (data-only, no methods) for cross-module case
+            const field_names_items = v.object.get("field_names").?.array.items;
+            var fields = try vm.alloc.alloc(Class.Member, field_names_items.len);
+            for (field_names_items, 0..) |f, i| {
+                fields[i] = .{
+                    .name = try vm.alloc.dupe(u8, f.string),
+                    .value = Void,
+                };
             }
-            var class = try Class.init( name, fields, methods);
+            const methods = try vm.alloc.alloc(Class.Member, 0);
+            var class = try Class.init(try vm.alloc.dupe(u8, name), fields, methods);
             class.is_gc_managed = true;
             var result = try vm.gc.create(vm, .{ .class = class });
-            result.obj.id = id.?;
-            try refs.put(vm.alloc, id.?, result);
+            if (id) |uuid| {
+                result.obj.id = uuid;
+                try refs.put(vm.alloc, uuid, result);
+            }
             return result;
         }
         if (entry.object.get("instance")) |v| {
-            const base_ref = v.object.get("base").?.object.get("ref").?;
-            const base_id = UUID.fromString(base_ref.string);
-            const base = if (refs.get(base_id)) |b| b else blk: {
-                const value = try deserializeEntry(vm, root, v.object.get("base").?, refs, base_id);
-                try refs.put(vm.alloc, base_id, value);
-                break :blk value;
-            };
+            const class_name = v.object.get("class_name").?.string;
             const ser_fields = v.object.get("fields").?.array.items;
-            var fields = try vm.alloc.alloc(Value, ser_fields.len);
-            for (ser_fields, 0..) |f, i| {
-                fields[i] = try deserializeEntry(vm, root, f, refs, null);
+
+            // Resolve or create the base class
+            const class_obj = if (resolveClassByName(vm, class_name)) |cv| cv.obj else blk: {
+                // Create stub class from field names in the instance data
+                var stub_fields = try vm.alloc.alloc(Class.Member, ser_fields.len);
+                for (ser_fields, 0..) |f, i| {
+                    stub_fields[i] = .{
+                        .name = try vm.alloc.dupe(u8, f.object.get("name").?.string),
+                        .value = Void,
+                    };
+                }
+                const methods = try vm.alloc.alloc(Class.Member, 0);
+                var class = try Class.init(try vm.alloc.dupe(u8, class_name), stub_fields, methods);
+                class.is_gc_managed = true;
+                const stub = try vm.gc.create(vm, .{ .class = class });
+                break :blk stub.obj;
+            };
+
+            const class_data = class_obj.data.class;
+
+            // Build field values, matching by name to handle field reordering/additions/removals
+            var fields = try vm.alloc.alloc(Value, class_data.fields.len);
+            for (class_data.fields, 0..) |f, i| fields[i] = f.value;
+            for (ser_fields) |sf| {
+                const name = sf.object.get("name").?.string;
+                for (class_data.fields, 0..) |cf, i| {
+                    if (std.mem.eql(u8, cf.name, name)) {
+                        fields[i] = try deserializeEntry(vm, root, sf.object.get("value").?, refs, null);
+                        break;
+                    }
+                }
             }
 
             var result = try vm.gc.create(vm, .{ .instance = .{
-                .base = base.obj,
+                .base = class_obj,
                 .fields = fields,
             } });
-            result.obj.id = id.?;
-            try refs.put(vm.alloc, id.?, result);
+            if (id) |uuid| {
+                result.obj.id = uuid;
+                try refs.put(vm.alloc, uuid, result);
+            }
             return result;
         }
 

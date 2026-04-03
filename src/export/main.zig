@@ -281,9 +281,9 @@ pub export fn calculateStateSize(vm_ptr: *anyopaque) usize {
 pub export fn saveStateFile(vm_ptr: *anyopaque, path_ptr: [*:0]u8) void {
     const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     const path = std.mem.sliceTo(path_ptr, 0);
-    var file = std.fs.openFileAbsolute(path, .{}) catch |err| {
+    var file = std.fs.createFileAbsolute(path, .{}) catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
-        runner.logger.log("Could not open file: {s}", .{@errorName(err)}, .err);
+        runner.logger.log("Could not create file: {s}", .{@errorName(err)}, .err);
         return;
     };
     defer file.close();
@@ -304,16 +304,16 @@ pub export fn saveState(vm_ptr: *anyopaque, out_ptr: [*:0]u8, max: usize) usize 
         runner.logger.log("Could not serialize state: {s}", .{@errorName(err)}, .err);
         return 0;
     };
-    return max;
+    return fbs.end;
 }
 
-pub export fn loadStateFile(vm_ptr: *anyopaque, path_ptr: [*:0]u8) void {
+pub export fn loadStateFile(vm_ptr: *anyopaque, path_ptr: [*:0]u8) bool {
     const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     const path = std.mem.sliceTo(path_ptr, 0);
     var file = std.fs.openFileAbsolute(path, .{}) catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
         runner.logger.log("Could not load file: {s}", .{@errorName(err)}, .err);
-        return;
+        return false;
     };
     defer file.close();
     var buf: [1024]u8 = undefined;
@@ -322,14 +322,18 @@ pub export fn loadStateFile(vm_ptr: *anyopaque, path_ptr: [*:0]u8) void {
     State.deserialize(vm, read) catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
         runner.logger.log("Could not deserialize data: {s}", .{@errorName(err)}, .err);
+        return false;
     };
+    return true;
 }
 
-pub export fn loadState(vm_ptr: *anyopaque, json_str: [*]const u8, json_len: usize) void {
+pub export fn loadState(vm_ptr: *anyopaque, json_str: [*]const u8, json_len: usize) bool {
     const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     var fbs = std.Io.Reader.fixed(json_str[0..json_len]);
     State.deserialize(vm, &fbs) catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
         runner.logger.log("Could not deserialize data: {s}", .{@errorName(err)}, .err);
+        return false;
     };
+    return true;
 }
