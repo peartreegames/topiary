@@ -16,6 +16,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/topi.zig"),
     });
 
+    _ = b.addModule("topi_docs", .{
+        .root_source_file = b.path("docs/docs.zig"),
+    });
+
     const topi_export = b.addModule("export", .{
         .root_source_file = b.path("src/export/index.zig"),
     });
