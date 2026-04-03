@@ -54,7 +54,7 @@ pub const ExportValue = extern struct {
             .obj => |o| switch (o.data) {
                 .string => |s| .{ .tag = Tag.string, .data = .{ .string = .{ .ptr = s.ptr, .len = s.len } } },
                 .list => |l| blk: {
-                    var list = allocator.alloc(ExportValue, l.items.len) catch @panic("Could not allocate list items");
+                    const list = allocator.alloc(ExportValue, l.items.len) catch return Nil;
                     var i: usize = 0;
                     while (i < l.items.len) : (i += 1) {
                         list[i] = fromValue(l.items[i], allocator);
@@ -62,7 +62,7 @@ pub const ExportValue = extern struct {
                     break :blk .{ .tag = Tag.list, .data = .{ .list = .{ .items = list.ptr, .count = @intCast(list.len) } } };
                 },
                 .set => |s| blk: {
-                    var list = allocator.alloc(ExportValue, s.count()) catch @panic("Could not allocate list items");
+                    const list = allocator.alloc(ExportValue, s.count()) catch return Nil;
                     for (s.keys(), 0..) |key, i| {
                         list[i] = fromValue(key, allocator);
                     }
@@ -70,7 +70,7 @@ pub const ExportValue = extern struct {
                 },
                 .map => |m| blk: {
                     const count = m.count();
-                    var list = allocator.alloc(ExportValue, count * 2) catch @panic("Could not allocate list items");
+                    const list = allocator.alloc(ExportValue, count * 2) catch return Nil;
                     var it = m.iterator();
                     var i: usize = 0;
                     while (it.next()) |kvp| {

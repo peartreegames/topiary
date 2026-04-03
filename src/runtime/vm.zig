@@ -242,7 +242,7 @@ pub const Vm = struct {
         return false;
     }
 
-    pub fn unusbscribeToValueChange(self: *Vm, name: []const u8) bool {
+    pub fn unsubscribeToValueChange(self: *Vm, name: []const u8) bool {
         return self.value_subscribers.remove(name);
     }
 

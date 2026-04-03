@@ -1690,7 +1690,7 @@ test "Runtime Externs and Subscribers" {
         defer vm.bytecode.free(testing.allocator);
         _ = try vm.subscribeToValueChange("value");
         try vm.interpret();
-        _ = vm.unusbscribeToValueChange("value");
+        _ = vm.unsubscribeToValueChange("value");
         try testing.expect(case.value == vm.stack.previous().number);
         try testing.expect(case.value == test_runner.values_changed.pop().?.number);
     }

@@ -21,16 +21,10 @@ const ExportLine = export_runner.ExportLine;
 const ExportChoice = export_runner.ExportChoice;
 
 var alloc = std.heap.smp_allocator;
-const Result = enum(u8) {
-    ok = 0,
-    allocation_failed = 1,
-    invalid_argument = 2,
-    vm_failure = 3,
-};
 
 /// Used to pre-calculate the size required
 /// for a compiled topi module
-pub export fn calculateCompileSize(path_ptr: [*:0]const u8, log_ptr: *const anyopaque, log_severity: u8) callconv(.c) usize {
+pub export fn calculateCompileSize(path_ptr: [*:0]const u8, log_ptr: *const anyopaque, log_severity: u8) usize {
     const logger = ExportLogger{
         .on_log = @ptrCast(@alignCast(log_ptr)),
         .severity = @enumFromInt(log_severity),
@@ -56,7 +50,7 @@ pub export fn calculateCompileSize(path_ptr: [*:0]const u8, log_ptr: *const anyo
 
 /// Compiles the given path to the byte array
 /// Can use `calculateCompileSize` to get the max required, or pass a larger than expected size
-pub export fn compile(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, log_ptr: *const anyopaque, log_severity: u8) callconv(.c) usize {
+pub export fn compile(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, log_ptr: *const anyopaque, log_severity: u8) usize {
     const logger = ExportLogger{
         .on_log = @ptrCast(@alignCast(log_ptr)),
         .severity = @enumFromInt(log_severity),
@@ -134,7 +128,7 @@ fn writeBytecode(path: []const u8, writer: *std.io.Writer, logger: ExportLogger)
 }
 
 /// Start of the vm dialogue
-pub export fn start(vm_ptr: *anyopaque, path_ptr: [*:0]const u8) callconv(.c) void {
+pub export fn start(vm_ptr: *anyopaque, path_ptr: [*:0]const u8) void {
     var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
     const logger = runner.logger;
@@ -153,7 +147,7 @@ pub export fn start(vm_ptr: *anyopaque, path_ptr: [*:0]const u8) callconv(.c) vo
     vm.start(path) catch |err| logger.log("Could not start vm: {any}", .{err}, .err);
 }
 
-pub export fn run(vm_ptr: *anyopaque) callconv(.c) void {
+pub export fn run(vm_ptr: *anyopaque) void {
     var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     vm.run() catch {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
@@ -164,31 +158,31 @@ pub export fn run(vm_ptr: *anyopaque) callconv(.c) void {
     };
 }
 
-pub export fn canContinue(vm_ptr: *anyopaque) callconv(.c) bool {
+pub export fn canContinue(vm_ptr: *anyopaque) bool {
     const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     return vm.can_continue;
 }
 
-pub export fn isWaiting(vm_ptr: *anyopaque) callconv(.c) bool {
+pub export fn isWaiting(vm_ptr: *anyopaque) bool {
     const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     return vm.is_waiting;
 }
 
-pub export fn selectContinue(vm_ptr: *anyopaque) callconv(.c) void {
+pub export fn selectContinue(vm_ptr: *anyopaque) void {
     var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
     runner.logger.log("Selecting continue", .{}, .debug);
     vm.selectContinue();
 }
 
-pub export fn selectChoice(vm_ptr: *anyopaque, index: usize) callconv(.c) void {
+pub export fn selectChoice(vm_ptr: *anyopaque, index: usize) void {
     var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
     runner.logger.log("Selecting choice {}", .{index}, .debug);
     vm.selectChoice(index) catch runner.logger.log("Invalid choice", .{}, .err);
 }
 
-pub export fn setExternFunc(vm_ptr: *anyopaque, name_ptr: [*:0]const u8, value_ptr: *const anyopaque, arity: u8, free_ptr: *const anyopaque) callconv(.c) void {
+pub export fn setExternFunc(vm_ptr: *anyopaque, name_ptr: [*:0]const u8, value_ptr: *const anyopaque, arity: u8, free_ptr: *const anyopaque) void {
     var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
     const logger = runner.logger;
@@ -204,7 +198,7 @@ pub export fn setExternFunc(vm_ptr: *anyopaque, name_ptr: [*:0]const u8, value_p
     };
 }
 
-pub export fn subscribe(vm_ptr: *anyopaque, name_ptr: [*:0]const u8) callconv(.c) bool {
+pub export fn subscribe(vm_ptr: *anyopaque, name_ptr: [*:0]const u8) bool {
     var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
 
     const name = std.mem.sliceTo(name_ptr, 0);
@@ -215,10 +209,10 @@ pub export fn subscribe(vm_ptr: *anyopaque, name_ptr: [*:0]const u8) callconv(.c
     };
 }
 
-pub export fn unsubscribe(vm_ptr: *anyopaque, name_ptr: [*:0]const u8) callconv(.c) bool {
+pub export fn unsubscribe(vm_ptr: *anyopaque, name_ptr: [*:0]const u8) bool {
     var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     const name = std.mem.sliceTo(name_ptr, 0);
-    return vm.unusbscribeToValueChange(name);
+    return vm.unsubscribeToValueChange(name);
 }
 
 pub export fn createVm(
@@ -229,7 +223,7 @@ pub export fn createVm(
     on_value_changed_ptr: *const anyopaque,
     log_ptr: *const anyopaque,
     log_severity: u8,
-) callconv(.c) ?*anyopaque {
+)?*anyopaque {
     const on_dialogue: ExportRunner.OnLine = @ptrCast(@alignCast(on_dialogue_ptr));
     const on_choices: ExportRunner.OnChoices = @ptrCast(@alignCast(on_choice_ptr));
     const on_value_changed: ExportRunner.OnValueChanged = @ptrCast(@alignCast(on_value_changed_ptr));
@@ -267,8 +261,8 @@ pub export fn destroyVm(vm_ptr: *anyopaque) void {
     var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
     runner.logger.log("Destroying Vm", .{}, .info);
-    alloc.destroy(runner);
     vm.deinit();
+    alloc.destroy(runner);
     alloc.destroy(vm);
 }
 
@@ -279,13 +273,13 @@ pub export fn calculateStateSize(vm_ptr: *anyopaque) usize {
     return State.calculateSize(vm) catch 0;
 }
 
-pub export fn saveStateFile(vm_ptr: *anyopaque, path_ptr: [*:0]u8) void {
+pub export fn saveStateFile(vm_ptr: *anyopaque, path_ptr: [*:0]const u8) bool {
     const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     const path = std.mem.sliceTo(path_ptr, 0);
     var file = std.fs.createFileAbsolute(path, .{}) catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
         runner.logger.log("Could not create file: {s}", .{@errorName(err)}, .err);
-        return;
+        return false;
     };
     defer file.close();
     var buf: [1024]u8 = undefined;
@@ -294,7 +288,9 @@ pub export fn saveStateFile(vm_ptr: *anyopaque, path_ptr: [*:0]u8) void {
     State.serialize(vm, writer) catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
         runner.logger.log("Could not serialize state: {s}", .{@errorName(err)}, .err);
+        return false;
     };
+    return true;
 }
 
 pub export fn saveState(vm_ptr: *anyopaque, out_ptr: [*:0]u8, max: usize) usize {
@@ -308,7 +304,7 @@ pub export fn saveState(vm_ptr: *anyopaque, out_ptr: [*:0]u8, max: usize) usize 
     return fbs.end;
 }
 
-pub export fn loadStateFile(vm_ptr: *anyopaque, path_ptr: [*:0]u8) bool {
+pub export fn loadStateFile(vm_ptr: *anyopaque, path_ptr: [*:0]const u8) bool {
     const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     const path = std.mem.sliceTo(path_ptr, 0);
     var file = std.fs.openFileAbsolute(path, .{}) catch |err| {
@@ -339,7 +335,7 @@ pub export fn loadState(vm_ptr: *anyopaque, json_str: [*]const u8, json_len: usi
     return true;
 }
 
-pub export fn calculateFormatSize(path_ptr: [*:0]const u8, indent_width: u8, log_ptr: *const anyopaque, log_severity: u8) callconv(.c) usize {
+pub export fn calculateFormatSize(path_ptr: [*:0]const u8, indent_width: u8, log_ptr: *const anyopaque, log_severity: u8) usize {
     const logger = ExportLogger{
         .on_log = @ptrCast(@alignCast(log_ptr)),
         .severity = @enumFromInt(log_severity),
@@ -352,7 +348,7 @@ pub export fn calculateFormatSize(path_ptr: [*:0]const u8, indent_width: u8, log
     } else return 0;
 }
 
-pub export fn format(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, indent_width: u8, log_ptr: *const anyopaque, log_severity: u8) callconv(.c) usize {
+pub export fn format(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, indent_width: u8, log_ptr: *const anyopaque, log_severity: u8) usize {
     const logger = ExportLogger{
         .on_log = @ptrCast(@alignCast(log_ptr)),
         .severity = @enumFromInt(log_severity),
