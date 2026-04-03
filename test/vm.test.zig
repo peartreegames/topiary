@@ -12,6 +12,8 @@ const Bytecode = topi.backend.Bytecode;
 
 const Module = topi.module.Module;
 
+const RuntimeErr = topi.runtime.RuntimeErr;
+
 const compileSource = @import("compiler.test.zig").compileSource;
 const TestRunner = @import("runner.zig").TestRunner;
 const allocator = std.testing.allocator;
@@ -2032,4 +2034,71 @@ test "Runtime Includes" {
         printErr(&vm);
         return err;
     };
+}
+
+test "Runtime Error Trace with Function Name" {
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+
+    var vm = try initTestVm(
+        \\ fn add |a, b| {
+        \\     return a + b
+        \\ }
+        \\ add(1, "hello")
+    , mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+
+    const result = vm.interpret();
+    try testing.expectError(error.RuntimeError, result);
+    try testing.expect(vm.err.trace.items.len > 0);
+
+    const trace = vm.err.trace.items[0];
+    try testing.expectEqualStrings("add", trace.function_name.?);
+    try testing.expect(trace.line > 0);
+    try testing.expect(trace.file != null);
+}
+
+test "Runtime Error Trace with Nested Function Names" {
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+
+    var vm = try initTestVm(
+        \\ fn inner |x| {
+        \\     return x + "bad"
+        \\ }
+        \\ fn outer || {
+        \\     return inner(1)
+        \\ }
+        \\ outer()
+    , mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+
+    const result = vm.interpret();
+    try testing.expectError(error.RuntimeError, result);
+    try testing.expect(vm.err.trace.items.len >= 2);
+
+    // innermost frame first
+    try testing.expectEqualStrings("inner", vm.err.trace.items[0].function_name.?);
+    try testing.expectEqualStrings("outer", vm.err.trace.items[1].function_name.?);
+}
+
+test "Runtime Error Trace without Function Name" {
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+
+    // Error at top-level scope — no function name
+    var vm = try initTestVm(
+        \\ var x = 1 + "bad"
+    , mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+
+    const result = vm.interpret();
+    try testing.expectError(error.RuntimeError, result);
+    // Top-level errors may have no trace entries since frame 0 is skipped
 }

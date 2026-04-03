@@ -112,7 +112,7 @@ pub const Compiler = struct {
                         if (!std.mem.eql(u8, name, item.file)) continue;
                         break &(infos.items[i]);
                     } else blk: {
-                        file_name = try allocator.dupe(u8, file_name);
+                        file_name = try allocator.dupe(u8, name);
                         const new_info = DebugInfo.init(allocator, file_name);
                         try infos.append(allocator, new_info);
                         break :blk &(infos.items[infos.items.len - 1]);
@@ -914,6 +914,7 @@ pub const Compiler = struct {
             .id = UUID.new(),
             .data = .{
                 .function = .{
+                    .name = if (f.name.len > 0) try self.alloc.dupe(u8, f.name) else null,
                     .arity = @as(u8, @intCast(length)),
                     .is_method = f.is_method,
                     .instructions = try chunk.instructions.toOwnedSlice(self.alloc),

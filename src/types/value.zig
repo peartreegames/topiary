@@ -305,6 +305,12 @@ pub const Value = union(Type) {
                         }
                     },
                     .function => |f| {
+                        if (f.name) |n| {
+                            try writer.writeInt(u16, @intCast(n.len), .little);
+                            try writer.writeAll(n);
+                        } else {
+                            try writer.writeInt(u16, 0, .little);
+                        }
                         try writer.writeByte(f.arity);
                         try writer.writeByte(if (f.is_method) 1 else 0);
                         try writer.writeInt(u16, @as(u16, @intCast(f.locals_count)), .little);
@@ -444,6 +450,8 @@ pub const Value = union(Type) {
                         return .{ .obj = obj };
                     },
                     .function => {
+                        const name_len = try reader.takeInt(u16, .little);
+                        const name = if (name_len > 0) try reader.readAlloc(allocator, name_len) else null;
                         const arity = try reader.takeByte();
                         const is_method = if ((try reader.takeByte()) == 1) true else false;
                         const locals_count = try reader.takeInt(u16, .little);
@@ -457,6 +465,7 @@ pub const Value = union(Type) {
                         const obj = try allocator.create(Value.Obj);
                         obj.* = .{ .id = id, .data = .{
                             .function = .{
+                                .name = name,
                                 .arity = arity,
                                 .is_method = is_method,
                                 .locals_count = locals_count,

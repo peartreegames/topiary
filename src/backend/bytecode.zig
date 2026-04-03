@@ -120,7 +120,7 @@ pub const Bytecode = struct {
         errdefer allocator.free(instructions);
         try reader.readSliceAll(instructions);
 
-        const debug_info_count = try reader.takeInt(u16, .little);
+        const debug_info_count = try reader.takeInt(u32, .little);
         var debug_info = try allocator.alloc(DebugInfo, debug_info_count);
         errdefer allocator.free(debug_info);
         for (0..debug_info_count) |i| {

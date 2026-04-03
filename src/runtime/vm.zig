@@ -299,7 +299,9 @@ pub const Vm = struct {
             const ip = frame.ip;
             const func_obj = frame.func;
 
-            var trace_entry = RuntimeErr.Trace{};
+            var trace_entry = RuntimeErr.Trace{
+                .function_name = func_obj.data.function.name,
+            };
             cont: for (func_obj.data.function.debug_info) |d| {
                 for (d.ranges.items) |r| {
                     if (ip >= r.start and ip <= r.end) {

@@ -73,7 +73,7 @@ pub const Gc = struct {
             .class => |c| (c.fields.len + c.methods.len) * @sizeOf(Class.Member),
             .instance => |inst| inst.fields.len * @sizeOf(Value),
             .@"enum" => |e| e.name.len + e.values.len * @sizeOf([]const u8),
-            .function => |f| f.instructions.len + f.debug_info.len * @sizeOf(DebugInfo),
+            .function => |f| f.instructions.len + f.debug_info.len * @sizeOf(DebugInfo) + (if (f.name) |n| n.len else 0),
             .anchor => |a| a.name.len,
             .@"extern", .builtin => 0,
         };
