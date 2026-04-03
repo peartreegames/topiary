@@ -96,6 +96,16 @@ pub const Token = struct {
             .illegal => "[illegal]",
         };
     }
+
+    /// Like toString but returns unescaped strings suitable for display.
+    /// Use this with {s} format specifiers; use toString for comptime format concatenation.
+    pub fn toDisplay(token_type: TokenType) []const u8 {
+        return switch (token_type) {
+            .left_brace => "{",
+            .right_brace => "}",
+            else => toString(token_type),
+        };
+    }
 };
 
 pub const TokenType = enum {

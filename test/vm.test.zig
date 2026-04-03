@@ -1771,6 +1771,208 @@ test "Runtime Save and Load State" {
     try testing.expectEqual(451, size);
 }
 
+test "State Visit Counter Round-Trip" {
+    const test_case =
+        \\ === START {
+        \\    :speaker: "Hello"
+        \\ }
+    ;
+    const alloc = testing.allocator;
+
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(test_case, mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(alloc);
+    try vm.interpret();
+
+    // Find the START visit counter and verify it was incremented
+    var start_index: ?usize = null;
+    for (vm.bytecode.global_symbols) |sym| {
+        if (std.mem.eql(u8, sym.name, "START")) {
+            start_index = sym.index;
+            break;
+        }
+    }
+    try testing.expect(start_index != null);
+    try testing.expectEqual(@as(u32, 1), vm.globals[start_index.?].visit);
+
+    // Serialize
+    var data: std.Io.Writer.Allocating = .init(alloc);
+    defer data.deinit();
+    try State.serialize(&vm, &data.writer);
+
+    // Deserialize into new VM from same script
+    var mod2 = try Module.initEmpty(allocator);
+    defer mod2.deinit();
+    var vm2 = try initTestVm(test_case, mod2, false);
+    defer vm2.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm2.runner))).deinit();
+    defer vm2.bytecode.free(alloc);
+
+    var reader = std.Io.Reader.fixed(data.written());
+    try State.deserialize(&vm2, &reader);
+
+    // Visit counter should be preserved
+    var start_index2: ?usize = null;
+    for (vm2.bytecode.global_symbols) |sym| {
+        if (std.mem.eql(u8, sym.name, "START")) {
+            start_index2 = sym.index;
+            break;
+        }
+    }
+    try testing.expect(start_index2 != null);
+    try testing.expectEqual(@as(u32, 1), vm2.globals[start_index2.?].visit);
+
+    // Run again — visit counter should increment to 2
+    try vm2.interpret();
+    try testing.expectEqual(@as(u32, 2), vm2.globals[start_index2.?].visit);
+}
+
+test "State Object Sharing Preservation" {
+    const test_case =
+        \\ var list = List{1, 2, 3}
+        \\ var alias = list
+    ;
+    const alloc = testing.allocator;
+
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(test_case, mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(alloc);
+    try vm.interpret();
+
+    // Both globals should reference the same object
+    try testing.expectEqual(vm.globals[0].obj.id, vm.globals[1].obj.id);
+
+    // Serialize
+    var data: std.Io.Writer.Allocating = .init(alloc);
+    defer data.deinit();
+    try State.serialize(&vm, &data.writer);
+
+    // Deserialize into new VM
+    var mod2 = try Module.initEmpty(allocator);
+    defer mod2.deinit();
+    var vm2 = try initTestVm(test_case, mod2, false);
+    defer vm2.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm2.runner))).deinit();
+    defer vm2.bytecode.free(alloc);
+
+    var reader = std.Io.Reader.fixed(data.written());
+    try State.deserialize(&vm2, &reader);
+
+    // After deserialization, both globals should still share the same object
+    try testing.expectEqual(vm2.globals[0].obj.id, vm2.globals[1].obj.id);
+    // Verify the list contents are correct
+    try testing.expectEqual(@as(usize, 3), vm2.globals[0].obj.data.list.items.len);
+}
+
+test "State Same-Script Round-Trip" {
+    const test_case =
+        \\ var count = 0
+        \\ count += 10
+        \\ var name = "hello"
+    ;
+    const alloc = testing.allocator;
+
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(test_case, mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(alloc);
+    try vm.interpret();
+
+    try testing.expectEqual(@as(f32, 10), vm.globals[0].number);
+
+    // Serialize
+    var data: std.Io.Writer.Allocating = .init(alloc);
+    defer data.deinit();
+    try State.serialize(&vm, &data.writer);
+
+    // Load into new VM compiled from the SAME script
+    var mod2 = try Module.initEmpty(allocator);
+    defer mod2.deinit();
+    var vm2 = try initTestVm(test_case, mod2, false);
+    defer vm2.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm2.runner))).deinit();
+    defer vm2.bytecode.free(alloc);
+
+    var reader = std.Io.Reader.fixed(data.written());
+    try State.deserialize(&vm2, &reader);
+
+    // Loaded state should be present before execution
+    try testing.expectEqual(@as(f32, 10), vm2.globals[0].number);
+
+    // Run — decl_global should skip (count is already 10), then count += 10 gives 20
+    try vm2.interpret();
+    try testing.expectEqual(@as(f32, 20), vm2.globals[0].number);
+}
+
+test "State Cross-Module Class Resolution" {
+    const script1 =
+        \\ class Foo {
+        \\     x = 1,
+        \\     y = "hello",
+        \\ }
+        \\ var obj = new Foo{}
+    ;
+    const script2 =
+        \\ class Foo {
+        \\     x = 1,
+        \\     y = "hello",
+        \\ }
+        \\ var obj = new Foo{}
+    ;
+    const alloc = testing.allocator;
+
+    // Run script 1
+    var mod1 = try Module.initEmpty(allocator);
+    defer mod1.deinit();
+    var vm1 = try initTestVm(script1, mod1, false);
+    defer vm1.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm1.runner))).deinit();
+    defer vm1.bytecode.free(alloc);
+    try vm1.interpret();
+
+    // Serialize
+    var data: std.Io.Writer.Allocating = .init(alloc);
+    defer data.deinit();
+    try State.serialize(&vm1, &data.writer);
+
+    // Load into script 2 (which defines the same class)
+    var mod2 = try Module.initEmpty(allocator);
+    defer mod2.deinit();
+    var vm2 = try initTestVm(script2, mod2, false);
+    defer vm2.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm2.runner))).deinit();
+    defer vm2.bytecode.free(alloc);
+
+    var reader = std.Io.Reader.fixed(data.written());
+    try State.deserialize(&vm2, &reader);
+
+    // Instance should be resolved with the module's class (not a stub)
+    const instance = vm2.globals[0].obj.data.instance;
+    try testing.expectEqual(@as(usize, 2), instance.fields.len);
+    try testing.expectEqual(@as(f32, 1), instance.fields[0].number);
+
+    // The base class should be from the module's constants (not a deserialized stub)
+    var found_module_class = false;
+    for (vm2.bytecode.constants) |c| {
+        if (c == .obj and c.obj.data == .class) {
+            if (std.mem.eql(u8, c.obj.data.class.name, "Foo")) {
+                try testing.expectEqual(c.obj, instance.base);
+                found_module_class = true;
+                break;
+            }
+        }
+    }
+    try testing.expect(found_module_class);
+}
+
 test "Runtime Includes" {
     const main_contents =
         \\ include "./test1.topi"

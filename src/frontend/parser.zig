@@ -437,7 +437,7 @@ pub const Parser = struct {
             .set => try self.setExpression(),
             .new => try self.instanceExpression(),
             .nil => .{ .token = self.current_token, .type = .nil },
-            else => return self.fail("Unexpected token in expression: {}", self.current_token, .{self.current_token.token_type}),
+            else => return self.fail("Unexpected token in expression: '{s}'", self.current_token, .{Token.toDisplay(self.current_token.token_type)}),
         };
 
         while (prec.val() < findPrecedence(self.peek_token.token_type).val()) {
@@ -453,7 +453,7 @@ pub const Parser = struct {
                 .percent_equal,
                 => blk: {
                     if (left.type != .identifier and left.type != .indexer)
-                        return self.fail("Cannot assign to {}", left.token, .{left.token.token_type});
+                        return self.fail("Cannot assign to '{s}'", left.token, .{Token.toDisplay(left.token.token_type)});
                     self.next();
                     const start_token = self.current_token;
                     const op = ast.BinaryOp.fromToken(self.current_token);
@@ -966,7 +966,7 @@ pub const Parser = struct {
         self.next();
         const index = if (start_token.token_type == .dot) blk: {
             if (!self.currentIs(.identifier))
-                return self.fail("Expected identifier after index '.', found {}", self.current_token, .{self.current_token.token_type});
+                return self.fail("Expected identifier after index '.', found '{s}'", self.current_token, .{Token.toDisplay(self.current_token.token_type)});
             break :blk try self.identifierExpression();
         } else if (start_token.token_type == .left_bracket) blk: {
             break :blk try self.expression(.lowest);
@@ -1009,7 +1009,7 @@ pub const Parser = struct {
         const iterator = try self.expression(.lowest);
         switch (iterator.type) {
             .range, .identifier => {},
-            else => return self.fail("Expected list, set, map, or range in for loop, found {}", iterator.token, .{iterator.token.token_type}),
+            else => return self.fail("Expected list, set, map, or range in for loop, found '{s}'", iterator.token, .{Token.toDisplay(iterator.token.token_type)}),
         }
 
         try self.expectPeek(.pipe);
@@ -1120,9 +1120,9 @@ pub const Parser = struct {
     fn expectCurrent(self: *Parser, comptime token_type: TokenType) !void {
         if (self.currentIs(token_type)) return;
         return self.fail(
-            "Expected current token to be '" ++ Token.toString(token_type) ++ "', found {}",
+            "Expected current token to be '" ++ Token.toString(token_type) ++ "', found '{s}'",
             self.current_token,
-            .{self.current_token.token_type},
+            .{Token.toDisplay(self.current_token.token_type)},
         );
     }
 
@@ -1133,9 +1133,9 @@ pub const Parser = struct {
         }
 
         return self.fail(
-            "Expected next token to be '" ++ Token.toString(token_type) ++ "', found {}",
+            "Expected next token to be '" ++ Token.toString(token_type) ++ "', found '{s}'",
             self.peek_token,
-            .{self.peek_token.token_type},
+            .{Token.toDisplay(self.peek_token.token_type)},
         );
     }
 
