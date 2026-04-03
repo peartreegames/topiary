@@ -55,7 +55,6 @@ pub const Parser = struct {
     file: *File,
     file_index: usize = 0,
     depth: usize = 0,
-    mode: Mode = .standard,
     had_error: bool = false,
     pending_comments: std.ArrayList(Statement) = .empty,
 
@@ -64,11 +63,6 @@ pub const Parser = struct {
         OutOfMemory,
         Overflow,
         InvalidCharacter,
-    };
-
-    const Mode = union(enum) {
-        standard: void,
-        interpolated: []const u8,
     };
 
     inline fn allocate(self: Parser, value: anytype) !*@TypeOf(value) {
@@ -413,6 +407,7 @@ pub const Parser = struct {
                 };
             },
             .string => try self.stringExpression(),
+            .string_start => try self.interpolatedStringExpression(),
             .bang, .minus => blk: {
                 self.next();
                 break :blk .{
@@ -569,68 +564,90 @@ pub const Parser = struct {
         };
     }
 
+    fn parseStringExpression(self: *Parser) Error!Expression {
+        return if (self.currentIs(.string_start))
+            self.interpolatedStringExpression()
+        else
+            self.stringExpression();
+    }
+
     fn stringExpression(self: *Parser) Error!Expression {
-        const token = self.current_token;
-        var value: []const u8 = "";
-        var depth: usize = 0;
-        var start: usize = token.start;
-
-        var exprs = std.ArrayList(Expression).empty;
-        var expr_index: usize = 0;
-        errdefer exprs.deinit(self.allocator);
-        var i: usize = 0;
-
-        const str_source = self.file.source.?[token.start..token.end];
-        while (i < str_source.len) : (i += 1) {
-            const char = str_source[i];
-            if (char == '\\') {
-                i += 1;
-                continue;
-            }
-
-            if (char == '{') {
-                if (depth == 0) {
-                    value = try std.fmt.allocPrint(self.allocator, "{s}{s}{{{d}}}", .{ value, self.file.source.?[start..(token.start + i)], expr_index });
-                    start = token.start + i + 1;
-                    expr_index += 1;
-                }
-                depth += 1;
-            }
-            if (char == '}') {
-                depth -= 1;
-                if (depth == 0) {
-                    try self.parseInterpolatedExpression(self.file.source.?[start..(token.start + i)], &exprs, start);
-                    start = token.start + i + 1;
-                }
-            }
-        }
-        value = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ value, self.file.source.?[start..token.end] });
+        const t = self.current_token;
+        const text = self.file.source.?[t.start..t.end];
         return .{
-            .token = token,
+            .token = t,
             .type = .{
                 .string = .{
-                    .raw = try self.allocator.dupe(u8, self.file.source.?[token.start..token.end]),
-                    .value = value,
-                    .expressions = try exprs.toOwnedSlice(self.allocator),
+                    .raw = try self.allocator.dupe(u8, text),
+                    .value = try self.allocator.dupe(u8, text),
+                    .expressions = &.{},
                 },
             },
         };
     }
 
-    fn parseInterpolatedExpression(self: *Parser, source: []const u8, exprs: *std.ArrayList(Expression), offset: usize) !void {
-        var lexer = Lexer.init(source, offset);
-        var parser = Parser{
-            .current_token = lexer.next(self.file_index),
-            .peek_token = lexer.next(self.file_index),
-            .allocator = self.allocator,
-            .lexer = &lexer,
-            .file = self.file,
-            .file_index = self.file_index,
-        };
+    fn interpolatedStringExpression(self: *Parser) Error!Expression {
+        const start_token = self.current_token;
+        var raw = std.ArrayList(u8).empty;
+        var value = std.ArrayList(u8).empty;
+        var exprs = std.ArrayList(Expression).empty;
+        errdefer raw.deinit(self.allocator);
+        errdefer value.deinit(self.allocator);
+        errdefer exprs.deinit(self.allocator);
+        var expr_index: usize = 0;
 
-        while (!parser.currentIs(.eof)) : (parser.next()) {
-            try exprs.append(self.allocator, try parser.expression(.lowest));
+        // Append text from string_start segment
+        const start_text = self.file.source.?[start_token.start..start_token.end];
+        try raw.appendSlice(self.allocator, start_text);
+        try value.appendSlice(self.allocator, start_text);
+
+        while (true) {
+            // Build placeholder {0}, {1}, etc. in value
+            try value.writer(self.allocator).print("{{{d}}}", .{expr_index});
+            expr_index += 1;
+
+            // Advance to first token of the interpolated expression
+            self.next();
+            const expr_start = self.current_token.start;
+
+            // Parse expression using the normal parser
+            try exprs.append(self.allocator, try self.expression(.lowest));
+            const expr_end = self.current_token.end;
+
+            // Append {expression_source} to raw
+            try raw.append(self.allocator, '{');
+            try raw.appendSlice(self.allocator, self.file.source.?[expr_start..expr_end]);
+
+            // After expression, advance to string_fragment or string_end
+            self.next();
+
+            const segment_text = self.file.source.?[self.current_token.start..self.current_token.end];
+
+            if (self.currentIs(.string_fragment)) {
+                try raw.append(self.allocator, '}');
+                try raw.appendSlice(self.allocator, segment_text);
+                try value.appendSlice(self.allocator, segment_text);
+                // continue loop for next interpolated expression
+            } else if (self.currentIs(.string_end)) {
+                try raw.append(self.allocator, '}');
+                try raw.appendSlice(self.allocator, segment_text);
+                try value.appendSlice(self.allocator, segment_text);
+                break;
+            } else {
+                return self.fail("expected string continuation or end", self.current_token, .{});
+            }
         }
+
+        return .{
+            .token = start_token,
+            .type = .{
+                .string = .{
+                    .raw = try raw.toOwnedSlice(self.allocator),
+                    .value = try value.toOwnedSlice(self.allocator),
+                    .expressions = try exprs.toOwnedSlice(self.allocator),
+                },
+            },
+        };
     }
 
     fn listExpression(self: *Parser) Error!Expression {
@@ -854,7 +871,7 @@ pub const Parser = struct {
             name = try self.getStringValue();
         }
         self.next();
-        const text = try self.stringExpression();
+        const text = try self.parseStringExpression();
 
         var id_token: ?Token = null;
         const id: UUID.ID = if (self.peekIs(.at)) blk: {
@@ -904,7 +921,7 @@ pub const Parser = struct {
         }
         try self.expectCurrent(.colon);
         self.next();
-        const text = try self.stringExpression();
+        const text = try self.parseStringExpression();
         var id_token: ?Token = null;
         const id: UUID.ID = if (self.peekIs(.at)) blk: {
             self.next();

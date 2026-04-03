@@ -145,7 +145,14 @@ test "Lexer Check supported tokens" {
         .{ .token_type = .colon, .start = 393, .end = 393, .line = 34, .column = 5, .file_index = 0 },
         .{ .token_type = .identifier, .start = 394, .end = 401, .line = 34, .column = 6, .file_index = 0 },
         .{ .token_type = .colon, .start = 401, .end = 401, .line = 34, .column = 13, .file_index = 0 },
-        .{ .token_type = .string, .start = 404, .end = 428, .line = 34, .column = 16, .file_index = 0 },
+        .{ .token_type = .string_start, .start = 404, .end = 418, .line = 34, .column = 16, .file_index = 0 },
+        .{ .token_type = .identifier, .start = 419, .end = 422, .line = 34, .column = 31, .file_index = 0 },
+        .{ .token_type = .left_paren, .start = 422, .end = 422, .line = 34, .column = 34, .file_index = 0 },
+        .{ .token_type = .number, .start = 423, .end = 424, .line = 34, .column = 35, .file_index = 0 },
+        .{ .token_type = .comma, .start = 424, .end = 424, .line = 34, .column = 36, .file_index = 0 },
+        .{ .token_type = .number, .start = 425, .end = 426, .line = 34, .column = 37, .file_index = 0 },
+        .{ .token_type = .right_paren, .start = 426, .end = 426, .line = 34, .column = 38, .file_index = 0 },
+        .{ .token_type = .string_end, .start = 428, .end = 428, .line = 34, .column = 40, .file_index = 0 },
         .{ .token_type = .hash, .start = 432, .end = 435, .line = 34, .column = 44, .file_index = 0 },
         .{ .token_type = .right_brace, .start = 437, .end = 437, .line = 35, .column = 3, .file_index = 0 },
         .{ .token_type = .@"var", .start = 440, .end = 443, .line = 36, .column = 3, .file_index = 0 },
@@ -158,9 +165,9 @@ test "Lexer Check supported tokens" {
     };
 
     var lexer = Lexer.init(input, 0);
-    // var next = lexer.next(0);
-    // while (next.token_type != .eof) : (next = lexer.next(0)) {
-    //     std.debug.print("{},\n", .{next});
+    // var next_tok = lexer.next(0);
+    // while (next_tok.token_type != .eof) : (next_tok = lexer.next(0)) {
+    //     std.debug.print("{},\n", .{next_tok});
     // }
     for (tests) |item| {
         const current = lexer.next(0);

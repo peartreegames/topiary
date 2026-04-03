@@ -57,6 +57,9 @@ pub const Token = struct {
             .identifier => "[identifier]",
             .number => "[number]",
             .string => "[string]",
+            .string_start => "[string_start]",
+            .string_fragment => "[string_fragment]",
+            .string_end => "[string_end]",
 
             .@"and" => "and",
             .@"break" => "break",
@@ -149,6 +152,9 @@ pub const TokenType = enum {
     identifier,
     number,
     string,
+    string_start,
+    string_fragment,
+    string_end,
 
     @"and",
     @"break",

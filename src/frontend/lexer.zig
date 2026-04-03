@@ -12,6 +12,8 @@ pub const Lexer = struct {
     line: usize = 1,
     column: usize = 0,
     offset: usize = 0,
+    in_string_interpolation: bool = false,
+    string_brace_depth: usize = 0,
 
     pub fn init(source: []const u8, offset: usize) Lexer {
         // Skip utf-8 BOM
@@ -49,8 +51,25 @@ pub const Lexer = struct {
         const token_type: TokenType = switch (self.char) {
             '(' => .left_paren,
             ')' => .right_paren,
-            '{' => .left_brace,
-            '}' => .right_brace,
+            '{' => blk: {
+                if (self.in_string_interpolation) self.string_brace_depth += 1;
+                break :blk .left_brace;
+            },
+            '}' => if (self.in_string_interpolation and self.string_brace_depth == 0) {
+                self.readChar(); // consume '}'
+                const start = self.position;
+                const delimiter = self.readStringSegment();
+                const tok_type: TokenType = if (delimiter == '{') .string_fragment else inner: {
+                    self.in_string_interpolation = false;
+                    break :inner .string_end;
+                };
+                const tok = self.createToken(tok_type, start, file_index);
+                self.readChar(); // consume delimiter ('{' or '"')
+                return tok;
+            } else outer: {
+                if (self.in_string_interpolation) self.string_brace_depth -= 1;
+                break :outer .right_brace;
+            },
             '[' => .left_bracket,
             ']' => .right_bracket,
             '|' => .pipe,
@@ -117,11 +136,27 @@ pub const Lexer = struct {
                 return self.createToken(.comment, start, file_index);
             } else .slash,
             '"' => {
-                self.readChar();
+                self.readChar(); // consume opening '"'
                 const start = self.position;
-                self.readString();
-                defer self.readChar();
-                return self.createToken(.string, start, file_index);
+                if (self.in_string_interpolation) {
+                    // Nested string inside an interpolated expression — lex as plain string
+                    self.readString();
+                    defer self.readChar(); // consume closing '"'
+                    return self.createToken(.string, start, file_index);
+                }
+                const delimiter = self.readStringSegment();
+                if (delimiter == '{') {
+                    // Interpolated string: emit string_start, enter interpolation mode
+                    self.in_string_interpolation = true;
+                    self.string_brace_depth = 0;
+                    const tok = self.createToken(.string_start, start, file_index);
+                    self.readChar(); // consume '{', advance to expression
+                    return tok;
+                } else {
+                    // Plain string: emit .string as before
+                    defer self.readChar(); // consume closing '"'
+                    return self.createToken(.string, start, file_index);
+                }
             },
             0 => .eof,
             else => |c| if (isLetter(c)) {
@@ -192,6 +227,23 @@ pub const Lexer = struct {
             self.readChar();
         }
         return self.source[pos..self.position];
+    }
+
+    /// Scans a string segment until an unescaped '{' or '"' (or end of line/file).
+    /// Returns the delimiter character found ('{', '"', '\n', or 0).
+    /// Stops AT the delimiter — does not consume it.
+    fn readStringSegment(self: *Lexer) u8 {
+        while (true) {
+            if (self.char == '\n' or self.char == 0) return self.char;
+            if (self.char == '\\') {
+                self.readChar(); // consume '\'
+                self.readChar(); // consume escaped character
+                continue;
+            }
+            if (self.char == '"') return '"';
+            if (self.char == '{') return '{';
+            self.readChar();
+        }
     }
 
     fn readString(self: *Lexer) void {
