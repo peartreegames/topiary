@@ -54,6 +54,7 @@ fn usage(comptime msg: []const u8) !void {
     try print("       -v, --verbose\n", .{});
     try print("   topi loc export <file>        Export dialogue localization to csv\n", .{});
     try print("       -d, --dry                     Do not write to file on end\n", .{});
+    try print("       -l, --lang <lang>             Base language column name (default: en)\n", .{});
     try print("       -o, --output <file>           Write to file on end\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi loc generate <file>      Export dialogue csv to topil files\n", .{});
@@ -122,6 +123,7 @@ const LocalizeArgs = struct {
     file: ?[]const u8 = null,
     command: LocCommand = undefined,
     folder: ?[]const u8 = null,
+    lang: []const u8 = "en",
     locale_key: ?[]const u8 = null,
     output: ?[]const u8 = null,
     dry: bool = false,
@@ -140,6 +142,8 @@ const LocalizeArgs = struct {
                 self.output = iter.next();
             } else if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--folder")) {
                 self.folder = iter.next();
+            } else if (std.mem.eql(u8, arg, "-l") or std.mem.eql(u8, arg, "--lang")) {
+                self.lang = iter.next() orelse "en";
             } else if (std.mem.eql(u8, arg, "-k") or std.mem.eql(u8, arg, "--locale-key")) {
                 self.locale_key = iter.next();
             } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--dry")) {
@@ -424,7 +428,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                 var buffer: [128]u8 = undefined;
                 var writer = std.fs.File.stdout().writer(&buffer);
                 const stdout = &writer.interface;
-                Locale.exportFileAtPath(full_path, stdout, alloc) catch |err| {
+                Locale.exportFileAtPath(full_path, stdout, alloc, args.lang) catch |err| {
                     if (args.verbose) return err;
                     return;
                 };
@@ -439,7 +443,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                 var buffer: [1028]u8 = undefined;
                 var file_writer = file.writer(&buffer);
                 const writer = &file_writer.interface;
-                Locale.exportFileAtPath(full_path, writer, alloc) catch |err| {
+                Locale.exportFileAtPath(full_path, writer, alloc, args.lang) catch |err| {
                     if (args.verbose) return err;
                     return;
                 };

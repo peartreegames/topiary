@@ -844,7 +844,7 @@ pub const Parser = struct {
             self.next();
             break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
         } else blk: {
-            var new_id = UUID.create(std.hash.Wyhash.hash(0, text.type.string.raw));
+            var new_id = UUID.create(std.hash.Wyhash.hash(start.start, text.type.string.raw));
             UUID.setAuto(&new_id);
             break :blk new_id;
         };
@@ -890,7 +890,7 @@ pub const Parser = struct {
             self.next();
             break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
         } else blk: {
-            var new_id = UUID.create(std.hash.Wyhash.hash(0, text.type.string.raw));
+            var new_id = UUID.create(std.hash.Wyhash.hash(start_token.start, text.type.string.raw));
             UUID.setAuto(&new_id);
             break :blk new_id;
         };

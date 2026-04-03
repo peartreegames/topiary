@@ -6,6 +6,26 @@ const LocaleProvider = topi.locale.LocaleProvider;
 const C = topi.utils.C;
 const UUID = topi.utils.UUID;
 
+test "Localization Duplicate Content Gets Unique Ids" {
+    const input =
+        \\ === START {
+        \\    :: "Hello"
+        \\    :: "Hello"
+        \\ }
+    ;
+    const mod = try parser_test.parseSource(input);
+    defer mod.deinit();
+    const tree = mod.entry.tree.?;
+    // The bough body contains two dialogue statements
+    const bough = tree.root[0].type.bough;
+    const id1 = bough.body[0].type.dialogue.id;
+    const id2 = bough.body[1].type.dialogue.id;
+    // Both are auto-IDs (suffix zeroed) but must be distinct
+    try std.testing.expect(UUID.isAuto(id1));
+    try std.testing.expect(UUID.isAuto(id2));
+    try std.testing.expect(!std.mem.eql(u8, &id1, &id2));
+}
+
 test "Localization Ids" {
     const input =
         \\ const str = "testing"
@@ -103,9 +123,73 @@ test "Localization Export CSV Tree" {
     const file = mod.entry;
     var output = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer output.deinit();
-    try Locale.exportFile(file, &output.writer);
+    try Locale.exportFile(file, &output.writer, "en");
 
     try std.testing.expectEqualSlices(u8, csv_output, output.written());
+}
+
+test "Localization Invalid Format" {
+    const alloc = std.testing.allocator;
+    // Buffer with wrong magic bytes
+    const bad_magic = try alloc.dupe(u8, "BADX\x01\x00\x00\x00\x00\x00");
+    try std.testing.expectError(error.InvalidLocaleFormat, LocaleProvider.init(alloc, "en", bad_magic));
+    alloc.free(bad_magic);
+}
+
+test "Localization Corrupt File" {
+    const alloc = std.testing.allocator;
+    // Build a valid header but with an index entry whose offset+length exceeds the buffer
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(alloc);
+    const w = buf.writer(alloc);
+    try w.writeAll(LocaleProvider.magic); // magic
+    try w.writeInt(u16, LocaleProvider.version, .little); // version
+    try w.writeInt(C.CONSTANT, 1, .little); // count = 1
+    try w.writeAll(&UUID.Empty); // id (17 bytes)
+    try w.writeInt(C.CONSTANT, 0, .little); // offset = 0
+    try w.writeInt(u32, 999, .little); // length = 999 (way past end)
+    const owned = try alloc.dupe(u8, buf.items);
+    try std.testing.expectError(error.CorruptLocaleFile, LocaleProvider.init(alloc, "en", owned));
+    alloc.free(owned);
+}
+
+test "Localization CSV with BOM" {
+    const alloc = std.testing.allocator;
+    var allocating = std.Io.Writer.Allocating.init(alloc);
+    const writer = &allocating.writer;
+    defer allocating.deinit();
+
+    // Prepend UTF-8 BOM to valid CSV
+    const bom_csv = "\xEF\xBB\xBF" ++ csv_output;
+    try Locale.generate(alloc, bom_csv, 3, writer);
+    const written = try allocating.toOwnedSlice();
+
+    const lp = try LocaleProvider.init(alloc, "en", written);
+    defer lp.deinit(alloc);
+
+    try std.testing.expectEqualSlices(u8, "A person approaches.", lp.map.get(UUID.fromString("8R955KPX-2WI5R816")).?);
+}
+
+test "Localization CSV with Embedded Newlines" {
+    const alloc = std.testing.allocator;
+    var allocating = std.Io.Writer.Allocating.init(alloc);
+    const writer = &allocating.writer;
+    defer allocating.deinit();
+
+    const csv_with_newlines =
+        \\"id","speaker","raw","en"
+        \\"8R955KPX-2WI5R816","NONE","Hello.","Hello."
+        \\
+    ++ "\"C5I6VN71-IP0HPJHE\",\"Stranger\",\"Line one.\nLine two.\",\"Line one.\nLine two.\"\n";
+
+    try Locale.generate(alloc, csv_with_newlines, 3, writer);
+    const written = try allocating.toOwnedSlice();
+
+    const lp = try LocaleProvider.init(alloc, "en", written);
+    defer lp.deinit(alloc);
+
+    try std.testing.expectEqualSlices(u8, "Hello.", lp.map.get(UUID.fromString("8R955KPX-2WI5R816")).?);
+    try std.testing.expectEqualSlices(u8, "Line one.\nLine two.", lp.map.get(UUID.fromString("C5I6VN71-IP0HPJHE")).?);
 }
 
 test "Localization Generate and Provider" {

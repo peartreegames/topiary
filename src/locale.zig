@@ -17,6 +17,10 @@ pub const LocaleProvider = struct {
     buffer: []const u8,
     map: std.AutoHashMapUnmanaged(UUID.ID, []const u8),
 
+    pub const magic = "TPLC";
+    pub const version: u16 = 1;
+    pub const header_size = magic.len + @sizeOf(u16) + @sizeOf(C.CONSTANT);
+
     pub const IndexEntry = struct {
         id: UUID.ID,
         offset: C.CONSTANT,
@@ -29,10 +33,16 @@ pub const LocaleProvider = struct {
         var fbs = std.io.fixedBufferStream(buffer);
         var reader = fbs.reader();
 
+        // Validate magic and version
+        var file_magic: [4]u8 = undefined;
+        _ = try reader.readAll(&file_magic);
+        if (!std.mem.eql(u8, &file_magic, magic)) return error.InvalidLocaleFormat;
+        const file_version = try reader.readInt(u16, .little);
+        if (file_version != version) return error.UnsupportedLocaleVersion;
+
         const count = try reader.readInt(C.CONSTANT, .little);
         var map: std.AutoHashMapUnmanaged(UUID.ID, []const u8) = .empty;
 
-        const header_size = @sizeOf(C.CONSTANT);
         const table_size = count * IndexEntry.Size;
         const blob_start = header_size + table_size;
 
@@ -42,7 +52,10 @@ pub const LocaleProvider = struct {
             entry.offset = try reader.readInt(C.CONSTANT, .little);
             entry.length = try reader.readInt(u32, .little);
 
-            const str = buffer[blob_start + entry.offset .. blob_start + entry.offset + entry.length];
+            const start = blob_start + entry.offset;
+            const end = start + entry.length;
+            if (end > buffer.len) return error.CorruptLocaleFile;
+            const str = buffer[start..end];
             try map.put(allocator, entry.id, str);
         }
 
@@ -64,11 +77,6 @@ pub const LocaleProvider = struct {
 };
 
 pub const Locale = struct {
-    const Error = error{
-        OutOfMemory,
-        NoSpaceLeft,
-    };
-
     // This could be refactored to a fmt with an option to add localization ids
     // Would need to modify so every node in the ast writes its output
     pub fn validateFileAtPath(full_path: []const u8, allocator: std.mem.Allocator) ![]const u8 {
@@ -87,144 +95,141 @@ pub const Locale = struct {
         try buf.writer(alloc).writeAll(source);
         var count: usize = 0;
 
-        for (tree.root) |stmt| {
-            try localizeStatement(alloc, stmt, &count, &buf);
-        }
+        try walkLocalizable(tree.root, LocalizeContext{ .alloc = alloc, .count = &count, .buf = &buf }, LocalizeContext.onLeaf);
         return buf.toOwnedSlice(alloc);
     }
 
-    pub fn localizeStatement(alloc: std.mem.Allocator, stmt: Statement, count: *usize, buf: *std.ArrayList(u8)) !void {
-        switch (stmt.type) {
-            .block => |b| {
-                for (b) |s| try localizeStatement(alloc, s, count, buf);
-            },
-            .bough => |b| {
-                for (b.body) |s| try localizeStatement(alloc, s, count, buf);
-            },
-            .choice => |c| {
-                try localizeExpr(alloc, &stmt, count, buf);
-                for (c.body) |s| try localizeStatement(alloc, s, count, buf);
-            },
-            .dialogue => try localizeExpr(alloc, &stmt, count, buf),
-            .@"for" => |f| {
-                for (f.body) |s| try localizeStatement(alloc, s, count, buf);
-            },
-            .fork => |f| {
-                for (f.body) |s| try localizeStatement(alloc, s, count, buf);
-            },
-            .@"if" => |i| {
-                for (i.then_branch) |s| try localizeStatement(alloc, s, count, buf);
-                if (i.else_branch) |e| {
-                    for (e) |s| try localizeStatement(alloc, s, count, buf);
-                }
-            },
-            .@"while" => |w| {
-                for (w.body) |s| try localizeStatement(alloc, s, count, buf);
-            },
-            .@"switch" => |s| {
-                for (s.prongs) |p| try localizeStatement(alloc, p, count, buf);
-            },
-            .switch_prong => |sp| {
-                for (sp.body) |b| try localizeStatement(alloc, b, count, buf);
-            },
-            else => {},
-        }
-    }
-
-    // very error prone and modifying the source isn't great, but works for now
-    fn localizeExpr(alloc: std.mem.Allocator, stmt: *const Statement, count: *usize, buf: *std.ArrayList(u8)) Error!void {
-        const id: UUID.ID = switch (stmt.type) {
-            .choice => |c| c.id,
-            .dialogue => |d| d.id,
-            else => unreachable,
-        };
-        if (UUID.isEmpty(id) or UUID.isAuto(id)) {
-            const token: ?Token = switch (stmt.type) {
-                .choice => |c| c.content.token,
-                .dialogue => |d| d.content.token,
-                else => null,
-            };
-            if (token == null) return;
-            const start = token.?.end + count.* + 1;
-            const new_id = UUID.new();
-            var tmp: [UUID.Size + 1]u8 = undefined;
-            _ = try std.fmt.bufPrint(&tmp, "@{s}", .{new_id});
-            // handle malformed ids
-            if (buf.items[start] == '@') {
-                var end: usize = start;
-                while (buf.items[end] != ' ' and buf.items[end] != 0 and buf.items[end] != '\n') : (end += 1) {}
-                const len = end - start;
-                try buf.replaceRange(alloc, start, len, &tmp);
-                count.* += UUID.Size + 1 - len;
-            } else {
-                try buf.insertSlice(alloc, start, &tmp);
-                count.* += UUID.Size + 1;
+    fn walkLocalizable(stmts: []const Statement, context: anytype, comptime onLeaf: fn (@TypeOf(context), Statement) @TypeOf(context).Error!void) @TypeOf(context).Error!void {
+        for (stmts) |stmt| {
+            switch (stmt.type) {
+                .block => |b| try walkLocalizable(b, context, onLeaf),
+                .bough => |b| try walkLocalizable(b.body, context, onLeaf),
+                .choice => |c| {
+                    try onLeaf(context, stmt);
+                    try walkLocalizable(c.body, context, onLeaf);
+                },
+                .dialogue => try onLeaf(context, stmt),
+                .@"for" => |f| try walkLocalizable(f.body, context, onLeaf),
+                .fork => |f| try walkLocalizable(f.body, context, onLeaf),
+                .@"if" => |i| {
+                    try walkLocalizable(i.then_branch, context, onLeaf);
+                    if (i.else_branch) |e| try walkLocalizable(e, context, onLeaf);
+                },
+                .@"while" => |w| try walkLocalizable(w.body, context, onLeaf),
+                .@"switch" => |s| try walkLocalizable(s.prongs, context, onLeaf),
+                .switch_prong => |sp| try walkLocalizable(sp.body, context, onLeaf),
+                else => {},
             }
         }
     }
 
-    pub fn exportFileAtPath(full_path: []const u8, writer: *std.Io.Writer, allocator: std.mem.Allocator) !void {
+    const LocalizeContext = struct {
+        alloc: std.mem.Allocator,
+        count: *usize,
+        buf: *std.ArrayList(u8),
+
+        pub const Error = error{ OutOfMemory, NoSpaceLeft };
+
+        // very error prone and modifying the source isn't great, but works for now
+        fn onLeaf(ctx: LocalizeContext, stmt: Statement) @This().Error!void {
+            const id: UUID.ID = switch (stmt.type) {
+                .choice => |c| c.id,
+                .dialogue => |d| d.id,
+                else => unreachable,
+            };
+            if (UUID.isEmpty(id) or UUID.isAuto(id)) {
+                const token: ?Token = switch (stmt.type) {
+                    .choice => |c| c.content.token,
+                    .dialogue => |d| d.content.token,
+                    else => null,
+                };
+                if (token == null) return;
+                const start = token.?.end + ctx.count.* + 1;
+                const new_id = UUID.new();
+                var tmp: [UUID.Size + 1]u8 = undefined;
+                _ = try std.fmt.bufPrint(&tmp, "@{s}", .{new_id});
+                // handle malformed ids
+                if (ctx.buf.items[start] == '@') {
+                    var end: usize = start;
+                    while (end < ctx.buf.items.len and ctx.buf.items[end] != ' ' and ctx.buf.items[end] != 0 and ctx.buf.items[end] != '\n' and ctx.buf.items[end] != '#' and ctx.buf.items[end] != '}' and ctx.buf.items[end] != '{' and ctx.buf.items[end] != ')') : (end += 1) {}
+                    const len = end - start;
+                    try ctx.buf.replaceRange(ctx.alloc, start, len, &tmp);
+                    ctx.count.* += UUID.Size + 1 - len;
+                } else {
+                    try ctx.buf.insertSlice(ctx.alloc, start, &tmp);
+                    ctx.count.* += UUID.Size + 1;
+                }
+            }
+        }
+    };
+
+    const ExportContext = struct {
+        writer: *std.Io.Writer,
+
+        pub const Error = error{WriteFailure};
+
+        fn onLeaf(ctx: ExportContext, stmt: Statement) @This().Error!void {
+            switch (stmt.type) {
+                .choice => |c| {
+                    if (UUID.isEmpty(c.id) or UUID.isAuto(c.id)) return error.WriteFailure;
+                    const str = c.content.type.string;
+                    ctx.writer.print("\"{s}\",\"CHOICE\",\"{s}\",\"{s}\"\n", .{ &c.id, str.raw, str.value }) catch return error.WriteFailure;
+                },
+                .dialogue => |d| {
+                    if (UUID.isEmpty(d.id) or UUID.isAuto(d.id)) return error.WriteFailure;
+                    const str = d.content.type.string;
+                    ctx.writer.print("\"{s}\",\"{s}\",\"{s}\",\"{s}\"\n", .{ &d.id, d.speaker orelse "NONE", str.raw, str.value }) catch return error.WriteFailure;
+                },
+                else => unreachable,
+            }
+        }
+    };
+
+    pub fn exportFileAtPath(full_path: []const u8, writer: *std.Io.Writer, allocator: std.mem.Allocator, base_lang: []const u8) !void {
         var mod = try Module.init(allocator, full_path);
         defer mod.deinit();
         try mod.entry.loadSource();
         try mod.entry.buildTree();
-        try exportFile(mod.entry, writer);
+        try exportFile(mod.entry, writer, base_lang);
     }
 
     // Basic implementation
     // Ideally this would check for existing ids already in the file
     // and only update the raw/base values, rather than replace the entire file
-    // base language should be configurable as well
-    pub fn exportFile(file: *File, writer: *std.Io.Writer) !void {
+    pub fn exportFile(file: *File, writer: *std.Io.Writer, base_lang: []const u8) !void {
         const tree = file.tree orelse return error.NotInitialized;
-        try writer.writeAll("\"id\",\"speaker\",\"raw\",\"en\"\n");
-        for (tree.root) |stmt| {
-            try exportStatement(stmt, writer);
-        }
+        try writer.print("\"id\",\"speaker\",\"raw\",\"{s}\"\n", .{base_lang});
+        try walkLocalizable(tree.root, ExportContext{ .writer = writer }, ExportContext.onLeaf);
     }
 
-    fn exportStatement(stmt: Statement, writer: *std.Io.Writer) !void {
-        switch (stmt.type) {
-            .block => |b| {
-                for (b) |s| try exportStatement(s, writer);
-            },
-            .bough => |b| {
-                for (b.body) |s| try exportStatement(s, writer);
-            },
-            .choice => |c| {
-                if (UUID.isEmpty(c.id) or UUID.isAuto(c.id)) return error.InvalidLocazationId;
-                const str = c.content.type.string;
-                try writer.print("\"{s}\",\"CHOICE\",\"{s}\",\"{s}\"\n", .{ &c.id, str.raw, str.value });
-                for (c.body) |s| try exportStatement(s, writer);
-            },
-            .dialogue => |d| {
-                if (UUID.isEmpty(d.id) or UUID.isAuto(d.id)) return error.InvalidLocazationId;
-                const str = d.content.type.string;
-                try writer.print("\"{s}\",\"{s}\",\"{s}\",\"{s}\"\n", .{ &d.id, d.speaker orelse "NONE", str.raw, str.value });
-            },
-            .@"for" => |f| {
-                for (f.body) |s| try exportStatement(s, writer);
-            },
-            .fork => |f| {
-                for (f.body) |s| try exportStatement(s, writer);
-            },
-            .@"if" => |i| {
-                for (i.then_branch) |s| try exportStatement(s, writer);
-                if (i.else_branch) |e| {
-                    for (e) |s| try exportStatement(s, writer);
-                }
-            },
-            .@"while" => |w| {
-                for (w.body) |s| try exportStatement(s, writer);
-            },
-            .@"switch" => |s| {
-                for (s.prongs) |p| try exportStatement(p, writer);
-            },
-            .switch_prong => |sp| {
-                for (sp.body) |b| try exportStatement(b, writer);
-            },
-            else => {},
+    fn stripBom(content: []const u8) []const u8 {
+        if (content.len >= 3 and content[0] == 0xEF and content[1] == 0xBB and content[2] == 0xBF) {
+            return content[3..];
         }
+        return content;
+    }
+
+    fn nextCsvLine(data: []const u8, pos: *usize) ?[]const u8 {
+        if (pos.* >= data.len) return null;
+        const start = pos.*;
+        var in_quotes = false;
+        while (pos.* < data.len) : (pos.* += 1) {
+            const ch = data[pos.*];
+            if (ch == '"') {
+                in_quotes = !in_quotes;
+            } else if (!in_quotes and (ch == '\n' or ch == '\r')) {
+                const line = data[start..pos.*];
+                // Skip \r\n or \n\r pairs
+                pos.* += 1;
+                if (pos.* < data.len and data[pos.*] != ch and (data[pos.*] == '\n' or data[pos.*] == '\r')) {
+                    pos.* += 1;
+                }
+                return line;
+            }
+        }
+        // Last line without trailing newline
+        if (start < data.len) return data[start..];
+        return null;
     }
 
     pub fn generateAtPath(
@@ -238,11 +243,12 @@ pub const Locale = struct {
         const file_name = std.mem.trimEnd(u8, std.fs.path.basename(csv_path), ".topi.csv");
         defer file.close();
 
-        const content = try file.readToEndAlloc(allocator, std.math.maxInt(u32));
-        defer allocator.free(content);
+        const raw_content = try file.readToEndAlloc(allocator, std.math.maxInt(u32));
+        defer allocator.free(raw_content);
+        const content = stripBom(raw_content);
 
-        var lines_it = std.mem.tokenizeAny(u8, content, "\n\r");
-        const header = lines_it.next() orelse return error.InvalidCsv;
+        var pos: usize = 0;
+        const header = nextCsvLine(content, &pos) orelse return error.InvalidCsv;
 
         var header_it = std.mem.tokenizeAny(u8, header, ",");
         var col_idx: usize = 0;
@@ -264,16 +270,17 @@ pub const Locale = struct {
         }
     }
 
-    pub fn generate(allocator: std.mem.Allocator, content: []const u8, lang_col: usize, writer: *std.Io.Writer) !void {
-        var lines_it = std.mem.tokenizeAny(u8, content, "\n\r");
-        _ = lines_it.next(); // skip header
+    pub fn generate(allocator: std.mem.Allocator, raw_content: []const u8, lang_col: usize, writer: *std.Io.Writer) !void {
+        const content = stripBom(raw_content);
+        var pos: usize = 0;
+        _ = nextCsvLine(content, &pos); // skip header
 
         var entries: std.ArrayList(LocaleProvider.IndexEntry) = .empty;
         defer entries.deinit(allocator);
         var strings: std.ArrayList(u8) = .empty;
         defer strings.deinit(allocator);
 
-        while (lines_it.next()) |line| {
+        while (nextCsvLine(content, &pos)) |line| {
             var current_cell: usize = 0;
             var id_str: ?[]const u8 = null;
             var target_val: ?[]const u8 = null;
@@ -284,7 +291,16 @@ pub const Locale = struct {
                 var end = i;
                 if (line[i] == '"') {
                     i += 1;
-                    while (i < line.len and line[i] != '"') : (i += 1) {}
+                    while (i < line.len) : (i += 1) {
+                        if (line[i] == '"') {
+                            // Handle escaped quotes ("") in CSV
+                            if (i + 1 < line.len and line[i + 1] == '"') {
+                                i += 1; // skip the second quote, loop advances past it
+                            } else {
+                                break; // closing quote
+                            }
+                        }
+                    }
                     end = i;
                     if (i < line.len) i += 1; // skip closing quote
                 } else {
@@ -314,15 +330,27 @@ pub const Locale = struct {
             if (id_str == null or target_val == null) continue;
 
             const offset: u32 = @intCast(strings.items.len);
-            try strings.appendSlice(allocator, target_val.?);
+            // Unescape CSV double-quotes ("" → ")
+            const tv = target_val.?;
+            var j: usize = 0;
+            while (j < tv.len) : (j += 1) {
+                if (tv[j] == '"' and j + 1 < tv.len and tv[j + 1] == '"') {
+                    try strings.append(allocator, '"');
+                    j += 1; // skip second quote
+                } else {
+                    try strings.append(allocator, tv[j]);
+                }
+            }
 
             try entries.append(allocator, .{
                 .id = UUID.fromString(id_str.?),
                 .offset = offset,
-                .length = @intCast(target_val.?.len),
+                .length = @intCast(strings.items.len - offset),
             });
         }
 
+        try writer.writeAll(LocaleProvider.magic);
+        try writer.writeInt(u16, LocaleProvider.version, .little);
         try writer.writeInt(C.CONSTANT, @intCast(entries.items.len), .little);
         for (entries.items) |entry| {
             try writer.writeAll(&entry.id);
