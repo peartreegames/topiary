@@ -162,9 +162,9 @@ test "Error recovery: reports multiple errors with messages" {
     // Both errors should identify the unexpected token
     try testing.expect(std.mem.indexOf(u8, errors[0].fmt, "Unexpected token") != null);
     try testing.expect(std.mem.indexOf(u8, errors[1].fmt, "Unexpected token") != null);
-    // Errors should reference the correct tokens
-    try testing.expect(std.mem.indexOf(u8, errors[0].fmt, "plus") != null);
-    try testing.expect(std.mem.indexOf(u8, errors[1].fmt, "star") != null);
+    // Errors should reference the correct tokens (display format: symbols not names)
+    try testing.expect(std.mem.indexOf(u8, errors[0].fmt, "+") != null);
+    try testing.expect(std.mem.indexOf(u8, errors[1].fmt, "*") != null);
 }
 
 test "Error recovery: valid statements still parsed after error" {

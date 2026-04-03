@@ -57,6 +57,7 @@ pub const Parser = struct {
     depth: usize = 0,
     mode: Mode = .standard,
     had_error: bool = false,
+    pending_comments: std.ArrayList(Statement) = .empty,
 
     pub const Error = error{
         ParserError,
@@ -123,6 +124,12 @@ pub const Parser = struct {
         self.current_token = self.peek_token;
         self.peek_token = self.lexer.next(self.file_index);
         while (self.peek_token.token_type == .comment) {
+            if (self.file.source) |source| {
+                self.pending_comments.append(self.allocator, .{
+                    .token = self.peek_token,
+                    .type = .{ .comment = source[self.peek_token.start..self.peek_token.end] },
+                }) catch {};
+            }
             self.peek_token = self.lexer.next(self.file_index);
         }
     }
@@ -158,9 +165,9 @@ pub const Parser = struct {
             .@"return" => try self.returnStatement(),
             .@"break" => try self.breakStatement(),
             .@"continue" => try self.continueStatement(),
-            .comment => {
-                self.next();
-                return self.statement();
+            .comment => .{
+                .token = self.current_token,
+                .type = .{ .comment = try self.getStringValue() },
             },
             .left_brace => .{
                 .token = self.current_token,

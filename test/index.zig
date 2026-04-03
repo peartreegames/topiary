@@ -5,6 +5,7 @@ pub const compiler = @import("compiler.test.zig");
 pub const vm = @import("vm.test.zig");
 pub const locale = @import("locale.test.zig");
 pub const exp = @import("export.test.zig");
+pub const formatter = @import("formatter.test.zig");
 
 test {
     std.testing.refAllDecls(@This());

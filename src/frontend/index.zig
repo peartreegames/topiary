@@ -15,3 +15,6 @@ const token = @import("token.zig");
 pub const Token = token.Token;
 pub const TokenType = token.Token;
 pub const Keywords = token.Keywords;
+
+const formatter = @import("formatter.zig");
+pub const Formatter = formatter.Formatter;

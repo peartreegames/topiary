@@ -12,6 +12,7 @@ const Compiler = topi.backend.Compiler;
 const Errors = topi.backend.CompilerErrors;
 
 const Locale = topi.locale.Locale;
+const Formatter = topi.frontend.Formatter;
 
 const version = @import("build").version;
 
@@ -25,6 +26,7 @@ const AutoTestRunner = runner.AutoTestRunner;
 const Command = enum {
     run,
     compile,
+    fmt,
     loc,
     @"test",
     version,
@@ -44,6 +46,10 @@ fn usage(comptime msg: []const u8) !void {
     try print("   topi test <file> <count>      Run dialogue <count> times, selecting random choices\n", .{});
     try print("       -b, --bough <name>            Starting bough\n", .{});
     try print("       -q, --quiet                   Do not output visit tree on end\n", .{});
+    try print("       -v, --verbose\n", .{});
+    try print("   topi fmt <file>               Format source file\n", .{});
+    try print("       -d, --dry                     Print to stdout instead of writing\n", .{});
+    try print("       -i, --indent <n>              Spaces per indent level (default: 4)\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi compile <file>           Compile dialogue to bytecode\n", .{});
     try print("       -d, --dry                     Do not write to file on end\n", .{});
@@ -178,6 +184,27 @@ const TestArgs = struct {
     }
 };
 
+const FmtArgs = struct {
+    file: ?[]const u8 = null,
+    indent: usize = 4,
+    dry: bool = false,
+    verbose: bool = false,
+    fn init(self: *FmtArgs, iter: *std.process.ArgIterator) !void {
+        while (iter.next()) |arg| {
+            if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--dry")) {
+                self.dry = true;
+            } else if (std.mem.eql(u8, arg, "-i") or std.mem.eql(u8, arg, "--indent")) {
+                if (iter.next()) |n| {
+                    self.indent = std.fmt.parseInt(usize, n, 10) catch 4;
+                }
+            } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
+                self.verbose = true;
+            } else self.file = arg;
+        }
+        if (self.file == null) return usage("Missing file");
+    }
+};
+
 pub fn print(comptime msg: []const u8, args: anytype) !void {
     var buffer: [128]u8 = undefined;
     var writer = std.fs.File.stdout().writer(&buffer);
@@ -224,6 +251,13 @@ pub fn main() !void {
                 return if (args.verbose) err else {};
             };
             try compileCommand(args, arena.allocator());
+        },
+        .fmt => {
+            var args = FmtArgs{};
+            args.init(&iter) catch |err| {
+                return if (args.verbose) err else {};
+            };
+            try fmtCommand(args, arena.allocator());
         },
         .@"test" => {
             var args = TestArgs{};
@@ -344,6 +378,47 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
         try print("Could not serialize bytecode\n", .{});
         return if (args.verbose) err else {};
     };
+}
+
+fn fmtCommand(args: FmtArgs, alloc: std.mem.Allocator) !void {
+    const full_path = std.fs.cwd().realpathAlloc(alloc, args.file.?) catch |err| {
+        try print("Could not find file at {s}\n", .{args.file.?});
+        return if (args.verbose) err else {};
+    };
+    var mod = Module.init(alloc, full_path) catch |err| {
+        try print("Could not create module\n", .{});
+        return if (args.verbose) err else {};
+    };
+    defer mod.deinit();
+    mod.resolveIncludes() catch |err| {
+        try print("Could not resolve includes\n", .{});
+        return if (args.verbose) err else {};
+    };
+    mod.entry.buildTree() catch |err| {
+        try print("Could not parse file\n", .{});
+        try writeErrors(mod);
+        return if (args.verbose) err else {};
+    };
+
+    const source = mod.entry.source orelse return;
+    const tree = mod.entry.tree orelse return;
+    const formatted = Formatter.format(source, tree, alloc, args.indent) catch |err| {
+        try print("Could not format file\n", .{});
+        return if (args.verbose) err else {};
+    };
+    defer alloc.free(formatted);
+
+    if (args.dry) {
+        var buffer: [128]u8 = undefined;
+        var writer = std.fs.File.stdout().writer(&buffer);
+        const stdout = &writer.interface;
+        try stdout.writeAll(formatted);
+        try stdout.flush();
+    } else {
+        const new_file = try std.fs.createFileAbsolute(full_path, .{});
+        defer new_file.close();
+        try new_file.writeAll(formatted);
+    }
 }
 
 fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {

@@ -223,11 +223,20 @@ pub const File = struct {
         while (!parser.currentIs(.eof)) {
             if (parser.statement()) |stmt| {
                 try nodes.append(alloc, stmt);
+                // Drain comments skipped during peek advancement
+                for (parser.pending_comments.items) |comment| {
+                    try nodes.append(alloc, comment);
+                }
+                parser.pending_comments.items.len = 0;
                 parser.next();
             } else |err| switch (err) {
                 error.ParserError => parser.synchronize(),
                 else => return err,
             }
+        }
+        // Drain any trailing comments
+        for (parser.pending_comments.items) |comment| {
+            try nodes.append(alloc, comment);
         }
 
         self.tree = Tree{

@@ -10,6 +10,7 @@ const Extern = topi.runtime.Extern;
 
 const Module = topi.module.Module;
 const File = topi.module.File;
+const Formatter = topi.frontend.Formatter;
 
 const export_runner = @import("runner.zig");
 const ExportLogger = export_runner.ExportLogger;
@@ -336,4 +337,57 @@ pub export fn loadState(vm_ptr: *anyopaque, json_str: [*]const u8, json_len: usi
         return false;
     };
     return true;
+}
+
+pub export fn calculateFormatSize(path_ptr: [*:0]const u8, indent_width: u8, log_ptr: *const anyopaque, log_severity: u8) callconv(.c) usize {
+    const logger = ExportLogger{
+        .on_log = @ptrCast(@alignCast(log_ptr)),
+        .severity = @enumFromInt(log_severity),
+        .allocator = alloc,
+    };
+    const result = formatInternal(std.mem.sliceTo(path_ptr, 0), if (indent_width == 0) 4 else indent_width, logger);
+    if (result) |formatted| {
+        defer alloc.free(formatted);
+        return formatted.len;
+    } else return 0;
+}
+
+pub export fn format(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, indent_width: u8, log_ptr: *const anyopaque, log_severity: u8) callconv(.c) usize {
+    const logger = ExportLogger{
+        .on_log = @ptrCast(@alignCast(log_ptr)),
+        .severity = @enumFromInt(log_severity),
+        .allocator = alloc,
+    };
+    const result = formatInternal(std.mem.sliceTo(path_ptr, 0), if (indent_width == 0) 4 else indent_width, logger);
+    if (result) |formatted| {
+        defer alloc.free(formatted);
+        const len = @min(formatted.len, max);
+        @memcpy(out_ptr[0..len], formatted[0..len]);
+        return len;
+    } else return 0;
+}
+
+fn formatInternal(path: []const u8, indent_width: u8, logger: ExportLogger) ?[]const u8 {
+    var mod = Module.init(alloc, path) catch |err| {
+        logger.log("Could not create module: {s}", .{@errorName(err)}, .err);
+        return null;
+    };
+    defer mod.deinit();
+
+    mod.resolveIncludes() catch |err| {
+        logger.log("Could not resolve includes: {s}", .{@errorName(err)}, .err);
+        return null;
+    };
+
+    mod.entry.buildTree() catch |err| {
+        logger.log("Could not parse file: {s}", .{@errorName(err)}, .err);
+        return null;
+    };
+
+    const source = mod.entry.source orelse return null;
+    const tree = mod.entry.tree orelse return null;
+    return Formatter.format(source, tree, alloc, indent_width) catch |err| {
+        logger.log("Could not format: {s}", .{@errorName(err)}, .err);
+        return null;
+    };
 }
