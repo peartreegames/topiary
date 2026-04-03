@@ -198,11 +198,11 @@ pub const Parser = struct {
             return self.fail("Could not resolve include path '{s}'", start, .{path});
         };
 
-        if (self.file.module.includes.get(resolved)) |f| {
+        if (self.file.module.includes.get(resolved)) |_| {
             return .{
                 .token = start,
                 .type = .{
-                    .include = f.path,
+                    .include = path,
                 },
             };
         }

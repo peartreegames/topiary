@@ -286,11 +286,14 @@ pub const Compiler = struct {
         tree: []const Statement,
     };
 
-    fn resolveInclude(self: *Compiler, name: []const u8, token: Token) Error!?IncludeResult {
-        const file = self.module.includes.get(name) orelse
-            return self.fail("Unknown include file {s}", token, .{name});
-        if (self.emitted_files.contains(name)) return null;
-        try self.emitted_files.put(self.alloc, name, {});
+    fn resolveInclude(self: *Compiler, raw_path: []const u8, token: Token) Error!?IncludeResult {
+        // Resolve original path to module-root-relative form
+        const resolved = self.current_file.module.resolveIncludePath(self.current_file, raw_path) catch
+            return self.fail("Could not resolve include path '{s}'", token, .{raw_path});
+        const file = self.module.includes.get(resolved) orelse
+            return self.fail("Unknown include file {s}", token, .{raw_path});
+        if (self.emitted_files.contains(resolved)) return null;
+        try self.emitted_files.put(self.alloc, resolved, {});
         const tree = file.tree orelse return Error.NotInitialized;
         return .{ .file = file, .tree = tree.root };
     }
