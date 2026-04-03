@@ -4,9 +4,13 @@ const Value = @import("../types/index.zig").Value;
 const UUID = @import("../utils/index.zig").UUID;
 
 const Obj = Value.Obj;
+const Class = @import("../types/index.zig").Class;
+const DebugInfo = @import("../backend/index.zig").DebugInfo;
+
 pub const GcObj = struct {
     next: ?*GcObj = null,
     obj: Obj,
+    data_size: usize = 0,
     is_marked: bool = false,
 };
 
@@ -40,34 +44,70 @@ pub const Gc = struct {
 
     /// root_ctx must have `fn root() []const []Value` function
     pub fn create(self: *Gc, root_ctx: anytype, data: Obj.Data) !Value {
+        if (self.allocated > self.threshold) {
+            self.collect(root_ctx);
+        }
+        const size = dataSize(data);
         const gc_obj = try self.allocator.create(GcObj);
         gc_obj.* = .{
             .obj = .{
                 .id = UUID.new(),
-                .data = data
+                .data = data,
             },
             .next = self.stack,
+            .data_size = size,
         };
         self.stack = gc_obj;
-        self.allocated += @sizeOf(GcObj);
-        if (self.allocated > self.threshold) {
-            self.collect(root_ctx);
-        }
+        self.allocated += @sizeOf(GcObj) + size;
         return .{
             .obj = &gc_obj.obj,
         };
     }
 
-    fn mark(obj: *GcObj) void {
-        if (obj.is_marked) return;
-        obj.is_marked = true;
+    fn dataSize(data: Obj.Data) usize {
+        return switch (data) {
+            .string => |s| s.len,
+            .list => |l| l.capacity * @sizeOf(Value),
+            .map => |m| (m.capacity() + 1) * (@sizeOf(Value) * 2 + @sizeOf(u32)),
+            .set => |s| (s.capacity() + 1) * (@sizeOf(Value) + @sizeOf(u32)),
+            .class => |c| (c.fields.len + c.methods.len) * @sizeOf(Class.Member),
+            .instance => |inst| inst.fields.len * @sizeOf(Value),
+            .@"enum" => |e| e.name.len + e.values.len * @sizeOf([]const u8),
+            .function => |f| f.instructions.len + f.debug_info.len * @sizeOf(DebugInfo),
+            .anchor => |a| a.name.len,
+            .@"extern", .builtin => 0,
+        };
+    }
+
+    fn markValue(val: Value) void {
+        if (val == .obj) mark(@fieldParentPtr("obj", val.obj));
+    }
+
+    fn mark(gc_obj: *GcObj) void {
+        if (gc_obj.is_marked) return;
+        gc_obj.is_marked = true;
+        switch (gc_obj.obj.data) {
+            .list => |l| for (l.items) |item| markValue(item),
+            .map => |m| {
+                for (m.keys()) |k| markValue(k);
+                for (m.values()) |v| markValue(v);
+            },
+            .set => |s| for (s.keys()) |k| markValue(k),
+            .class => |c| {
+                for (c.fields) |f| markValue(f.value);
+                for (c.methods) |m| markValue(m.value);
+            },
+            .instance => |inst| {
+                mark(@fieldParentPtr("obj", inst.base));
+                for (inst.fields) |f| markValue(f);
+            },
+            .string, .@"enum", .function, .@"extern", .builtin, .anchor => {},
+        }
     }
 
     fn markAll(root_ctx: anytype) void {
         for (root_ctx.roots()) |list| {
-            for (list) |item| {
-                if (item == .obj) mark(@fieldParentPtr("obj", item.obj));
-            }
+            for (list) |item| markValue(item);
         }
     }
 
@@ -81,9 +121,9 @@ pub const Gc = struct {
                 const unmarked = obj;
                 current = obj.next;
                 if (prev) |p| p.next = current else self.stack = current;
+                self.allocated -= @sizeOf(GcObj) + unmarked.data_size;
                 unmarked.obj.deinit(self.allocator);
                 self.allocator.destroy(unmarked);
-                self.allocated -= @sizeOf(GcObj);
                 continue;
             }
             obj.is_marked = false;
