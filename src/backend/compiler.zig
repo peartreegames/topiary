@@ -166,7 +166,11 @@ pub const Compiler = struct {
     }
 
     pub fn deinit(self: *Compiler) void {
-        self.chunk.deinit();
+        var chunk: ?*Chunk = self.chunk;
+        while (chunk) |c| {
+            chunk = c.parent;
+            c.deinit();
+        }
         var current_scope: ?*Scope = self.scope;
         while (current_scope) |s| {
             current_scope = s.parent;
