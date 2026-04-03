@@ -159,6 +159,7 @@ pub const Statement = struct {
         },
         choice: struct {
             id: UUID.ID,
+            id_token: ?Token = null,
             name: ?[]const u8,
             content: Expression,
             is_unique: bool,
@@ -167,6 +168,7 @@ pub const Statement = struct {
         },
         dialogue: struct {
             id: UUID.ID,
+            id_token: ?Token = null,
             speaker: ?[]const u8,
             content: *Expression,
             tags: [][]const u8,

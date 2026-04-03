@@ -92,10 +92,16 @@ pub const Locale = struct {
         const tree = file.tree orelse return error.FileTreeNotLoaded;
         var buf: std.ArrayList(u8) = .empty;
         defer buf.deinit(alloc);
-        try buf.writer(alloc).writeAll(source);
-        var count: usize = 0;
+        var last_pos: usize = 0;
 
-        try walkLocalizable(tree.root, LocalizeContext{ .alloc = alloc, .count = &count, .buf = &buf }, LocalizeContext.onLeaf);
+        try walkLocalizable(tree.root, LocalizeContext{
+            .alloc = alloc,
+            .source = source,
+            .buf = &buf,
+            .last_pos = &last_pos,
+        }, LocalizeContext.onLeaf);
+
+        try buf.writer(alloc).writeAll(source[last_pos..]);
         return buf.toOwnedSlice(alloc);
     }
 
@@ -125,41 +131,45 @@ pub const Locale = struct {
 
     const LocalizeContext = struct {
         alloc: std.mem.Allocator,
-        count: *usize,
+        source: []const u8,
         buf: *std.ArrayList(u8),
+        last_pos: *usize,
 
         pub const Error = error{ OutOfMemory, NoSpaceLeft };
 
-        // very error prone and modifying the source isn't great, but works for now
         fn onLeaf(ctx: LocalizeContext, stmt: Statement) @This().Error!void {
             const id: UUID.ID = switch (stmt.type) {
                 .choice => |c| c.id,
                 .dialogue => |d| d.id,
                 else => unreachable,
             };
-            if (UUID.isEmpty(id) or UUID.isAuto(id)) {
-                const token: ?Token = switch (stmt.type) {
-                    .choice => |c| c.content.token,
-                    .dialogue => |d| d.content.token,
-                    else => null,
-                };
-                if (token == null) return;
-                const start = token.?.end + ctx.count.* + 1;
-                const new_id = UUID.new();
-                var tmp: [UUID.Size + 1]u8 = undefined;
-                _ = try std.fmt.bufPrint(&tmp, "@{s}", .{new_id});
-                // handle malformed ids
-                if (ctx.buf.items[start] == '@') {
-                    var end: usize = start;
-                    while (end < ctx.buf.items.len and ctx.buf.items[end] != ' ' and ctx.buf.items[end] != 0 and ctx.buf.items[end] != '\n' and ctx.buf.items[end] != '#' and ctx.buf.items[end] != '}' and ctx.buf.items[end] != '{' and ctx.buf.items[end] != ')') : (end += 1) {}
-                    const len = end - start;
-                    try ctx.buf.replaceRange(ctx.alloc, start, len, &tmp);
-                    ctx.count.* += UUID.Size + 1 - len;
-                } else {
-                    try ctx.buf.insertSlice(ctx.alloc, start, &tmp);
-                    ctx.count.* += UUID.Size + 1;
-                }
-            }
+            if (!UUID.isEmpty(id) and !UUID.isAuto(id)) return;
+
+            const content_token: ?Token = switch (stmt.type) {
+                .choice => |c| c.content.token,
+                .dialogue => |d| d.content.token,
+                else => null,
+            };
+            if (content_token == null) return;
+
+            const id_token: ?Token = switch (stmt.type) {
+                .choice => |c| c.id_token,
+                .dialogue => |d| d.id_token,
+                else => null,
+            };
+
+            const w = ctx.buf.writer(ctx.alloc);
+
+            // Copy source up to: the @ char if replacing, or after closing " if inserting
+            const copy_end = if (id_token) |idt| idt.start - 1 else content_token.?.end + 1;
+            try w.writeAll(ctx.source[ctx.last_pos.*..copy_end]);
+
+            const new_id = UUID.new();
+            var tmp: [UUID.Size + 1]u8 = undefined;
+            _ = try std.fmt.bufPrint(&tmp, "@{s}", .{new_id});
+            try w.writeAll(&tmp);
+
+            ctx.last_pos.* = if (id_token) |idt| idt.end else content_token.?.end + 1;
         }
     };
 
@@ -199,7 +209,6 @@ pub const Locale = struct {
             };
             if (UUID.isEmpty(id) or UUID.isAuto(id)) return error.WriteFailure;
 
-            // Write base 4 columns (no trailing newline)
             switch (stmt.type) {
                 .choice => |c| {
                     const str = c.content.type.string;
@@ -212,7 +221,6 @@ pub const Locale = struct {
                 else => unreachable,
             }
 
-            // Write extra translation columns
             if (ctx.index.rows.get(id)) |extra_values| {
                 for (extra_values) |val| {
                     ctx.writer.print(",\"{s}\"", .{val}) catch return error.WriteFailure;

@@ -840,8 +840,10 @@ pub const Parser = struct {
         self.next();
         const text = try self.stringExpression();
 
+        var id_token: ?Token = null;
         const id: UUID.ID = if (self.peekIs(.at)) blk: {
             self.next();
+            id_token = self.current_token;
             break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
         } else blk: {
             var new_id = UUID.create(std.hash.Wyhash.hash(start.start, text.type.string.raw));
@@ -855,6 +857,7 @@ pub const Parser = struct {
             .type = .{
                 .choice = .{
                     .id = id,
+                    .id_token = id_token,
                     .name = name,
                     .content = text,
                     .is_unique = is_unique,
@@ -886,8 +889,10 @@ pub const Parser = struct {
         try self.expectCurrent(.colon);
         self.next();
         const text = try self.stringExpression();
+        var id_token: ?Token = null;
         const id: UUID.ID = if (self.peekIs(.at)) blk: {
             self.next();
+            id_token = self.current_token;
             break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
         } else blk: {
             var new_id = UUID.create(std.hash.Wyhash.hash(start_token.start, text.type.string.raw));
@@ -901,6 +906,7 @@ pub const Parser = struct {
             .type = .{
                 .dialogue = .{
                     .id = id,
+                    .id_token = id_token,
                     .speaker = speaker,
                     .content = try self.allocate(text),
                     .tags = tags,
