@@ -155,6 +155,7 @@ pub const Statement = struct {
         bough: struct {
             id: UUID.ID,
             name: []const u8,
+            name_token: Token,
             body: []const Statement,
         },
         choice: struct {
@@ -175,6 +176,7 @@ pub const Statement = struct {
         },
         @"enum": struct {
             name: []const u8,
+            name_token: Token,
             is_seq: bool,
             values: [][]const u8,
         },
@@ -193,6 +195,7 @@ pub const Statement = struct {
         function: struct {
             is_method: bool = false,
             name: []const u8,
+            name_token: Token,
             parameters: [][]const u8,
             body: []const Statement,
             is_extern: bool,
@@ -212,12 +215,14 @@ pub const Statement = struct {
         fin: void,
         class: struct {
             name: []const u8,
+            name_token: Token,
             field_names: [][]const u8,
             fields: []const Expression,
             methods: []const Statement,
         },
         variable: struct {
             name: []const u8,
+            name_token: Token,
             initializer: Expression,
             is_mutable: bool = false,
         },

@@ -206,6 +206,7 @@ pub const Parser = struct {
     fn classDeclaration(self: *Parser) Error!Statement {
         const start = self.current_token;
         self.next();
+        const name_token = self.current_token;
         const name = try self.consumeIdentifier();
         try self.expectCurrent(.left_brace);
         self.next();
@@ -243,7 +244,7 @@ pub const Parser = struct {
         return .{
             .token = start,
             .type = .{
-                .class = .{ .name = name, .field_names = try names.toOwnedSlice(self.allocator), .fields = try fields.toOwnedSlice(self.allocator), .methods = try methods.toOwnedSlice(self.allocator) },
+                .class = .{ .name = name, .name_token = name_token, .field_names = try names.toOwnedSlice(self.allocator), .fields = try fields.toOwnedSlice(self.allocator), .methods = try methods.toOwnedSlice(self.allocator) },
             },
         };
     }
@@ -252,6 +253,7 @@ pub const Parser = struct {
         const start = self.current_token;
         const is_seq = start.token_type == .enumseq;
         self.next();
+        const name_token = self.current_token;
         const name = try self.consumeIdentifier();
         try self.expectCurrent(.left_brace);
         self.next();
@@ -267,6 +269,7 @@ pub const Parser = struct {
                 .@"enum" = .{
                     .is_seq = is_seq,
                     .name = name,
+                    .name_token = name_token,
                     .values = try values.toOwnedSlice(self.allocator),
                 },
             },
@@ -277,6 +280,7 @@ pub const Parser = struct {
         const start_token = self.current_token;
         const is_mutable = self.currentIs(.@"var");
         self.next();
+        const name_token = self.current_token;
         const name = try self.consumeIdentifier();
         try self.expectCurrent(.equal);
         self.next();
@@ -286,6 +290,7 @@ pub const Parser = struct {
             .type = .{
                 .variable = .{
                     .name = name,
+                    .name_token = name_token,
                     .initializer = expr,
                     .is_mutable = is_mutable,
                 },
@@ -301,6 +306,7 @@ pub const Parser = struct {
             self.next();
         }
         self.next(); // skip fn
+        const name_token = self.current_token;
         const name = try self.consumeIdentifier();
         var list = std.ArrayList([]const u8).empty;
         errdefer list.deinit(self.allocator);
@@ -321,6 +327,7 @@ pub const Parser = struct {
             .type = .{
                 .function = .{
                     .name = name,
+                    .name_token = name_token,
                     .parameters = try list.toOwnedSlice(self.allocator),
                     .body = try self.block(),
                     .is_extern = is_extern,
@@ -332,6 +339,7 @@ pub const Parser = struct {
     fn boughStatement(self: *Parser) Error!Statement {
         const start = self.current_token;
         self.next();
+        const name_token = self.current_token;
         const name = try self.consumeIdentifier();
         const body = try self.block();
         return .{
@@ -340,6 +348,7 @@ pub const Parser = struct {
                 .bough = .{
                     .id = UUID.create(std.hash.Wyhash.hash(0, name)),
                     .name = name,
+                    .name_token = name_token,
                     .body = body,
                 },
             },
