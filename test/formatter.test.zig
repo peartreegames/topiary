@@ -308,6 +308,67 @@ test "format: choice with inline dialogue" {
     , result);
 }
 
+test "format: single-line fn body stays inline" {
+    const source = "fn greet || return \"hello\"\n";
+    const result = try formatSource(source);
+    defer allocator.free(result);
+    try testing.expectEqualStrings(source, result);
+}
+
+test "format: single-line extern fn body stays inline" {
+    const source = "extern fn triggerAnim |name, clip| print(\"TriggerAnim: {name} {clip}\")\n";
+    const result = try formatSource(source);
+    defer allocator.free(result);
+    try testing.expectEqualStrings(source, result);
+}
+
+test "format: single-line fn body with interpolated string" {
+    const source = "fn greet |name| return \"{name}\"\n";
+    const result = try formatSource(source);
+    defer allocator.free(result);
+    try testing.expectEqualStrings(source, result);
+}
+
+test "format: multi-line fn body gets braces" {
+    const result = try formatSource(
+        \\fn add |x, y| { var z = x + y
+        \\return z }
+    );
+    defer allocator.free(result);
+    try testing.expectEqualStrings(
+        \\fn add |x, y| {
+        \\    var z = x + y
+        \\    return z
+        \\}
+        \\
+    , result);
+}
+
+test "format: single-line if with interpolated string" {
+    const result = try formatSource(
+        \\=== S { if   true  :Bob: "{greet()}, hi" }
+    );
+    defer allocator.free(result);
+    try testing.expectEqualStrings(
+        \\=== S {
+        \\    if true :Bob: "{greet()}, hi"
+        \\}
+        \\
+    , result);
+}
+
+test "format: interpolated string with function call" {
+    const source =
+        \\=== S {
+        \\    :Bob: "{greet("hello")}, how are you?"
+        \\}
+        \\
+    ;
+    const result = try formatSource(source);
+    defer allocator.free(result);
+    try testing.expectEqualStrings(source, result);
+}
+
 test "format: idempotency" {
     const source =
         \\=== START {

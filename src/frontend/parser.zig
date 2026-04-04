@@ -588,17 +588,14 @@ pub const Parser = struct {
 
     fn interpolatedStringExpression(self: *Parser) Error!Expression {
         const start_token = self.current_token;
-        var raw = std.ArrayList(u8).empty;
         var value = std.ArrayList(u8).empty;
         var exprs = std.ArrayList(Expression).empty;
-        errdefer raw.deinit(self.allocator);
         errdefer value.deinit(self.allocator);
         errdefer exprs.deinit(self.allocator);
         var expr_index: usize = 0;
 
         // Append text from string_start segment
         const start_text = self.file.source.?[start_token.start..start_token.end];
-        try raw.appendSlice(self.allocator, start_text);
         try value.appendSlice(self.allocator, start_text);
 
         while (true) {
@@ -608,15 +605,9 @@ pub const Parser = struct {
 
             // Advance to first token of the interpolated expression
             self.next();
-            const expr_start = self.current_token.start;
 
             // Parse expression using the normal parser
             try exprs.append(self.allocator, try self.expression(.lowest));
-            const expr_end = self.current_token.end;
-
-            // Append {expression_source} to raw
-            try raw.append(self.allocator, '{');
-            try raw.appendSlice(self.allocator, self.file.source.?[expr_start..expr_end]);
 
             // After expression, advance to string_fragment or string_end
             self.next();
@@ -624,13 +615,9 @@ pub const Parser = struct {
             const segment_text = self.file.source.?[self.current_token.start..self.current_token.end];
 
             if (self.currentIs(.string_fragment)) {
-                try raw.append(self.allocator, '}');
-                try raw.appendSlice(self.allocator, segment_text);
                 try value.appendSlice(self.allocator, segment_text);
                 // continue loop for next interpolated expression
             } else if (self.currentIs(.string_end)) {
-                try raw.append(self.allocator, '}');
-                try raw.appendSlice(self.allocator, segment_text);
                 try value.appendSlice(self.allocator, segment_text);
                 break;
             } else {
@@ -638,11 +625,14 @@ pub const Parser = struct {
             }
         }
 
+        // raw is the original source text between quotes — slice directly
+        const raw = try self.allocator.dupe(u8, self.file.source.?[start_token.start..self.current_token.end]);
+
         return .{
             .token = start_token,
             .type = .{
                 .string = .{
-                    .raw = try raw.toOwnedSlice(self.allocator),
+                    .raw = raw,
                     .value = try value.toOwnedSlice(self.allocator),
                     .expressions = try exprs.toOwnedSlice(self.allocator),
                 },

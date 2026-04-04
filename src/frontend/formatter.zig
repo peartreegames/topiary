@@ -333,7 +333,7 @@ pub const Formatter = struct {
 
     fn isSingleLineBody(body: []const Statement) bool {
         return body.len == 1 and switch (body[0].type) {
-            .dialogue, .divert, .fin, .@"break", .@"continue", .return_expression, .return_void => true,
+            .dialogue, .divert, .fin, .@"break", .@"continue", .return_expression, .return_void, .expression => true,
             else => false,
         };
     }
