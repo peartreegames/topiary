@@ -20,6 +20,17 @@ pub const Builtin = struct {
     pub const Fn = *const fn (vm: *Vm, args: []Value) Value;
 };
 
+pub const VariationState = union(enum) {
+    cycle: u32,
+    sequence: u32,
+    shuffle: struct {
+        index: u32,
+        order: std.ArrayList(u32),
+    },
+};
+
+pub const VariationMap = std.AutoHashMapUnmanaged(u32, VariationState);
+
 var r: ?std.Random.DefaultPrng = null;
 
 pub const functions = std.StaticStringMap(Value).initComptime(.{ .{
@@ -46,6 +57,18 @@ pub const functions = std.StaticStringMap(Value).initComptime(.{ .{
 }, .{
     "weighted",
     create("weighted", 2, false, weighted),
+}, .{
+    "cycle",
+    create("cycle", 1, false, cycle),
+}, .{
+    "shuffle",
+    create("shuffle", 1, false, shuffle),
+}, .{
+    "sequence",
+    create("sequence", 1, false, sequence),
+}, .{
+    "random",
+    create("random", 1, false, random),
 } });
 
 pub const methods = std.StaticStringMap(Value).initComptime(.{ .{
@@ -402,6 +425,94 @@ fn trim_method(vm: *Vm, args: []Value) Value {
     const trimmed = std.mem.trim(u8, s, " \t\n\r");
     const buf = vm.alloc.dupe(u8, trimmed) catch return .{ .nil = {} };
     return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+}
+
+fn contentHashList(items: []const Value) u32 {
+    var hasher = std.hash.Wyhash.init(0);
+    for (items) |item| {
+        switch (item) {
+            .number => |n| std.hash.autoHash(&hasher, @as(u32, @intFromFloat(n * 10000.0))),
+            .bool => |b| std.hash.autoHash(&hasher, b),
+            .visit => |v| std.hash.autoHash(&hasher, v),
+            .timestamp => |t| std.hash.autoHash(&hasher, t),
+            .const_string => |s| hasher.update(s),
+            .obj => |o| switch (o.data) {
+                .string => |s| hasher.update(s),
+                else => std.hash.autoHash(&hasher, o.id),
+            },
+            .range => |rng| {
+                std.hash.autoHash(&hasher, rng.start);
+                std.hash.autoHash(&hasher, rng.end);
+            },
+            else => std.hash.autoHash(&hasher, @intFromEnum(item)),
+        }
+    }
+    return @as(u32, @truncate(hasher.final()));
+}
+
+fn cycle(vm: *Vm, args: []Value) Value {
+    const items = args[0].obj.data.list.items;
+    if (items.len == 0) return .{ .nil = {} };
+    const key = contentHashList(items);
+    const entry = vm.variation_state.getOrPut(vm.alloc, key) catch return .{ .nil = {} };
+    if (!entry.found_existing) entry.value_ptr.* = .{ .cycle = 0 };
+    const idx = entry.value_ptr.cycle;
+    const result = items[idx];
+    entry.value_ptr.*.cycle = @intCast((@as(usize, idx) + 1) % items.len);
+    return result;
+}
+
+fn sequence(vm: *Vm, args: []Value) Value {
+    const items = args[0].obj.data.list.items;
+    if (items.len == 0) return .{ .nil = {} };
+    const key = contentHashList(items);
+    const entry = vm.variation_state.getOrPut(vm.alloc, key) catch return .{ .nil = {} };
+    if (!entry.found_existing) entry.value_ptr.* = .{ .sequence = 0 };
+    const idx = entry.value_ptr.sequence;
+    const result = items[idx];
+    if (idx < @as(u32, @intCast(items.len)) - 1) {
+        entry.value_ptr.*.sequence = idx + 1;
+    }
+    return result;
+}
+
+fn shuffle(vm: *Vm, args: []Value) Value {
+    if (r == null) r = std.Random.DefaultPrng.init(std.crypto.random.int(u64));
+    const items = args[0].obj.data.list.items;
+    if (items.len == 0) return .{ .nil = {} };
+    const key = contentHashList(items);
+    const entry = vm.variation_state.getOrPut(vm.alloc, key) catch return .{ .nil = {} };
+    if (!entry.found_existing) {
+        entry.value_ptr.* = .{ .shuffle = .{ .index = @intCast(items.len), .order = .empty } };
+    }
+    // reshuffle when exhausted or on first call
+    if (entry.value_ptr.shuffle.index >= @as(u32, @intCast(items.len))) {
+        var order = &entry.value_ptr.shuffle.order;
+        order.shrinkRetainingCapacity(0);
+        order.ensureTotalCapacity(vm.alloc, items.len) catch return .{ .nil = {} };
+        for (0..items.len) |i| order.appendAssumeCapacity(@intCast(i));
+        // Fisher-Yates shuffle
+        var i: usize = items.len - 1;
+        while (i > 0) : (i -= 1) {
+            const j = r.?.random().intRangeAtMost(usize, 0, i);
+            const tmp = order.items[i];
+            order.items[i] = order.items[j];
+            order.items[j] = tmp;
+        }
+        entry.value_ptr.shuffle.index = 0;
+    }
+    const shuffle_idx = entry.value_ptr.shuffle.index;
+    const actual_idx = entry.value_ptr.shuffle.order.items[shuffle_idx];
+    entry.value_ptr.shuffle.index = shuffle_idx + 1;
+    return items[actual_idx];
+}
+
+fn random(_: *Vm, args: []Value) Value {
+    if (r == null) r = std.Random.DefaultPrng.init(std.crypto.random.int(u64));
+    const items = args[0].obj.data.list.items;
+    if (items.len == 0) return .{ .nil = {} };
+    const idx = r.?.random().intRangeLessThan(usize, 0, items.len);
+    return items[idx];
 }
 
 fn weighted(_: *Vm, args: []Value) Value {

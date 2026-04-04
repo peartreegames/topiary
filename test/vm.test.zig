@@ -2291,3 +2291,119 @@ test "Runtime Error Trace without Function Name" {
     try testing.expectError(error.RuntimeError, result);
     // Top-level errors may have no trace entries since frame 0 is skipped
 }
+
+test "Runtime Cycle" {
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(
+        \\var l = List{1, 2, 3}
+        \\var r1 = cycle(l)
+        \\var r2 = cycle(l)
+        \\var r3 = cycle(l)
+        \\var r4 = cycle(l)
+        \\var r5 = cycle(l)
+    , mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    vm.interpret() catch |err| {
+        printErr(&vm);
+        return err;
+    };
+    // cycle wraps: 1, 2, 3, 1, 2
+    try testing.expectEqual(@as(f32, 1), vm.globals[1].number); // r1
+    try testing.expectEqual(@as(f32, 2), vm.globals[2].number); // r2
+    try testing.expectEqual(@as(f32, 3), vm.globals[3].number); // r3
+    try testing.expectEqual(@as(f32, 1), vm.globals[4].number); // r4
+    try testing.expectEqual(@as(f32, 2), vm.globals[5].number); // r5
+}
+
+test "Runtime Sequence" {
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(
+        \\var l = List{1, 2, 3}
+        \\var r1 = sequence(l)
+        \\var r2 = sequence(l)
+        \\var r3 = sequence(l)
+        \\var r4 = sequence(l)
+        \\var r5 = sequence(l)
+    , mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    vm.interpret() catch |err| {
+        printErr(&vm);
+        return err;
+    };
+    // sequence sticks on last: 1, 2, 3, 3, 3
+    try testing.expectEqual(@as(f32, 1), vm.globals[1].number); // r1
+    try testing.expectEqual(@as(f32, 2), vm.globals[2].number); // r2
+    try testing.expectEqual(@as(f32, 3), vm.globals[3].number); // r3
+    try testing.expectEqual(@as(f32, 3), vm.globals[4].number); // r4
+    try testing.expectEqual(@as(f32, 3), vm.globals[5].number); // r5
+}
+
+test "Runtime Shuffle" {
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(
+        \\var l = List{1, 2, 3}
+        \\var r1 = shuffle(l)
+        \\var r2 = shuffle(l)
+        \\var r3 = shuffle(l)
+    , mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    vm.interpret() catch |err| {
+        printErr(&vm);
+        return err;
+    };
+    // shuffle returns all 3 elements in some order
+    const r1 = vm.globals[1].number;
+    const r2 = vm.globals[2].number;
+    const r3 = vm.globals[3].number;
+    // each result should be 1, 2, or 3
+    try testing.expect(r1 == 1 or r1 == 2 or r1 == 3);
+    try testing.expect(r2 == 1 or r2 == 2 or r2 == 3);
+    try testing.expect(r3 == 1 or r3 == 2 or r3 == 3);
+    // all three should be different (complete permutation)
+    try testing.expect(r1 != r2 and r2 != r3 and r1 != r3);
+}
+
+test "Runtime Random" {
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(
+        \\var l = List{1, 2, 3}
+        \\var r1 = random(l)
+        \\var r2 = random(l)
+    , mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    vm.interpret() catch |err| {
+        printErr(&vm);
+        return err;
+    };
+    // random returns a valid list element
+    const r1 = vm.globals[1].number;
+    const r2 = vm.globals[2].number;
+    try testing.expect(r1 == 1 or r1 == 2 or r1 == 3);
+    try testing.expect(r2 == 1 or r2 == 2 or r2 == 3);
+}
+
+test "Runtime Cycle Empty List" {
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm("cycle(List{})", mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    vm.interpret() catch |err| {
+        printErr(&vm);
+        return err;
+    };
+    try testing.expect(vm.stack.previous() == .nil);
+}

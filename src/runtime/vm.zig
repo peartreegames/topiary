@@ -53,6 +53,7 @@ pub const Vm = struct {
     globals: []Value,
     value_subscribers: std.StringHashMapUnmanaged(void) = .empty,
     notifiable_objects: std.AutoHashMapUnmanaged(UUID.ID, usize) = .empty,
+    variation_state: builtins.VariationMap = .empty,
 
     stack: Stack(Value),
     /// Current iterators to allow easy nesting
@@ -144,6 +145,15 @@ pub const Vm = struct {
         self.jump_requests.deinit(self.alloc);
         self.notifiable_objects.deinit(self.alloc);
         self.value_subscribers.deinit(self.alloc);
+        {
+            var it = self.variation_state.iterator();
+            while (it.next()) |entry| {
+                if (entry.value_ptr.* == .shuffle) {
+                    entry.value_ptr.shuffle.order.deinit(self.alloc);
+                }
+            }
+            self.variation_state.deinit(self.alloc);
+        }
         self.alloc.free(self.globals);
         if (!self.choices_freed) self.alloc.free(self.current_choices);
         self.err.deinit(self.alloc);

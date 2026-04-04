@@ -65,6 +65,40 @@ pub const State = struct {
             try stream.objectField(&value.obj.id);
             try serializeObj(vm.alloc, value, &stream, &references);
         }
+        if (vm.variation_state.count() > 0) {
+            try stream.objectField("__variation_state");
+            try stream.beginObject();
+            var vs_it = vm.variation_state.iterator();
+            while (vs_it.next()) |entry| {
+                var key_buf: [20]u8 = undefined;
+                const key_str = std.fmt.bufPrint(&key_buf, "{d}", .{entry.key_ptr.*}) catch unreachable;
+                try stream.objectField(key_str);
+                try stream.beginObject();
+                switch (entry.value_ptr.*) {
+                    .cycle => |idx| {
+                        try stream.objectField("cycle");
+                        try stream.write(idx);
+                    },
+                    .sequence => |idx| {
+                        try stream.objectField("sequence");
+                        try stream.write(idx);
+                    },
+                    .shuffle => |s| {
+                        try stream.objectField("shuffle");
+                        try stream.beginObject();
+                        try stream.objectField("index");
+                        try stream.write(s.index);
+                        try stream.objectField("order");
+                        try stream.beginArray();
+                        for (s.order.items) |o| try stream.write(o);
+                        try stream.endArray();
+                        try stream.endObject();
+                    },
+                }
+                try stream.endObject();
+            }
+            try stream.endObject();
+        }
         try stream.endObject();
         try writer.flush();
     }
@@ -233,6 +267,28 @@ pub const State = struct {
             const maybe_entry = root.get(sym.name);
             if (maybe_entry) |entry| {
                 vm.globals[sym.index] = try deserializeEntry(vm, &root, entry, &refs, null);
+            }
+        }
+        if (root.get("__variation_state")) |vs_json| {
+            var vs_it = vs_json.object.iterator();
+            while (vs_it.next()) |entry| {
+                const key = std.fmt.parseInt(u32, entry.key_ptr.*, 10) catch continue;
+                const obj = entry.value_ptr.object;
+                if (obj.get("cycle")) |idx| {
+                    try vm.variation_state.put(vm.alloc, key, .{ .cycle = @intCast(idx.integer) });
+                } else if (obj.get("sequence")) |idx| {
+                    try vm.variation_state.put(vm.alloc, key, .{ .sequence = @intCast(idx.integer) });
+                } else if (obj.get("shuffle")) |s| {
+                    const s_obj = s.object;
+                    var order = std.ArrayList(u32).empty;
+                    for (s_obj.get("order").?.array.items) |o| {
+                        try order.append(vm.alloc, @intCast(o.integer));
+                    }
+                    try vm.variation_state.put(vm.alloc, key, .{ .shuffle = .{
+                        .index = @intCast(s_obj.get("index").?.integer),
+                        .order = order,
+                    } });
+                }
             }
         }
     }
