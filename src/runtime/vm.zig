@@ -737,17 +737,23 @@ pub const Vm = struct {
                 },
                 .index => {
                     const index = try self.pop();
-                    const target = try self.pop();
+                    const raw_target = try self.pop();
+
+                    // Normalize const_string to obj.string so method dispatch
+                    // only needs to handle one string representation
+                    const target = if (raw_target == .const_string)
+                        try self.gc.create(self, .{ .string = try self.alloc.dupe(u8, std.mem.trimRight(u8, raw_target.const_string, &[_]u8{0})) })
+                    else
+                        raw_target;
+
                     switch (target) {
                         .obj => |o| switch (o.data) {
                             .string => {
                                 if (index.asString()) |name| {
-                                    if (std.mem.eql(u8, name, "has")) {
-                                        try self.push(builtins.methods.get("has").?);
+                                    if (builtins.string_methods.get(name)) |method_value| {
+                                        try self.push(method_value);
                                         try self.push(target);
-                                    } else if (std.mem.eql(u8, name, "count")) {
-                                        try self.push(.{ .number = @as(f32, @floatFromInt(o.data.string.len)) });
-                                    } else return self.fail("Unknown method '{s}' on string. Only 'count', 'has' are allowed.", .{index.obj.data.string});
+                                    } else return self.fail("Unknown method '{s}' on string. Only 'length', 'has', 'upper', 'lower', 'replace', 'split', 'substr', 'trim' are allowed.", .{index.asString().?});
                                 }
                             },
                             .list => |l| {

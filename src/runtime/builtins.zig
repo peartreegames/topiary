@@ -43,6 +43,9 @@ pub const functions = std.StaticStringMap(Value).initComptime(.{ .{
 }, .{
     "mstime",
     create("mstime", 0, false, mstime),
+}, .{
+    "weighted",
+    create("weighted", 2, false, weighted),
 } });
 
 pub const methods = std.StaticStringMap(Value).initComptime(.{ .{
@@ -63,6 +66,50 @@ pub const methods = std.StaticStringMap(Value).initComptime(.{ .{
 }, .{
     "clear",
     create("clear", 1, true, clear_method),
+}, .{
+    "upper",
+    create("upper", 1, true, upper_method),
+}, .{
+    "lower",
+    create("lower", 1, true, lower_method),
+}, .{
+    "replace",
+    create("replace", 3, true, replace_method),
+}, .{
+    "split",
+    create("split", 2, true, split_method),
+}, .{
+    "substr",
+    create("substr", 3, true, substr_method),
+}, .{
+    "trim",
+    create("trim", 1, true, trim_method),
+} });
+
+pub const string_methods = std.StaticStringMap(Value).initComptime(.{ .{
+    "has",
+    create("has", 2, true, has_method),
+}, .{
+    "length",
+    create("length", 1, true, length_method),
+}, .{
+    "upper",
+    create("upper", 1, true, upper_method),
+}, .{
+    "lower",
+    create("lower", 1, true, lower_method),
+}, .{
+    "replace",
+    create("replace", 3, true, replace_method),
+}, .{
+    "split",
+    create("split", 2, true, split_method),
+}, .{
+    "substr",
+    create("substr", 3, true, substr_method),
+}, .{
+    "trim",
+    create("trim", 1, true, trim_method),
 } });
 
 fn create(name: []const u8, arity: u8, is_method: bool, backing: *const fn (vm: *Vm, args: []Value) Value) Value {
@@ -186,10 +233,9 @@ fn has_method(_: *Vm, args: []Value) Value {
         .set => args[0].obj.data.set.contains(item),
         .map => args[0].obj.data.map.contains(item),
         .string => |s| blk: {
-            if (item.obj.data != .string) break :blk false;
-            // need to remove the null termination of the needle
-            const indexOf = std.mem.indexOf(u8, s, std.mem.trimRight(u8, item.obj.data.string, &[_]u8{0}));
-            break :blk indexOf != null;
+            const needle = getStr(item);
+            if (needle.len == 0) break :blk false;
+            break :blk std.mem.indexOf(u8, s, needle) != null;
         },
         else => false,
     };
@@ -206,4 +252,179 @@ fn clear_method(vm: *Vm, args: []Value) Value {
     }
     vm.notifyValueObjChange(args[0].obj.id, args[0]);
     return Void;
+}
+
+fn length_method(_: *Vm, args: []Value) Value {
+    return .{ .number = @as(f32, @floatFromInt(args[0].obj.data.string.len)) };
+}
+
+fn getStr(val: Value) []const u8 {
+    return switch (val) {
+        .const_string => |s| std.mem.trimRight(u8, s, &[_]u8{0}),
+        .obj => |o| if (o.data == .string) o.data.string else "",
+        else => "",
+    };
+}
+
+fn upper_method(vm: *Vm, args: []Value) Value {
+    const s = getStr(args[0]);
+    const buf = vm.alloc.alloc(u8, s.len) catch return .{ .nil = {} };
+    for (s, 0..) |c, i| {
+        buf[i] = std.ascii.toUpper(c);
+    }
+    return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+}
+
+fn lower_method(vm: *Vm, args: []Value) Value {
+    const s = getStr(args[0]);
+    const buf = vm.alloc.alloc(u8, s.len) catch return .{ .nil = {} };
+    for (s, 0..) |c, i| {
+        buf[i] = std.ascii.toLower(c);
+    }
+    return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+}
+
+fn replace_method(vm: *Vm, args: []Value) Value {
+    const haystack = getStr(args[0]);
+    const needle = getStr(args[1]);
+    const replacement = getStr(args[2]);
+
+    if (needle.len == 0) {
+        // nothing to replace, return copy
+        const buf = vm.alloc.dupe(u8, haystack) catch return .{ .nil = {} };
+        return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+    }
+
+    // count occurrences to calculate output size
+    var count: usize = 0;
+    var pos: usize = 0;
+    while (pos <= haystack.len -| needle.len) {
+        if (std.mem.eql(u8, haystack[pos..][0..needle.len], needle)) {
+            count += 1;
+            pos += needle.len;
+        } else {
+            pos += 1;
+        }
+    }
+
+    if (count == 0) {
+        const buf = vm.alloc.dupe(u8, haystack) catch return .{ .nil = {} };
+        return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+    }
+
+    const new_len = haystack.len - (count * needle.len) + (count * replacement.len);
+    const buf = vm.alloc.alloc(u8, new_len) catch return .{ .nil = {} };
+
+    var src: usize = 0;
+    var dst: usize = 0;
+    while (src <= haystack.len -| needle.len) {
+        if (std.mem.eql(u8, haystack[src..][0..needle.len], needle)) {
+            @memcpy(buf[dst..][0..replacement.len], replacement);
+            dst += replacement.len;
+            src += needle.len;
+        } else {
+            buf[dst] = haystack[src];
+            dst += 1;
+            src += 1;
+        }
+    }
+    // copy remaining bytes
+    while (src < haystack.len) {
+        buf[dst] = haystack[src];
+        dst += 1;
+        src += 1;
+    }
+
+    return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+}
+
+fn split_method(vm: *Vm, args: []Value) Value {
+    const s = getStr(args[0]);
+    const delim = getStr(args[1]);
+
+    var list: std.ArrayList(Value) = .empty;
+
+    if (delim.len == 0) {
+        // split into individual characters
+        for (s) |c| {
+            const char_buf = vm.alloc.alloc(u8, 1) catch return .{ .nil = {} };
+            char_buf[0] = c;
+            const str_val = vm.gc.create(vm, .{ .string = char_buf }) catch return .{ .nil = {} };
+            list.append(vm.alloc, str_val) catch return .{ .nil = {} };
+        }
+    } else {
+        var pos: usize = 0;
+        while (pos <= s.len) {
+            const next = if (pos > s.len -| delim.len)
+                null
+            else
+                std.mem.indexOf(u8, s[pos..], delim);
+
+            if (next) |idx| {
+                const part = vm.alloc.dupe(u8, s[pos .. pos + idx]) catch return .{ .nil = {} };
+                const str_val = vm.gc.create(vm, .{ .string = part }) catch return .{ .nil = {} };
+                list.append(vm.alloc, str_val) catch return .{ .nil = {} };
+                pos += idx + delim.len;
+            } else {
+                const part = vm.alloc.dupe(u8, s[pos..]) catch return .{ .nil = {} };
+                const str_val = vm.gc.create(vm, .{ .string = part }) catch return .{ .nil = {} };
+                list.append(vm.alloc, str_val) catch return .{ .nil = {} };
+                break;
+            }
+        }
+    }
+
+    return vm.gc.create(vm, .{ .list = list }) catch .{ .nil = {} };
+}
+
+fn substr_method(vm: *Vm, args: []Value) Value {
+    const s = getStr(args[0]);
+    const start_f = args[1].number;
+    const end_f = args[2].number;
+
+    const start: usize = if (start_f < 0) 0 else @intFromFloat(start_f);
+    const end_inclusive: usize = if (end_f < 0) 0 else @intFromFloat(end_f);
+    const end = end_inclusive + 1; // inclusive to exclusive
+
+    if (start >= s.len) {
+        const buf = vm.alloc.alloc(u8, 0) catch return .{ .nil = {} };
+        return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+    }
+
+    const clamped_end = @min(end, s.len);
+    const clamped_start = @min(start, clamped_end);
+    const buf = vm.alloc.dupe(u8, s[clamped_start..clamped_end]) catch return .{ .nil = {} };
+    return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+}
+
+fn trim_method(vm: *Vm, args: []Value) Value {
+    const s = getStr(args[0]);
+    const trimmed = std.mem.trim(u8, s, " \t\n\r");
+    const buf = vm.alloc.dupe(u8, trimmed) catch return .{ .nil = {} };
+    return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+}
+
+fn weighted(_: *Vm, args: []Value) Value {
+    if (r == null) r = std.Random.DefaultPrng.init(std.crypto.random.int(u64));
+    const items = args[0].obj.data.list;
+    const weights = args[1].obj.data.list;
+
+    if (items.items.len == 0 or weights.items.len == 0) return .{ .nil = {} };
+
+    const count = @min(items.items.len, weights.items.len);
+
+    var total: f32 = 0;
+    for (weights.items[0..count]) |w| {
+        total += w.number;
+    }
+
+    if (total <= 0) return .{ .nil = {} };
+
+    var roll = r.?.random().float(f32) * total;
+    for (weights.items[0..count], 0..) |w, i| {
+        roll -= w.number;
+        if (roll <= 0) return items.items[i];
+    }
+
+    return items.items[count - 1];
 }

@@ -162,10 +162,6 @@ test "Runtime Strings" {
         .{ .input = "\"test\\{test\\}ing", .value = "test{test}ing" },
         .{ .input = "\"test{\"quote\\\"test\\\"quote\"}ing", .value = "testquote\"test\"quoteing" },
         .{ .input = "var t = \"test\" t += \"ing\"", .value = "testing" },
-        // .{ .input = "\"test\".has(\"tes\")", .value = true },
-        // .{ .input = "\"test\".has(\"foo\")", .value = false },
-        // .{ .input = "\"testing\".has(\"tin\")", .value = true },
-        // .{ .input = "\"testing\".has(\"tester\")", .value = false },
     };
 
     inline for (test_cases) |case| {
@@ -180,6 +176,199 @@ test "Runtime Strings" {
         const str = vm.stack.previous().asString() orelse unreachable;
         try testing.expectEqualStrings(case.value, str);
     }
+}
+
+test "Runtime String Methods" {
+    // upper
+    {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm("\"hello\".upper()", mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| { printErr(&vm); return err; };
+        try testing.expectEqualStrings("HELLO", vm.stack.previous().asString().?);
+    }
+    {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm("\"Hello World\".upper()", mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| { printErr(&vm); return err; };
+        try testing.expectEqualStrings("HELLO WORLD", vm.stack.previous().asString().?);
+    }
+
+    // lower
+    {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm("\"HELLO\".lower()", mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| { printErr(&vm); return err; };
+        try testing.expectEqualStrings("hello", vm.stack.previous().asString().?);
+    }
+
+    // replace
+    {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm("\"hello\".replace(\"l\", \"r\")", mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| { printErr(&vm); return err; };
+        try testing.expectEqualStrings("herro", vm.stack.previous().asString().?);
+    }
+    {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm("\"hello\".replace(\"x\", \"y\")", mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| { printErr(&vm); return err; };
+        try testing.expectEqualStrings("hello", vm.stack.previous().asString().?);
+    }
+    {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm("\"aaa\".replace(\"a\", \"bb\")", mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| { printErr(&vm); return err; };
+        try testing.expectEqualStrings("bbbbbb", vm.stack.previous().asString().?);
+    }
+
+    // substr (inclusive end)
+    {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm("\"hello\".substr(1, 3)", mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| { printErr(&vm); return err; };
+        try testing.expectEqualStrings("ell", vm.stack.previous().asString().?);
+    }
+    {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm("\"hello\".substr(0, 4)", mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| { printErr(&vm); return err; };
+        try testing.expectEqualStrings("hello", vm.stack.previous().asString().?);
+    }
+    {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm("\"hello\".substr(0, 0)", mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| { printErr(&vm); return err; };
+        try testing.expectEqualStrings("h", vm.stack.previous().asString().?);
+    }
+
+    // trim
+    {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm("\" hello \".trim()", mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| { printErr(&vm); return err; };
+        try testing.expectEqualStrings("hello", vm.stack.previous().asString().?);
+    }
+
+    // has on string literal
+    {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm("\"test\".has(\"tes\")", mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| { printErr(&vm); return err; };
+        try testing.expect(vm.stack.previous().bool == true);
+    }
+    {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm("\"test\".has(\"foo\")", mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| { printErr(&vm); return err; };
+        try testing.expect(vm.stack.previous().bool == false);
+    }
+
+    // split
+    {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm("\"a,b,c\".split(\",\")", mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| { printErr(&vm); return err; };
+        const list = vm.stack.previous().obj.data.list;
+        try testing.expectEqual(@as(usize, 3), list.items.len);
+        try testing.expectEqualStrings("a", list.items[0].asString().?);
+        try testing.expectEqualStrings("b", list.items[1].asString().?);
+        try testing.expectEqualStrings("c", list.items[2].asString().?);
+    }
+
+    // length on string
+    {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm("\"hello\".length()", mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| { printErr(&vm); return err; };
+        try testing.expect(vm.stack.previous().number == 5.0);
+    }
+
+    // var-based string
+    {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm(
+            \\var s = "Hello World"
+            \\s.lower()
+        , mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        vm.interpret() catch |err| { printErr(&vm); return err; };
+        try testing.expectEqualStrings("hello world", vm.stack.previous().asString().?);
+    }
+}
+
+test "Runtime Weighted" {
+    // weighted returns one of the items - just verify it doesn't crash and returns a valid item
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm("weighted(List{1, 2, 3}, List{1, 1, 1})", mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    vm.interpret() catch |err| {
+        printErr(&vm);
+        return err;
+    };
+    const result = vm.stack.previous().number;
+    try testing.expect(result == 1.0 or result == 2.0 or result == 3.0);
 }
 
 test "Runtime Lists" {
