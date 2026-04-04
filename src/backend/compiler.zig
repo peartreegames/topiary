@@ -268,6 +268,7 @@ pub const Compiler = struct {
 
     fn resolveForkName(self: *Compiler, name: ?[]const u8) Error![]const u8 {
         if (name) |n| return self.alloc.dupe(u8, n);
+        if (self.anon_counters.items.len == 0) return Error.CompilerError;
         const current_depth = self.anon_counters.items.len - 1;
         const count = self.anon_counters.items[current_depth];
         const fork_name = try std.fmt.allocPrint(self.alloc, "_{d}", .{count});
@@ -343,7 +344,8 @@ pub const Compiler = struct {
                 for (b.body) |s| try self.prepass(s);
             },
             .fork => |f| {
-                const fork_name = try self.resolveForkName(f.name);
+                const fork_name = self.resolveForkName(f.name) catch
+                    return self.fail("fork must be inside a bough", stmt.token, .{});
                 defer self.alloc.free(fork_name);
 
                 const full_name = try self.getQualifiedName(fork_name);
@@ -597,7 +599,8 @@ pub const Compiler = struct {
                 try self.replaceConstant(full_name, .{ .obj = obj }, token);
             },
             .fork => |f| {
-                const fork_name = try self.resolveForkName(f.name);
+                const fork_name = self.resolveForkName(f.name) catch
+                    return self.fail("fork must be inside a bough", stmt.token, .{});
                 defer self.alloc.free(fork_name);
 
                 const path = try self.getQualifiedName(fork_name);
