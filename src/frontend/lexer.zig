@@ -158,7 +158,7 @@ pub const Lexer = struct {
                     return self.createToken(.string, start, file_index);
                 }
             },
-            0 => .eof,
+            0 => return self.createToken(.eof, self.position, file_index),
             else => |c| if (isLetter(c)) {
                 const start = self.position;
                 const ident = self.readIdentifier();
@@ -171,9 +171,7 @@ pub const Lexer = struct {
             } else .illegal,
         };
 
-        defer self.readChar();
-        const newToken = self.createToken(token_type, self.position, file_index);
-        return newToken;
+        return self.readAndCreateToken(token_type, 1, file_index);
     }
 
     fn readChar(self: *Lexer) void {

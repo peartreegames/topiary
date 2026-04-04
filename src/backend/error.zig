@@ -25,7 +25,6 @@ pub const CompilerErr = struct {
         const line = self.token.line;
         const column = self.token.column;
 
-        if (start == end) end += 1;
         start = @min(start, source.len - 1);
         end = @min(end, source.len);
 
