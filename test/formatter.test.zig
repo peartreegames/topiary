@@ -52,7 +52,7 @@ test "format: simple bough" {
     , result);
 }
 
-test "format: fork with choices" {
+test "format: fork with choices (braced preserved)" {
     const result = try formatSource(
         \\=== START { fork { ~ "yes" { :: "ok" } ~ "no" { :: "nope" } } }
     );
@@ -60,8 +60,12 @@ test "format: fork with choices" {
     try testing.expectEqualStrings(
         \\=== START {
         \\    fork {
-        \\        ~ "yes" :: "ok"
-        \\        ~ "no" :: "nope"
+        \\        ~ "yes" {
+        \\            :: "ok"
+        \\        }
+        \\        ~ "no" {
+        \\            :: "nope"
+        \\        }
         \\    }
         \\}
         \\
@@ -96,20 +100,24 @@ test "format: single-line if with dialogue" {
     , result);
 }
 
-test "format: if-else single line" {
+test "format: if-else braced preserved" {
     const result = try formatSource(
         \\=== S { if true { :: "yes" } else { :: "no" } }
     );
     defer allocator.free(result);
     try testing.expectEqualStrings(
         \\=== S {
-        \\    if true :: "yes" else :: "no"
+        \\    if true {
+        \\        :: "yes"
+        \\    } else {
+        \\        :: "no"
+        \\    }
         \\}
         \\
     , result);
 }
 
-test "format: if-else multi-line" {
+test "format: if-else multi then, braced else preserved" {
     const result = try formatSource(
         \\=== S { if true { :: "yes"
         \\:: "more" } else { :: "no" } }
@@ -120,7 +128,9 @@ test "format: if-else multi-line" {
         \\    if true {
         \\        :: "yes"
         \\        :: "more"
-        \\    } else :: "no"
+        \\    } else {
+        \\        :: "no"
+        \\    }
         \\}
         \\
     , result);
@@ -265,7 +275,7 @@ test "format: choice with inline divert" {
     , result);
 }
 
-test "format: unique choice" {
+test "format: unique choice (braced preserved)" {
     const result = try formatSource(
         \\=== S { fork { ~* "once" { :: "done" } } }
     );
@@ -273,7 +283,9 @@ test "format: unique choice" {
     try testing.expectEqualStrings(
         \\=== S {
         \\    fork {
-        \\        ~* "once" :: "done"
+        \\        ~* "once" {
+        \\            :: "done"
+        \\        }
         \\    }
         \\}
         \\
@@ -293,9 +305,9 @@ test "format: speaker dialogue" {
     , result);
 }
 
-test "format: choice with inline dialogue" {
+test "format: choice with inline dialogue (unbraced preserved)" {
     const result = try formatSource(
-        \\=== S { fork { ~ "go" { :: "ok" } } }
+        \\=== S { fork { ~ "go" :: "ok" } }
     );
     defer allocator.free(result);
     try testing.expectEqualStrings(

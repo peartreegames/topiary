@@ -165,7 +165,7 @@ pub const Formatter = struct {
                     try self.write(tag);
                 }
                 if (c.body.len > 0) {
-                    if (isSingleLineBody(c.body)) {
+                    if (isSingleLineBody(c.body) and !self.sourceHasBraces(c.body)) {
                         try self.write(" ");
                         self.suppress_indent = true;
                         try self.writeStatement(c.body[0]);
@@ -317,7 +317,7 @@ pub const Formatter = struct {
     }
 
     fn writeBodyOpts(self: *Formatter, body: []const Statement, allow_inline: bool) Error!void {
-        if (allow_inline and isSingleLineBody(body)) {
+        if (allow_inline and isSingleLineBody(body) and !self.sourceHasBraces(body)) {
             try self.write(" ");
             self.suppress_indent = true;
             try self.writeStatement(body[0]);
@@ -336,6 +336,21 @@ pub const Formatter = struct {
             .dialogue, .divert, .fin, .@"break", .@"continue", .return_expression, .return_void, .expression => true,
             else => false,
         };
+    }
+
+    /// Check if the original source used braces for this body
+    fn sourceHasBraces(self: *Formatter, body: []const Statement) bool {
+        if (body.len == 0) return true;
+        var pos = body[0].token.start;
+        while (pos > 0) {
+            pos -= 1;
+            switch (self.source[pos]) {
+                ' ', '\t', '\n', '\r' => continue,
+                '{' => return true,
+                else => return false,
+            }
+        }
+        return false;
     }
 
     fn writeDivert(self: *Formatter, d: anytype) Error!void {
