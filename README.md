@@ -23,12 +23,11 @@ zig build // or download from release page
 You can then press `enter` for the next line,
 and select a choice with `0-9` then `enter`
 
-Docs on full capabilities and integration are still coming.
-
 ## Writing in Topi
 
-You can view a full breakdown in the [syntax](https://github.com/peartreegames/topiary/blob/main/docs/syntax.md) file.
-And examples in the [example folder](https://github.com/peartreegames/topiary/tree/main/examples)
+You can view a full breakdown in the [syntax](https://github.com/peartreegames/topiary/blob/main/docs/syntax.md) file,
+the [CLI reference](https://github.com/peartreegames/topiary/blob/main/docs/cli.md),
+and examples in the [example folder](https://github.com/peartreegames/topiary/tree/main/examples).
 
 Here you can see what writing in topi looks like
 

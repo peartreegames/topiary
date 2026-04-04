@@ -522,20 +522,20 @@ fn weighted(_: *Vm, args: []Value) Value {
 
     if (items.items.len == 0 or weights.items.len == 0) return .{ .nil = {} };
 
-    const count = @min(items.items.len, weights.items.len);
+    if (items.items.len != weights.items.len) return .{ .const_string = "length_mismatch" };
 
     var total: f32 = 0;
-    for (weights.items[0..count]) |w| {
+    for (weights.items) |w| {
         total += w.number;
     }
 
     if (total <= 0) return .{ .nil = {} };
 
     var roll = r.?.random().float(f32) * total;
-    for (weights.items[0..count], 0..) |w, i| {
+    for (weights.items, 0..) |w, i| {
         roll -= w.number;
         if (roll <= 0) return items.items[i];
     }
 
-    return items.items[count - 1];
+    return items.items[items.items.len - 1];
 }

@@ -916,6 +916,11 @@ pub const Vm = struct {
                             if (self.break_on_assert and std.mem.eql(u8, b.name, "assert") and result != .void) {
                                 return self.fail("Assertion Failed: {s}", .{result.asString() orelse unreachable});
                             }
+                            if (std.mem.eql(u8, b.name, "weighted") and result == .const_string) {
+                                const items_len = self.stack.items[self.stack.count - arg_count].obj.data.list.items.len;
+                                const weights_len = self.stack.items[self.stack.count - arg_count + 1].obj.data.list.items.len;
+                                return self.fail("'weighted' expects items and weights to have the same length, but got {d} items and {d} weights", .{ items_len, weights_len });
+                            }
                             self.stack.count -= arg_count + 1;
                             try self.push(result);
                         },

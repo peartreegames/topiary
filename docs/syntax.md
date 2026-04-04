@@ -252,6 +252,34 @@ evidenceWeights.has("Shears") // true
 evidenceWeights.clear()
 ```
 
+### String Methods
+
+Strings have several builtin methods for common operations.
+
+| Method               | Description                                       |
+|----------------------|---------------------------------------------------|
+| `length()`           | Returns the length of the string                  |
+| `has(substring)`     | Checks if the string contains a substring         |
+| `upper()`            | Returns the string in uppercase                   |
+| `lower()`            | Returns the string in lowercase                   |
+| `replace(from, to)`  | Replaces all occurrences of a substring           |
+| `split(delimiter)`   | Splits the string into a list                     |
+| `substr(start, end)` | Returns a substring from start to end (inclusive) |
+| `trim()`             | Removes leading and trailing whitespace           |
+
+```topi
+var clue = "  The Butler Did It  "
+
+clue.trim() // "The Butler Did It"
+clue.trim().length() // 17
+clue.trim().upper() // "THE BUTLER DID IT"
+clue.trim().lower() // "the butler did it"
+clue.trim().has("Butler") // true
+clue.trim().replace("Butler", "Maid") // "The Maid Did It"
+clue.trim().split(" ") // List{"The", "Butler", "Did", "It"}
+clue.trim().substr(4, 9) // "Butler"
+```
+
 ### Loops
 
 #### While
@@ -512,3 +540,66 @@ execute all code (while skipping dialogues and forks), then when it encounters a
 or ends, it'll then jump to `SERVE`.
 
 *For this reason it's recommended that all code be placed at the top of all files and boughs.*
+
+## Built-in Functions
+
+### General
+
+| Function            | Description                                          |
+|---------------------|------------------------------------------------------|
+| `print(value)`      | Prints a value to output                             |
+| `rnd(start, end)`   | Returns a random integer in the range [start, end]   |
+| `rnd01()`           | Returns a random float between 0.0 and 1.0           |
+| `round(number)`     | Rounds a float to the nearest integer                |
+| `abs(number)`       | Returns the absolute value of a number               |
+| `assert(expr, msg)` | Asserts expression is true, returns message if false |
+| `mstime()`          | Returns the current millisecond timestamp            |
+
+```topi
+var damage = rnd(1, 20)
+var chance = rnd01()
+var distance = abs(-5) // 5
+var rounded = round(3.7) // 4
+print("Rolled {damage} damage")
+assert(damage > 0, "Damage must be positive")
+```
+
+### Text Variation
+
+These functions select items from a list and track state across calls,
+making them useful for varying repeated dialogue.
+
+| Function                   | Description                                                    |
+|----------------------------|----------------------------------------------------------------|
+| `cycle(list)`              | Returns items in order, looping back to the start              |
+| `sequence(list)`           | Returns items in order, repeating the last item once exhausted |
+| `shuffle(list)`            | Returns items in a random order, reshuffling when exhausted    |
+| `random(list)`             | Returns a random item each time                                |
+| `weighted(items, weights)` | Returns a random item based on a list of weights               |
+
+```topi
+var greetings = List{"Hello", "Hi", "Hey"}
+
+// cycle: Hello, Hi, Hey, Hello, Hi, Hey, ...
+cycle(greetings)
+
+// sequence: Hello, Hi, Hey, Hey, Hey, ...
+sequence(greetings)
+
+// shuffle: Hey, Hello, Hi, Hi, Hey, Hello, ... (random order, reshuffles each pass)
+shuffle(greetings)
+
+// random: Hi, Hi, Hello, Hey, ... (fully random each call)
+random(greetings)
+```
+
+`weighted` takes two lists — items and their corresponding weights.
+Higher weights increase the chance of selection.
+Both lists must have the same length or a runtime error will be raised.
+
+```topi
+var outcomes = List{"Miss", "Hit", "Critical"}
+var weights = List{50, 40, 10}
+
+weighted(outcomes, weights) // "Miss" 50% of the time, "Hit" 40%, "Critical" 10%
+```

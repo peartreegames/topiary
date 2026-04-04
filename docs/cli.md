@@ -20,6 +20,10 @@ Usage:
    topi test <file> <count>      Run dialogue <count> times, selecting random choices
        -q, --quiet                   Do not output visit tree on end
        -v, --verbose
+   topi fmt <file>               Format source file
+       -d, --dry                     Print to stdout instead of writing
+       -i, --indent <n>              Spaces per indent level (default: 4)
+       -v, --verbose
    topi compile <file>           Compile dialogue to bytecode
        -d, --dry                     Do not write to file on end
        -o, --output <file>           Write to file on end
