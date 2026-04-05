@@ -220,6 +220,19 @@ pub const Compiler = struct {
         return Error.CompilerError;
     }
 
+    fn failSpanWithHelp(
+        self: *Compiler,
+        comptime msg: []const u8,
+        start_token: Token,
+        end_token: ?Token,
+        args: anytype,
+        suggestion: ?[]const u8,
+        note: ?[]const u8,
+    ) Error {
+        try self.module.errors.addSpanWithHelp(self.current_file.path, msg, start_token, end_token, .err, args, suggestion, note);
+        return Error.CompilerError;
+    }
+
     fn failErrorWithHelp(
         self: *Compiler,
         comptime msg: []const u8,
@@ -887,7 +900,7 @@ pub const Compiler = struct {
                     try self.compileVisit(idx, token);
                 } else {
                     const hint = try self.suggestAnchor(path);
-                    return self.failWithHelp("Could not find anchor '{s}'", token, .{path}, hint, null);
+                    return self.failSpanWithHelp("Could not find anchor '{s}'", token, f.end_token, .{path}, hint, null);
                 }
 
                 try self.enterScope(.local);
@@ -979,7 +992,7 @@ pub const Compiler = struct {
                 const entry_ip = self.instructionPos();
                 const anchor_idx = try self.resolveConstant(full_name) orelse {
                     const hint = try self.suggestAnchor(full_name);
-                    return self.failWithHelp("Could not find anchor '{s}'", token, .{full_name}, hint, null);
+                    return self.failSpanWithHelp("Could not find anchor '{s}'", token, b.name_token, .{full_name}, hint, null);
                 };
                 self.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
                 try self.compileVisit(anchor_idx, token);
@@ -1030,7 +1043,7 @@ pub const Compiler = struct {
                     const joined = try std.mem.join(self.alloc, ".", d.path);
                     defer self.alloc.free(joined);
                     const hint = try self.suggestAnchor(joined);
-                    return self.failWithHelp("Could not find path '{s}'", token, .{joined}, hint, null);
+                    return self.failSpanWithHelp("Could not find path '{s}'", token, d.end_token, .{joined}, hint, null);
                 };
                 if (d.is_backup) {
                     try self.writeOp(.backup, token);

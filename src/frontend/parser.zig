@@ -829,11 +829,14 @@ pub const Parser = struct {
             try list.append(self.allocator, try self.getStringValue());
         }
 
+        const end_token = self.current_token;
+
         return .{
             .token = start_token,
             .type = .{
                 .divert = .{
                     .path = try list.toOwnedSlice(self.allocator),
+                    .end_token = end_token,
                     .is_backup = is_backup,
                 },
             },
@@ -842,21 +845,27 @@ pub const Parser = struct {
 
     fn forkStatement(self: *Parser) Error!Statement {
         const start = self.current_token;
+        var end_token = start;
         self.next();
 
         var name: ?[]const u8 = null;
         var is_backup: bool = false;
         if (self.currentIs(.caret)) {
+            end_token = self.current_token;
             is_backup = true;
             self.next();
         }
-        if (self.currentIs(.identifier)) name = try self.consumeIdentifier();
+        if (self.currentIs(.identifier)) {
+            end_token = self.current_token;
+            name = try self.consumeIdentifier();
+        }
 
         return .{
             .token = start,
             .type = .{
                 .fork = .{
                     .name = name,
+                    .end_token = end_token,
                     .body = try self.block(),
                     .is_backup = is_backup,
                 },

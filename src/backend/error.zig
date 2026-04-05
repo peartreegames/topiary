@@ -6,6 +6,7 @@ pub const CompilerErr = struct {
     fmt: []const u8,
     severity: Severity,
     token: Token,
+    end_token: ?Token = null,
     note: ?[]const u8 = null,
     suggestion: ?[]const u8 = null,
 
@@ -30,6 +31,11 @@ pub const CompilerErr = struct {
         try writer.print("{s}{s}: \x1b[0m{s}\n", .{ color_prefix, label, self.fmt });
         var start = self.token.start;
         var end = self.token.end;
+        if (self.end_token) |et| {
+            if (et.file_index == self.token.file_index and et.line == self.token.line and et.end > end) {
+                end = et.end;
+            }
+        }
         const line = self.token.line;
         const column = self.token.column;
 
@@ -88,6 +94,25 @@ pub const CompilerErrors = struct {
         });
     }
 
+    pub fn addSpan(
+        self: *CompilerErrors,
+        file_path: []const u8,
+        comptime fmt: []const u8,
+        start_token: Token,
+        end_token: ?Token,
+        severity: CompilerErr.Severity,
+        args: anytype,
+    ) !void {
+        const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
+        try self.list.append(self.allocator, .{
+            .file_path = file_path,
+            .fmt = msg,
+            .severity = severity,
+            .token = start_token,
+            .end_token = end_token,
+        });
+    }
+
     pub fn addWithHelp(
         self: *CompilerErrors,
         file_path: []const u8,
@@ -104,6 +129,29 @@ pub const CompilerErrors = struct {
             .fmt = msg,
             .severity = severity,
             .token = token,
+            .suggestion = suggestion,
+            .note = note,
+        });
+    }
+
+    pub fn addSpanWithHelp(
+        self: *CompilerErrors,
+        file_path: []const u8,
+        comptime fmt: []const u8,
+        start_token: Token,
+        end_token: ?Token,
+        severity: CompilerErr.Severity,
+        args: anytype,
+        suggestion: ?[]const u8,
+        note: ?[]const u8,
+    ) !void {
+        const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
+        try self.list.append(self.allocator, .{
+            .file_path = file_path,
+            .fmt = msg,
+            .severity = severity,
+            .token = start_token,
+            .end_token = end_token,
             .suggestion = suggestion,
             .note = note,
         });

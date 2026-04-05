@@ -189,6 +189,7 @@ pub const Statement = struct {
         },
         fork: struct {
             name: ?[]const u8,
+            end_token: Token,
             body: []const Statement,
             is_backup: bool,
         },
@@ -208,6 +209,7 @@ pub const Statement = struct {
         include: []const u8,
         divert: struct {
             path: [][]const u8,
+            end_token: Token,
             is_backup: bool,
         },
         return_expression: Expression,
