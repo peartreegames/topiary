@@ -784,37 +784,58 @@ pub const Compiler = struct {
                 try self.setSymbol(v.name, symbol, token, true);
             },
             .class => |c| {
+                // `transferred` gates every errdefer below: once the class
+                // value is safely handed to the constants pool, ownership
+                // moves with it and the pool's teardown (Class.deinit ->
+                // destroyStatic) is solely responsible for cleanup.
+                var transferred = false;
+
+                const class_name = try self.alloc.dupe(u8, c.name);
+                errdefer if (!transferred) self.alloc.free(class_name);
+
                 var fields = try self.alloc.alloc(types.Class.Member, c.fields.len);
                 var fields_filled: usize = 0;
-                errdefer {
-                    for (fields[0..fields_filled]) |m| self.alloc.free(m.name);
+                errdefer if (!transferred) {
+                    for (fields[0..fields_filled]) |m| {
+                        self.alloc.free(m.name);
+                        m.value.destroyStatic(self.alloc);
+                    }
                     self.alloc.free(fields);
-                }
+                };
 
                 for (c.fields, 0..) |field_expr, i| {
                     const value = try self.evaluateLiteral(&field_expr);
-                    fields[i] = .{
-                        .name = try self.alloc.dupe(u8, c.field_names[i]),
-                        .value = value,
-                    };
+                    errdefer value.destroyStatic(self.alloc);
+                    const name = try self.alloc.dupe(u8, c.field_names[i]);
+                    fields[i] = .{ .name = name, .value = value };
                     fields_filled = i + 1;
                 }
+
                 var methods = try self.alloc.alloc(types.Class.Member, c.methods.len);
-                errdefer self.alloc.free(methods);
+                var methods_filled: usize = 0;
+                errdefer if (!transferred) {
+                    for (methods[0..methods_filled]) |m| {
+                        self.alloc.free(m.name);
+                        m.value.destroy(self.alloc);
+                    }
+                    self.alloc.free(methods);
+                };
 
                 for (c.methods, 0..) |method_stmt, i| {
                     const func = method_stmt.type.function;
-                    const name = func.name;
-
                     const func_obj = try self.compileFunctionObj(method_stmt, method_stmt.token);
-
-                    methods[i] = .{
-                        .name = try self.alloc.dupe(u8, name),
-                        .value = .{ .obj = func_obj },
-                    };
+                    errdefer {
+                        const v: Value = .{ .obj = func_obj };
+                        v.destroy(self.alloc);
+                    }
+                    const name = try self.alloc.dupe(u8, func.name);
+                    methods[i] = .{ .name = name, .value = .{ .obj = func_obj } };
+                    methods_filled = i + 1;
                 }
-                const class_data = try types.Class.init(try self.alloc.dupe(u8, c.name), fields, methods);
+
+                const class_data = try types.Class.init(class_name, fields, methods);
                 const obj = try self.alloc.create(Value.Obj);
+                errdefer if (!transferred) self.alloc.destroy(obj);
                 obj.* = .{
                     .id = UUID.new(),
                     .data = .{ .class = class_data },
@@ -823,6 +844,7 @@ pub const Compiler = struct {
                 const full_name = try self.getQualifiedName(c.name);
                 defer self.alloc.free(full_name);
                 try self.replaceConstant(full_name, .{ .obj = obj }, token);
+                transferred = true;
             },
             .@"enum" => |e| {
                 var values = try self.alloc.alloc([]const u8, e.values.len);

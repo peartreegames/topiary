@@ -25,7 +25,7 @@ pub const Class = struct {
         for (self.fields) |f| {
             allocator.free(f.name);
             if (self.is_gc_managed) continue;
-            f.value.destroy(allocator);
+            f.value.destroyStatic(allocator);
         }
         allocator.free(self.fields);
         for (self.methods) |f| {

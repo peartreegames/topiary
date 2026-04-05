@@ -138,6 +138,37 @@ pub const Value = union(Type) {
         }
     }
 
+    /// Recursive destroy for compile-time-owned values. Unlike `destroy`,
+    /// this walks list/set/map containers and destroys their element
+    /// Values before freeing the container storage. Intended only for
+    /// values produced by the compiler's static `evaluateLiteral` path,
+    /// where no GC exists to separately own inner `Obj`s.
+    pub fn destroyStatic(self: Value, alloc: std.mem.Allocator) void {
+        switch (self) {
+            .obj => |o| {
+                switch (o.data) {
+                    .list => |*l| {
+                        for (l.items) |item| item.destroyStatic(alloc);
+                    },
+                    .set => |*s| {
+                        for (s.keys()) |k| k.destroyStatic(alloc);
+                    },
+                    .map => |*m| {
+                        var it = m.iterator();
+                        while (it.next()) |entry| {
+                            entry.key_ptr.*.destroyStatic(alloc);
+                            entry.value_ptr.*.destroyStatic(alloc);
+                        }
+                    },
+                    else => {},
+                }
+                o.deinit(alloc);
+                alloc.destroy(o);
+            },
+            else => {},
+        }
+    }
+
     pub fn is(self: Value, tag_type: Type) bool {
         return self.tag() == tag_type;
     }

@@ -2589,3 +2589,40 @@ test "GC: class instance with default list field under pressure" {
     try testing.expect(pair_map.keys().len == 1);
     try testing.expect(pair_map.keys()[0].number == 10);
 }
+
+test "GC: class default string containers do not leak compile-time items" {
+    // Regression: evaluateLiteral allocates heap Value.Objs for each string
+    // (and nested container) inside List/Set/Map class-field defaults. On
+    // teardown, Class.deinit -> destroyStatic must recursively free those
+    // inner items. testing.allocator fails the test on leaks.
+    const source =
+        \\ class Thing {
+        \\     names = List{"a","b","c"},
+        \\     tags = Set{"x","y"},
+        \\     lookup = Map{"k":"v"}
+        \\ }
+        \\ var t = new Thing{}
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(source, mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    vm.interpret() catch |err| {
+        printErr(&vm);
+        return err;
+    };
+    const t_idx = try vm.getGlobalsIndex("t");
+    const inst = vm.globals[t_idx].obj.data.instance;
+    const names = inst.fields[0].obj.data.list;
+    try testing.expect(names.items.len == 3);
+    try testing.expectEqualStrings("a", names.items[0].obj.data.string);
+    try testing.expectEqualStrings("c", names.items[2].obj.data.string);
+    const tags = inst.fields[1].obj.data.set;
+    try testing.expect(tags.keys().len == 2);
+    const lookup = inst.fields[2].obj.data.map;
+    try testing.expect(lookup.keys().len == 1);
+    try testing.expectEqualStrings("k", lookup.keys()[0].obj.data.string);
+    try testing.expectEqualStrings("v", lookup.values()[0].obj.data.string);
+}

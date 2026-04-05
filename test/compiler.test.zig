@@ -1169,6 +1169,38 @@ test "Static Literal Error Mentions Kind" {
     try testing.expect(has_kind_note);
 }
 
+test "Class field compile error does not leak prior defaults" {
+    // Regression: if evaluateLiteral succeeds for earlier fields (allocating
+    // heap Value.Objs) and then fails for a later one, the class-compilation
+    // errdefer must destroy the already-evaluated field values/names.
+    // testing.allocator fails the test on leaks.
+    const cases = .{
+        // Heap-allocated string, then invalid (range) literal.
+        \\ class X {
+        \\     ok = "keep",
+        \\     bad = 0..5
+        \\ }
+        ,
+        // Heap-allocated list of strings, then invalid literal.
+        \\ class Y {
+        \\     tags = List{"a","b"},
+        \\     bad = 0..5
+        \\ }
+        ,
+        // Nested container, then invalid literal.
+        \\ class Z {
+        \\     m = Map{"k":List{"v"}},
+        \\     bad = 0..5
+        \\ }
+    };
+    inline for (cases) |src| {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        const res = compileSource(src, mod);
+        try testing.expectError(error.IllegalOperation, res);
+    }
+}
+
 test "Circular Include Error" {
     var mod = try Module.initEmpty(allocator);
     defer mod.deinit();
