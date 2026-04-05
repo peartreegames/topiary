@@ -220,6 +220,19 @@ pub const Compiler = struct {
         return Error.CompilerError;
     }
 
+    fn failErrorWithHelp(
+        self: *Compiler,
+        comptime msg: []const u8,
+        token: Token,
+        args: anytype,
+        suggestion: ?[]const u8,
+        note: ?[]const u8,
+        err: Error,
+    ) Error {
+        try self.module.errors.addWithHelp(self.current_file.path, msg, token, .err, args, suggestion, note);
+        return err;
+    }
+
     fn warnWithHelp(
         self: *Compiler,
         comptime msg: []const u8,
@@ -321,6 +334,60 @@ pub const Compiler = struct {
         for (class_def.fields) |f| try names.append(self.alloc, f.name);
         for (class_def.methods) |m| try names.append(self.alloc, m.name);
         return try self.suggestFromList(name, names.items);
+    }
+
+    /// Writer-friendly name for an expression's syntactic kind. Used in
+    /// error messages instead of leaking `@tagName` (which exposes
+    /// internal AST tags like "binary" or "call").
+    fn expressionKindName(expr: Expression) []const u8 {
+        return switch (expr.type) {
+            .number => "number literal",
+            .string => "string literal",
+            .boolean => "boolean literal",
+            .nil => "nil",
+            .list => "list literal",
+            .set => "set literal",
+            .map => "map literal",
+            .map_pair => "map entry",
+            .range => "range",
+            .identifier => "variable",
+            .indexer => "indexer",
+            .call => "function call",
+            .unary => "unary expression",
+            .binary => "binary expression",
+            .instance => "instance",
+            .@"if" => "ternary expression",
+            .@"extern" => "extern",
+        };
+    }
+
+    /// Writer-friendly name for a Value.Obj's contained type. Used in
+    /// error messages instead of leaking `@tagName` / `{t}` debug format
+    /// on `Value.Obj.Data`.
+    fn objKindName(data: Value.Obj.Data) []const u8 {
+        return switch (data) {
+            .string => "string",
+            .list => "list",
+            .set => "set",
+            .map => "map",
+            .function => "function",
+            .class => "class",
+            .instance => "instance",
+            .@"enum" => "enum",
+            .anchor => "anchor",
+            .@"extern" => "extern function",
+            .builtin => "builtin",
+        };
+    }
+
+    fn failAssignTarget(self: *Compiler, left: *const Expression) Error {
+        return self.failWithHelp(
+            "Cannot assign to a {s}",
+            left.token,
+            .{expressionKindName(left.*)},
+            null,
+            try self.alloc.dupe(u8, "assignment targets must be a variable or an indexer (e.g. `list[0]` or `obj.field`)"),
+        );
     }
 
     fn suggestAnchor(self: *Compiler, path: []const u8) !?[]const u8 {
@@ -718,13 +785,19 @@ pub const Compiler = struct {
             },
             .class => |c| {
                 var fields = try self.alloc.alloc(types.Class.Member, c.fields.len);
-                errdefer self.alloc.free(fields);
+                var fields_filled: usize = 0;
+                errdefer {
+                    for (fields[0..fields_filled]) |m| self.alloc.free(m.name);
+                    self.alloc.free(fields);
+                }
 
                 for (c.fields, 0..) |field_expr, i| {
+                    const value = try self.evaluateLiteral(&field_expr);
                     fields[i] = .{
                         .name = try self.alloc.dupe(u8, c.field_names[i]),
-                        .value = try self.evaluateLiteral(&field_expr),
+                        .value = value,
                     };
+                    fields_filled = i + 1;
                 }
                 var methods = try self.alloc.alloc(types.Class.Member, c.methods.len);
                 errdefer self.alloc.free(methods);
@@ -1033,7 +1106,32 @@ pub const Compiler = struct {
                         }
                     }
                 }
-                return self.failError("Expression cannot be evaluated", token, .{}, Error.IllegalOperation);
+                // Try to render the indexer target.field so the writer knows
+                // what the compiler was looking at. If we can resolve the target
+                // to a known class/enum, offer a did-you-mean for the field.
+                var suggestion: ?[]const u8 = null;
+                var note: ?[]const u8 = null;
+                if (idx.target.type == .identifier and idx.index.type == .identifier) {
+                    const target_name = idx.target.type.identifier;
+                    const field_name = idx.index.type.identifier;
+                    note = try std.fmt.allocPrint(self.alloc, "could not resolve '{s}.{s}' at compile time", .{ target_name, field_name });
+                    if (self.constants_map.get(target_name)) |target_idx| {
+                        const target_val = self.constants.items[target_idx];
+                        if (target_val == .obj and target_val.obj.data == .class) {
+                            suggestion = try self.suggestClassField(target_val.obj.data.class, field_name);
+                        } else if (target_val == .obj and target_val.obj.data == .@"enum") {
+                            suggestion = try self.suggestFromList(field_name, target_val.obj.data.@"enum".values);
+                        }
+                    }
+                }
+                return self.failErrorWithHelp(
+                    "Cannot resolve this indexer at compile time",
+                    token,
+                    .{},
+                    suggestion,
+                    note,
+                    Error.IllegalOperation,
+                );
             },
             .nil => return .nil,
             .list => |l| {
@@ -1064,7 +1162,18 @@ pub const Compiler = struct {
                 obj.* = .{ .id = UUID.new(), .data = .{ .map = map } };
                 return .{ .obj = obj };
             },
-            else => return self.failError("Expression of type '{s}' is not a valid static literal", token, .{@tagName(expr.type)}, Error.IllegalOperation),
+            else => return self.failErrorWithHelp(
+                "Only literal values are allowed here",
+                token,
+                .{},
+                null,
+                try std.fmt.allocPrint(
+                    self.alloc,
+                    "got a {s}; constants must be numbers, strings, bools, nil, or lists/sets/maps of literals",
+                    .{expressionKindName(expr.*)},
+                ),
+                Error.IllegalOperation,
+            ),
         }
     }
 
@@ -1146,9 +1255,41 @@ pub const Compiler = struct {
     }
 
     pub fn compileBlock(self: *Compiler, stmts: []const Statement) Error!void {
-        for (stmts) |stmt| {
+        var exited_at: ?usize = null;
+        for (stmts, 0..) |stmt, i| {
+            if (exited_at == null and isUnconditionalExit(stmt)) {
+                exited_at = i;
+            }
             try self.compileStatement(stmt);
         }
+        if (exited_at) |i| {
+            if (i + 1 < stmts.len) {
+                try self.warnWithHelp(
+                    "Unreachable code after '{s}'",
+                    stmts[i + 1].token,
+                    .{exitKeyword(stmts[i])},
+                    null,
+                    null,
+                );
+            }
+        }
+    }
+
+    fn isUnconditionalExit(stmt: Statement) bool {
+        return switch (stmt.type) {
+            .return_expression, .return_void, .fin => true,
+            .divert => |d| !d.is_backup,
+            else => false,
+        };
+    }
+
+    fn exitKeyword(stmt: Statement) []const u8 {
+        return switch (stmt.type) {
+            .return_expression, .return_void => "return",
+            .fin => "fin",
+            .divert => "divert",
+            else => "",
+        };
     }
 
     fn registerAnchor(self: *Compiler, full_name: []const u8, token: Token) !void {
@@ -1213,7 +1354,7 @@ pub const Compiler = struct {
                             if (idx.target.type == .identifier) {
                                 if (self.constants_map.get(idx.target.type.identifier)) |i| {
                                     const val = self.constants.items[i];
-                                    return self.fail("Cannot reassign {t} field", token, .{val.obj.data});
+                                    return self.fail("Cannot reassign field on a {s}", token, .{objKindName(val.obj.data)});
                                 }
                             }
                             try self.compileExpression(bin.right);
@@ -1223,7 +1364,7 @@ pub const Compiler = struct {
                             try self.writeOp(.set_property, token);
                             return;
                         },
-                        else => unreachable,
+                        else => return self.failAssignTarget(bin.left),
                     }
                 }
                 try self.compileExpression(bin.left);
@@ -1266,7 +1407,7 @@ pub const Compiler = struct {
                                     if (self.constants_map.get(idx.target.type.identifier)) |i| {
                                         const val = self.constants.items[i];
                                         if (val == .obj and (val.obj.data == .class or val.obj.data == .@"enum" or val.obj.data == .function)) {
-                                            return self.fail("Cannot assign value to {t}", token, .{val.obj.data});
+                                            return self.fail("Cannot assign to a {s} member", token, .{objKindName(val.obj.data)});
                                         }
                                     }
                                 }
@@ -1276,7 +1417,7 @@ pub const Compiler = struct {
                                 try self.writeOp(.set_property, token);
                                 return;
                             },
-                            else => return self.fail("Cannot assign value of type '{s}'", bin.left.token, .{@tagName(bin.left.type)}),
+                            else => return self.failAssignTarget(bin.left),
                         }
                     },
                     else => {},

@@ -1097,6 +1097,139 @@ test "Shadowing Warning" {
     try testing.expect(has_warning);
 }
 
+test "Unreachable Code Warning" {
+    const inputs = .{
+        .{
+            .src =
+            \\ fn thing |x| {
+            \\   return x + 1
+            \\   var y = 5
+            \\ }
+            \\ === START {
+            \\   :: "hi"
+            \\ }
+            ,
+            .keyword = "return",
+        },
+        .{
+            .src =
+            \\ === START {
+            \\   :: "one"
+            \\   fin
+            \\   :: "two"
+            \\ }
+            ,
+            .keyword = "fin",
+        },
+        .{
+            .src =
+            \\ === OTHER {
+            \\   :: "o"
+            \\ }
+            \\ === START {
+            \\   => OTHER
+            \\   :: "hi"
+            \\ }
+            ,
+            .keyword = "divert",
+        },
+    };
+    inline for (inputs) |case| {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var bytecode = compileSource(case.src, mod) catch |err| {
+            for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+            return err;
+        };
+        defer bytecode.free(allocator);
+        var has_warning = false;
+        for (mod.errors.list.items) |e| {
+            if (e.severity == .warn and std.mem.indexOf(u8, e.fmt, "Unreachable") != null and
+                std.mem.indexOf(u8, e.fmt, case.keyword) != null) has_warning = true;
+        }
+        try testing.expect(has_warning);
+    }
+}
+
+test "Static Literal Error Mentions Kind" {
+    const input =
+        \\ class Box { val = 0..5 }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    const res = compileSource(input, mod);
+    try testing.expectError(error.IllegalOperation, res);
+    var has_kind_note = false;
+    for (mod.errors.list.items) |e| {
+        if (e.note) |n| {
+            if (std.mem.indexOf(u8, n, "variable") != null or std.mem.indexOf(u8, n, "literal") != null)
+                has_kind_note = true;
+        }
+    }
+    try testing.expect(has_kind_note);
+}
+
+test "Circular Include Error" {
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    const arena_alloc = mod.arena.allocator();
+    // Manually register two mutually-including files.
+    const file_a = try arena_alloc.create(File);
+    file_a.* = .{
+        .path = "a.topi",
+        .name = "a.topi",
+        .dir_name = ".",
+        .source = "include \"b.topi\"\n=== START { :: \"a\" }",
+        .module = mod,
+    };
+    const file_b = try arena_alloc.create(File);
+    file_b.* = .{
+        .path = "b.topi",
+        .name = "b.topi",
+        .dir_name = ".",
+        .source = "include \"a.topi\"\n",
+        .module = mod,
+    };
+    mod.entry = file_a;
+    try mod.includes.putNoClobber(file_a.path, file_a);
+    try mod.includes.putNoClobber(file_b.path, file_b);
+
+    const res = mod.generateBytecode(allocator);
+    // May or may not error downstream; we only care about the cycle diagnostic.
+    if (res) |*bc| {
+        var b = bc.*;
+        b.free(allocator);
+    } else |_| {}
+
+    var has_cycle = false;
+    for (mod.errors.list.items) |e| {
+        if (std.mem.indexOf(u8, e.fmt, "Circular include") != null) has_cycle = true;
+    }
+    try testing.expect(has_cycle);
+}
+
+test "Unreachable Code Warning - Backup Divert Does Not Fire Warning" {
+    const input =
+        \\ === OTHER {
+        \\   :: "o"
+        \\ }
+        \\ === START {
+        \\   =>^ OTHER
+        \\   :: "after"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = compileSource(input, mod) catch |err| {
+        for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+        return err;
+    };
+    defer bytecode.free(allocator);
+    for (mod.errors.list.items) |e| {
+        try testing.expect(std.mem.indexOf(u8, e.fmt, "Unreachable") == null);
+    }
+}
+
 test "Compile Enums Error" {
     const tests = .{
         \\ enum TimeOfDay {

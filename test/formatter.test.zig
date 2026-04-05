@@ -162,6 +162,34 @@ test "format: backup divert" {
     , result);
 }
 
+test "format: backup divert normalizes spacing" {
+    const result = try formatSource(
+        \\=== S { => ^OTHER }
+    );
+    defer allocator.free(result);
+    try testing.expectEqualStrings(
+        \\=== S {
+        \\    =>^ OTHER
+        \\}
+        \\
+    , result);
+}
+
+test "format: backup fork normalizes spacing" {
+    const result = try formatSource(
+        \\=== S { fork ^CHOICES { ~ "x" :: "y" } }
+    );
+    defer allocator.free(result);
+    try testing.expectEqualStrings(
+        \\=== S {
+        \\    fork^ CHOICES {
+        \\        ~ "x" :: "y"
+        \\    }
+        \\}
+        \\
+    , result);
+}
+
 test "format: function declaration" {
     const result = try formatSource("fn add |x, y| return x + y");
     defer allocator.free(result);

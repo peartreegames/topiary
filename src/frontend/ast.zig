@@ -351,7 +351,10 @@ pub const UnaryOp = enum {
         return switch (tok.token_type) {
             .bang => .not,
             .minus => .negate,
-            else => unreachable,
+            else => std.debug.panic(
+                "Internal compiler error: expected unary operator token (bang/minus), got {s} at line {d} — please report this",
+                .{ @tagName(tok.token_type), tok.line },
+            ),
         };
     }
     pub fn toString(self: UnaryOp) []const u8 {
@@ -403,7 +406,10 @@ pub const BinaryOp = enum {
             .star_equal => .assign_multiply,
             .slash_equal => .assign_divide,
             .percent_equal => .assign_modulus,
-            else => unreachable,
+            else => std.debug.panic(
+                "Internal compiler error: expected binary operator token, got {s} at line {d} — please report this",
+                .{ @tagName(tok.token_type), tok.line },
+            ),
         };
     }
     pub fn toString(self: BinaryOp) []const u8 {

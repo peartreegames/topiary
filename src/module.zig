@@ -4,6 +4,7 @@ const Statement = frontend.Statement;
 const Tree = frontend.Tree;
 const Lexer = frontend.Lexer;
 const Parser = frontend.Parser;
+const Token = frontend.Token;
 
 const backend = @import("backend/index.zig");
 const Bytecode = backend.Bytecode;
@@ -84,28 +85,106 @@ pub const Module = struct {
         return try compiler.bytecode();
     }
 
+    const IncludeDirective = struct { path: []const u8, token: Token };
+
     /// Resolve all include directives transitively by scanning tokens.
     /// Loads source for each discovered file. After this completes,
     /// all files are in self.includes with their sources loaded.
+    /// Detects circular includes and emits a compile error pointing at
+    /// the offending include directive.
     pub fn resolveIncludes(self: *Module) !void {
-        var i: usize = 0;
-        while (i < self.includes.count()) : (i += 1) {
-            const file = self.includes.values()[i];
-            try file.loadSource();
-            const paths = try self.scanForIncludes(file);
-            for (paths) |raw_path| {
-                const resolved = try self.resolveIncludePath(file, raw_path);
+        const alloc = self.arena.allocator();
+        var chain: std.ArrayList([]const u8) = .empty;
+        defer chain.deinit(alloc);
+        var visited = std.StringHashMap(void).init(alloc);
+        defer visited.deinit();
+        try self.resolveIncludesRec(self.entry, &chain, &visited);
+    }
+
+    fn resolveIncludesRec(
+        self: *Module,
+        file: *File,
+        chain: *std.ArrayList([]const u8),
+        visited: *std.StringHashMap(void),
+    ) !void {
+        if (visited.contains(file.path)) return;
+        try file.loadSource();
+
+        const alloc = self.arena.allocator();
+        try chain.append(alloc, file.path);
+        defer _ = chain.pop();
+
+        const includes = try self.scanForIncludes(file);
+        for (includes) |inc| {
+            const resolved = try self.resolveIncludePath(file, inc.path);
+            var is_cycle = false;
+            for (chain.items) |p| {
+                if (std.mem.eql(u8, p, resolved)) {
+                    is_cycle = true;
+                    break;
+                }
+            }
+            if (is_cycle) {
+                try self.addCycleError(chain.items, resolved, inc.token, file.path);
+                // Still register the file so later lookups don't double-fail.
                 _ = try self.addFileAtPath(resolved);
+                continue;
+            }
+            const child = try self.addFileAtPath(resolved);
+            try self.resolveIncludesRec(child, chain, visited);
+        }
+        try visited.put(file.path, {});
+    }
+
+    fn addCycleError(
+        self: *Module,
+        chain: []const []const u8,
+        repeated: []const u8,
+        token: Token,
+        including_path: []const u8,
+    ) !void {
+        // Find the first occurrence of the repeated path in the chain
+        // so we render just the cycle, not the prefix leading into it.
+        var start: usize = 0;
+        for (chain, 0..) |p, i| {
+            if (std.mem.eql(u8, p, repeated)) {
+                start = i;
+                break;
             }
         }
+
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(self.allocator);
+        for (chain[start..]) |p| {
+            try buf.appendSlice(self.allocator, std.fs.path.basename(p));
+            try buf.appendSlice(self.allocator, " -> ");
+        }
+        try buf.appendSlice(self.allocator, std.fs.path.basename(repeated));
+        const cycle_str = try buf.toOwnedSlice(self.allocator);
+        defer self.allocator.free(cycle_str);
+
+        const note = try self.allocator.dupe(
+            u8,
+            "remove one of the include directives, or break the cycle by moving shared content into a third file",
+        );
+        try self.errors.addWithHelp(
+            including_path,
+            "Circular include: {s}",
+            token,
+            .err,
+            .{cycle_str},
+            null,
+            note,
+        );
     }
 
     /// Lightweight lexer scan that finds all include "path" patterns
-    /// without doing a full parse.
-    fn scanForIncludes(self: *Module, file: *File) ![][]const u8 {
+    /// without doing a full parse. Returns the raw path text alongside
+    /// the include directive's token so diagnostics can point at the line.
+    fn scanForIncludes(self: *Module, file: *File) ![]IncludeDirective {
         const source = file.source orelse return &.{};
         var lexer = Lexer.init(source, 0);
-        var paths: std.ArrayList([]const u8) = .empty;
+        var out: std.ArrayList(IncludeDirective) = .empty;
         const alloc = self.arena.allocator();
 
         while (true) {
@@ -114,11 +193,14 @@ pub const Module = struct {
             if (tok.token_type == .include) {
                 const next_tok = lexer.next(0);
                 if (next_tok.token_type == .string) {
-                    try paths.append(alloc, source[next_tok.start..next_tok.end]);
+                    try out.append(alloc, .{
+                        .path = source[next_tok.start..next_tok.end],
+                        .token = tok,
+                    });
                 }
             }
         }
-        return try paths.toOwnedSlice(alloc);
+        return try out.toOwnedSlice(alloc);
     }
 
     /// Resolve an include path relative to the including file's directory,

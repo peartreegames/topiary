@@ -721,7 +721,7 @@ pub const Parser = struct {
         while (!self.currentIs(.right_brace)) {
             const item = try self.mapPairSetKey();
             if (item.type != .map_pair)
-                return self.fail("Item type '{s}' cannot be added to map", item.token, .{@tagName(item.type)});
+                return self.fail("Map entries must use 'key: value' syntax", item.token, .{});
             try list.append(self.allocator, item);
             self.next();
             if (self.currentIs(.comma) or self.peekIs(.right_brace)) self.next();
@@ -747,7 +747,7 @@ pub const Parser = struct {
         while (!self.currentIs(.right_brace)) {
             const item = try self.mapPairSetKey();
             if (item.type == .map_pair)
-                return self.fail("Item type '{s}' cannot be added to set", item.token, .{@tagName(item.type)});
+                return self.fail("Set items cannot use 'key: value' syntax", item.token, .{});
             try list.append(self.allocator, item);
             self.next();
             if (self.currentIs(.comma) or self.peekIs(.right_brace)) self.next();
@@ -998,7 +998,10 @@ pub const Parser = struct {
             break :blk try self.identifierExpression();
         } else if (start_token.token_type == .left_bracket) blk: {
             break :blk try self.expression(.lowest);
-        } else unreachable;
+        } else std.debug.panic(
+            "Internal compiler error: indexerTail expected dot or left_bracket, got {s} at line {d} — please report this",
+            .{ @tagName(start_token.token_type), start_token.line },
+        );
 
         if (start_token.token_type == .left_bracket) {
             try self.expectPeek(.right_bracket);

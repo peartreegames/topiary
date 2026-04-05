@@ -601,7 +601,7 @@ pub const Vm = struct {
                     const frame_count = self.frames.items.len;
 
                     if (frame_count < frames_to_skip) {
-                        return self.fail("Variable is no longer in scope", .{});
+                        return self.fail("Cannot read captured variable: its frame has already returned", .{});
                     }
 
                     const target_frame = self.frames.items[frame_count - 1 - frames_to_skip];
@@ -614,7 +614,7 @@ pub const Vm = struct {
                     const frame_count = self.frames.items.len;
 
                     if (frame_count < frames_to_skip) {
-                        return self.fail("Variable is no longer in scope", .{});
+                        return self.fail("Cannot write captured variable: its frame has already returned", .{});
                     }
 
                     const target_frame = self.frames.items[frame_count - frames_to_skip];
