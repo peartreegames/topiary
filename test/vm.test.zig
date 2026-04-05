@@ -2407,3 +2407,185 @@ test "Runtime Cycle Empty List" {
     };
     try testing.expect(vm.stack.previous() == .nil);
 }
+
+// ---------------------------------------------------------------------------
+// GC stress tests. These force the collector to run on (nearly) every
+// allocation so that any missing roots or unrooted intermediates surface as
+// use-after-free corruption rather than latent bugs. Each test targets a
+// specific risk area identified in the GC audit.
+// ---------------------------------------------------------------------------
+
+fn gcStressVm(source: []const u8, mod: *Module) !Vm {
+    var vm = try initTestVm(source, mod, false);
+    vm.gc.setThreshold(0);
+    return vm;
+}
+
+test "GC: iterator holds list while body allocates" {
+    // The for loop holds `items` only via the iterator (vm.iterators). Each
+    // iteration of the loop body allocates a new string via split_method,
+    // which forces a collection. If the iterator were not a GC root, the
+    // list would be swept and the iterator would dereference freed memory.
+    const source =
+        \\ var items = List{"alpha,beta", "gamma,delta", "epsilon,zeta"}
+        \\ var total = 0
+        \\ for items |s| {
+        \\     var parts = s.split(",")
+        \\     total = total + parts.count()
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try gcStressVm(source, mod);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    vm.interpret() catch |err| {
+        printErr(&vm);
+        return err;
+    };
+    const total_idx = try vm.getGlobalsIndex("total");
+    try testing.expect(vm.globals[total_idx].number == 6);
+}
+
+test "GC: split produces many strings under collection pressure" {
+    // split_method appends intermediate GC-allocated strings to a local
+    // ArrayList (not a GC root) before wrapping it in a list. With the
+    // threshold at 0, every gc.create triggers a full mark-sweep, so any
+    // missing push-protection would free earlier strings.
+    const source =
+        \\ var parts = "a,b,c,d,e,f,g,h,i,j".split(",")
+        \\ var joined = ""
+        \\ for parts |p| {
+        \\     joined = joined + p
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try gcStressVm(source, mod);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    vm.interpret() catch |err| {
+        printErr(&vm);
+        return err;
+    };
+    const joined_idx = try vm.getGlobalsIndex("joined");
+    const joined = vm.globals[joined_idx].obj.data.string;
+    try testing.expectEqualStrings("abcdefghij", joined);
+}
+
+test "GC: nested list construction under pressure" {
+    // Building a list-of-lists inside the VM exercises both the list opcode
+    // handlers and the GC's handling of nested obj references. Verifies the
+    // expression-evaluation stack keeps children rooted while the parent is
+    // being built.
+    const source =
+        \\ var grid = List{List{1,2,3}, List{4,5,6}, List{7,8,9}}
+        \\ var total = 0
+        \\ for grid |row| {
+        \\     for row |cell| {
+        \\         total = total + cell
+        \\     }
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try gcStressVm(source, mod);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    vm.interpret() catch |err| {
+        printErr(&vm);
+        return err;
+    };
+    const total_idx = try vm.getGlobalsIndex("total");
+    try testing.expect(vm.globals[total_idx].number == 45);
+}
+
+test "GC: state round-trip with nested containers under pressure" {
+    // state.deserialize rebuilds nested containers via recursion. The
+    // ArrayList/HashMap builders are not GC roots, so children could be
+    // collected mid-build if intermediates are not push-protected.
+    const source =
+        \\ var data = List{List{"a","b"}, List{"c","d","e"}, Map{1:List{"f"}}}
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+
+    // First VM: serialize, then tear down cleanly.
+    var buf: [8192]u8 = undefined;
+    const serialized_len = blk: {
+        var vm1 = try initTestVm(source, mod, false);
+        defer vm1.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm1.runner))).deinit();
+        defer vm1.bytecode.free(testing.allocator);
+        try vm1.interpret();
+
+        var writer = std.Io.Writer.fixed(&buf);
+        try State.serialize(&vm1, &writer);
+        break :blk writer.end;
+    };
+
+    // Second VM: deserialize under extreme GC pressure, then verify the
+    // tree is still intact.
+    var mod2 = try Module.initEmpty(allocator);
+    defer mod2.deinit();
+    var vm2 = try initTestVm(source, mod2, false);
+    defer vm2.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm2.runner))).deinit();
+    defer vm2.bytecode.free(testing.allocator);
+
+    vm2.gc.setThreshold(0);
+    var reader = std.Io.Reader.fixed(buf[0..serialized_len]);
+    try State.deserialize(&vm2, &reader);
+
+    // Force one more collection by interpreting — if any of the restored
+    // children were collected during deserialize, this will crash or
+    // produce wrong data.
+    try vm2.interpret();
+
+    const data_idx = try vm2.getGlobalsIndex("data");
+    const outer = vm2.globals[data_idx].obj.data.list;
+    try testing.expect(outer.items.len == 3);
+    const first = outer.items[0].obj.data.list;
+    try testing.expect(first.items.len == 2);
+    try testing.expectEqualStrings("a", first.items[0].obj.data.string);
+    try testing.expectEqualStrings("b", first.items[1].obj.data.string);
+    const second = outer.items[1].obj.data.list;
+    try testing.expect(second.items.len == 3);
+    try testing.expectEqualStrings("e", second.items[2].obj.data.string);
+}
+
+test "GC: class instance with default list field under pressure" {
+    // createInstance clones the class's default field values. Each clone of
+    // a container allocates a new GC object; with threshold 0, every clone
+    // triggers mark-sweep, so earlier clones must be push-protected.
+    const source =
+        \\ class Thing {
+        \\     items = List{1,2,3}
+        \\     pair = Map{10:20}
+        \\ }
+        \\ var t = new Thing{}
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try gcStressVm(source, mod);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    vm.interpret() catch |err| {
+        printErr(&vm);
+        return err;
+    };
+    const t_idx = try vm.getGlobalsIndex("t");
+    const inst = vm.globals[t_idx].obj.data.instance;
+    // fields[0] = items list, fields[1] = pair map (order matches declaration)
+    const items_list = inst.fields[0].obj.data.list;
+    try testing.expect(items_list.items.len == 3);
+    try testing.expect(items_list.items[0].number == 1);
+    try testing.expect(items_list.items[2].number == 3);
+    const pair_map = inst.fields[1].obj.data.map;
+    try testing.expect(pair_map.keys().len == 1);
+    try testing.expect(pair_map.keys()[0].number == 10);
+}

@@ -366,14 +366,30 @@ fn split_method(vm: *Vm, args: []Value) Value {
     const delim = getStr(args[1]);
 
     var list: std.ArrayList(Value) = .empty;
+    // Strings are pushed to vm.stack as we create them so the GC sees them as
+    // roots (via Vm.markRoots). Without this, an allocation in a later iteration
+    // could collect strings created in earlier iterations — they are only
+    // otherwise reachable via `list`, which lives on the C stack and is not a
+    // GC root until the final `gc.create(.list)` call below.
+    const protect_base = vm.stack.count;
 
     if (delim.len == 0) {
         // split into individual characters
         for (s) |c| {
-            const char_buf = vm.alloc.alloc(u8, 1) catch return .{ .nil = {} };
+            const char_buf = vm.alloc.alloc(u8, 1) catch {
+                vm.stack.resize(protect_base);
+                return .{ .nil = {} };
+            };
             char_buf[0] = c;
-            const str_val = vm.gc.create(vm, .{ .string = char_buf }) catch return .{ .nil = {} };
-            list.append(vm.alloc, str_val) catch return .{ .nil = {} };
+            const str_val = vm.gc.create(vm, .{ .string = char_buf }) catch {
+                vm.stack.resize(protect_base);
+                return .{ .nil = {} };
+            };
+            list.append(vm.alloc, str_val) catch {
+                vm.stack.resize(protect_base);
+                return .{ .nil = {} };
+            };
+            vm.stack.push(str_val);
         }
     } else {
         var pos: usize = 0;
@@ -384,20 +400,42 @@ fn split_method(vm: *Vm, args: []Value) Value {
                 std.mem.indexOf(u8, s[pos..], delim);
 
             if (next) |idx| {
-                const part = vm.alloc.dupe(u8, s[pos .. pos + idx]) catch return .{ .nil = {} };
-                const str_val = vm.gc.create(vm, .{ .string = part }) catch return .{ .nil = {} };
-                list.append(vm.alloc, str_val) catch return .{ .nil = {} };
+                const part = vm.alloc.dupe(u8, s[pos .. pos + idx]) catch {
+                    vm.stack.resize(protect_base);
+                    return .{ .nil = {} };
+                };
+                const str_val = vm.gc.create(vm, .{ .string = part }) catch {
+                    vm.stack.resize(protect_base);
+                    return .{ .nil = {} };
+                };
+                list.append(vm.alloc, str_val) catch {
+                    vm.stack.resize(protect_base);
+                    return .{ .nil = {} };
+                };
+                vm.stack.push(str_val);
                 pos += idx + delim.len;
             } else {
-                const part = vm.alloc.dupe(u8, s[pos..]) catch return .{ .nil = {} };
-                const str_val = vm.gc.create(vm, .{ .string = part }) catch return .{ .nil = {} };
-                list.append(vm.alloc, str_val) catch return .{ .nil = {} };
+                const part = vm.alloc.dupe(u8, s[pos..]) catch {
+                    vm.stack.resize(protect_base);
+                    return .{ .nil = {} };
+                };
+                const str_val = vm.gc.create(vm, .{ .string = part }) catch {
+                    vm.stack.resize(protect_base);
+                    return .{ .nil = {} };
+                };
+                list.append(vm.alloc, str_val) catch {
+                    vm.stack.resize(protect_base);
+                    return .{ .nil = {} };
+                };
+                vm.stack.push(str_val);
                 break;
             }
         }
     }
 
-    return vm.gc.create(vm, .{ .list = list }) catch .{ .nil = {} };
+    const result: Value = vm.gc.create(vm, .{ .list = list }) catch .{ .nil = {} };
+    vm.stack.resize(protect_base);
+    return result;
 }
 
 fn substr_method(vm: *Vm, args: []Value) Value {

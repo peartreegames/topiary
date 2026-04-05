@@ -119,38 +119,57 @@ pub const ExportValue = extern struct {
                 return vm.gc.create(vm, .{ .string = str });
             },
             .list => {
+                // Push-protect children: the ArrayList is not a GC root, and a
+                // later iteration's gc.create could otherwise collect earlier
+                // elements.
+                const base = vm.stack.count;
                 var list: std.ArrayList(Value) = .empty;
                 for (0..self.data.list.count) |i| {
                     const item: *ExportValue = @ptrCast(&self.data.list.items[i]);
-                    try list.append(vm.alloc, try item.toValue(vm, free));
+                    const child = try item.toValue(vm, free);
+                    try list.append(vm.alloc, child);
+                    if (child == .obj) vm.stack.push(child);
                 }
                 free(@intFromPtr(self.data.list.items));
-                return vm.gc.create(vm, .{ .list = list });
+                const result = try vm.gc.create(vm, .{ .list = list });
+                vm.stack.resize(base);
+                return result;
             },
             .set => {
+                const base = vm.stack.count;
                 var set = Value.Obj.SetType.empty;
                 const length = self.data.list.count;
                 var i: usize = 0;
                 while (i < length) : (i += 1) {
                     const item: *ExportValue = @ptrCast(&self.data.list.items[i]);
                     const value = try item.toValue(vm, free);
+                    if (value == .obj) vm.stack.push(value);
                     try set.putContext(vm.alloc, value, {}, Value.adapter);
                 }
 
                 free(@intFromPtr(self.data.list.items));
-                return vm.gc.create(vm, .{ .set = set });
+                const result = try vm.gc.create(vm, .{ .set = set });
+                vm.stack.resize(base);
+                return result;
             },
             .map => {
+                const base = vm.stack.count;
                 var map = Value.Obj.MapType.empty;
                 const length = self.data.list.count;
                 var i: usize = 0;
                 while (i < length) : (i += 2) {
                     const key: *ExportValue = @ptrCast(&self.data.list.items[i]);
                     const value: *ExportValue = @ptrCast(&self.data.list.items[i + 1]);
-                    try map.put(vm.alloc, try key.toValue(vm, free), try value.toValue(vm, free));
+                    const k = try key.toValue(vm, free);
+                    if (k == .obj) vm.stack.push(k);
+                    const v = try value.toValue(vm, free);
+                    if (v == .obj) vm.stack.push(v);
+                    try map.put(vm.alloc, k, v);
                 }
                 free(@intFromPtr(self.data.list.items));
-                return vm.gc.create(vm, .{ .map = map });
+                const result = try vm.gc.create(vm, .{ .map = map });
+                vm.stack.resize(base);
+                return result;
             },
         };
     }

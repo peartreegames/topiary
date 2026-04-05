@@ -32,6 +32,12 @@ pub const Gc = struct {
         };
     }
 
+    /// Set the collection threshold. Intended for tests that need to force
+    /// frequent collections; production code should leave the default alone.
+    pub fn setThreshold(self: *Gc, threshold: usize) void {
+        self.threshold = threshold;
+    }
+
     pub fn deinit(self: *Gc) void {
         while (self.stack) |gc_obj| {
             const next = gc_obj.next;
@@ -42,7 +48,8 @@ pub const Gc = struct {
         self.* = undefined;
     }
 
-    /// root_ctx must have `fn root() []const []Value` function
+    /// root_ctx must have a `fn markRoots(self: *@This()) void` method that
+    /// calls `Gc.markValue` on every reachable root.
     pub fn create(self: *Gc, root_ctx: anytype, data: Obj.Data) !Value {
         if (self.allocated > self.threshold) {
             self.collect(root_ctx);
@@ -79,7 +86,7 @@ pub const Gc = struct {
         };
     }
 
-    fn markValue(val: Value) void {
+    pub fn markValue(val: Value) void {
         if (val == .obj) mark(@fieldParentPtr("obj", val.obj));
     }
 
@@ -106,9 +113,7 @@ pub const Gc = struct {
     }
 
     fn markAll(root_ctx: anytype) void {
-        for (root_ctx.roots()) |list| {
-            for (list) |item| markValue(item);
-        }
+        root_ctx.markRoots();
     }
 
     fn sweep(self: *Gc) void {

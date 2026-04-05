@@ -293,7 +293,12 @@ pub const State = struct {
         }
     }
 
-    fn deserializeEntry(vm: *Vm, root: *const std.json.ObjectMap, entry: std.json.Value, refs: *std.AutoHashMapUnmanaged(UUID.ID, Value), id: ?UUID.ID) !Value {
+    /// Child values created during container construction are push-protected
+    /// on `vm.stack` (a GC root) until the parent container is GC-registered.
+    /// Local `ArrayList`/`HashMap` builders and the `refs` map are not GC
+    /// roots, so without this a collection triggered mid-build could free
+    /// already-restored children.
+    fn deserializeEntry(vm: *Vm, root: *const std.json.ObjectMap, entry: std.json.Value, refs: *std.AutoHashMapUnmanaged(UUID.ID, Value), id: ?UUID.ID) anyerror!Value {
         if (entry.object.get("void") != null) return Void;
         if (entry.object.get("nil") != null) return Nil;
         if (entry.object.get("number")) |v| return .{ .number = @floatCast(v.float) };
@@ -326,33 +331,45 @@ pub const State = struct {
             };
         }
         if (entry.object.get("list")) |v| {
+            const base = vm.stack.count;
             var list: std.ArrayList(Value) = .empty;
             for (v.array.items) |item| {
-                try list.append(vm.alloc, try deserializeEntry(vm, root, item, refs, null));
+                const child = try deserializeEntry(vm, root, item, refs, null);
+                try list.append(vm.alloc, child);
+                if (child == .obj) vm.stack.push(child);
             }
             var result = try vm.gc.create(vm, .{ .list = list });
+            vm.stack.resize(base);
             result.obj.id = id.?;
             try refs.put(vm.alloc, id.?, result);
             return result;
         }
         if (entry.object.get("map")) |v| {
+            const base = vm.stack.count;
             var map = Value.Obj.MapType.empty;
             for (v.array.items) |item| {
                 const key = try deserializeEntry(vm, root, item.object.get("key").?, refs, null);
-                const value = try deserializeEntry(vm, root, item.object.get("value").?, refs, null);
-                try map.put(vm.alloc, key, value);
+                if (key == .obj) vm.stack.push(key);
+                const val = try deserializeEntry(vm, root, item.object.get("value").?, refs, null);
+                if (val == .obj) vm.stack.push(val);
+                try map.put(vm.alloc, key, val);
             }
             var result = try vm.gc.create(vm, .{ .map = map });
+            vm.stack.resize(base);
             result.obj.id = id.?;
             try refs.put(vm.alloc, id.?, result);
             return result;
         }
         if (entry.object.get("set")) |v| {
+            const base = vm.stack.count;
             var set = Value.Obj.SetType.empty;
             for (v.array.items) |item| {
-                try set.put(vm.alloc, try deserializeEntry(vm, root, item, refs, null), {});
+                const child = try deserializeEntry(vm, root, item, refs, null);
+                if (child == .obj) vm.stack.push(child);
+                try set.put(vm.alloc, child, {});
             }
             var result = try vm.gc.create(vm, .{ .set = set });
+            vm.stack.resize(base);
             result.obj.id = id.?;
             try refs.put(vm.alloc, id.?, result);
             return result;
@@ -423,13 +440,16 @@ pub const State = struct {
             const class_data = class_obj.data.class;
 
             // Build field values, matching by name to handle field reordering/additions/removals
+            const base = vm.stack.count;
             var fields = try vm.alloc.alloc(Value, class_data.fields.len);
             for (class_data.fields, 0..) |f, i| fields[i] = f.value;
             for (ser_fields) |sf| {
                 const name = sf.object.get("name").?.string;
                 for (class_data.fields, 0..) |cf, i| {
                     if (std.mem.eql(u8, cf.name, name)) {
-                        fields[i] = try deserializeEntry(vm, root, sf.object.get("value").?, refs, null);
+                        const child = try deserializeEntry(vm, root, sf.object.get("value").?, refs, null);
+                        fields[i] = child;
+                        if (child == .obj) vm.stack.push(child);
                         break;
                     }
                 }
@@ -439,6 +459,7 @@ pub const State = struct {
                 .base = class_obj,
                 .fields = fields,
             } });
+            vm.stack.resize(base);
             if (id) |uuid| {
                 result.obj.id = uuid;
                 try refs.put(vm.alloc, uuid, result);

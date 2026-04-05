@@ -183,9 +183,16 @@ pub const Vm = struct {
         }
     }
 
-    /// Returns root values that should not be cleaned up by the garbage collector
-    pub fn roots(self: *Vm) []const []Value {
-        return &([_][]Value{ self.globals, self.stack.backing });
+    /// Called by the GC to enumerate every reachable Value root. Scans:
+    /// - globals (all symbol storage)
+    /// - the live portion of the operand stack
+    /// - open iterators (each holds a `Value` being iterated)
+    /// Note: `variation_state` currently only holds `u32` indices, not Values,
+    /// so it is not scanned. If that ever changes, add it here.
+    pub fn markRoots(self: *Vm) void {
+        for (self.globals) |v| Gc.markValue(v);
+        for (self.stack.items) |v| Gc.markValue(v);
+        for (self.iterators.items) |it| Gc.markValue(it.value);
     }
 
     fn currentFrame(self: *Vm) *Frame {
@@ -752,21 +759,25 @@ pub const Vm = struct {
                     if (value != .obj and value.obj.data != .class)
                         return self.fail("Instance expected type class, but found '{s}'", .{value.typeName()});
 
-                    var count = self.takeInt(C.FIELDS);
-                    var fields = std.ArrayList(Class.Member).empty;
-                    defer fields.deinit(self.alloc);
-                    while (count > 0) : (count -= 1) {
-                        const name = try self.pop();
-                        const str_name = name.obj.data.string;
-                        const field = try self.pop();
-                        try fields.append(self.alloc, .{
-                            .name = str_name,
+                    const count = self.takeInt(C.FIELDS);
+                    // Field pairs remain on stack as [field_0, name_0, field_1, name_1, ...]
+                    // so they stay GC-rooted while createInstance clones class defaults
+                    // and calls gc.create. We resize the stack to drop them after.
+                    const pairs_base = self.stack.count - (count * 2);
+                    const fields = try self.alloc.alloc(Class.Member, count);
+                    defer self.alloc.free(fields);
+                    var i: usize = 0;
+                    while (i < count) : (i += 1) {
+                        const field = self.stack.backing[pairs_base + (i * 2)];
+                        const name = self.stack.backing[pairs_base + (i * 2) + 1];
+                        fields[i] = .{
+                            .name = name.obj.data.string,
                             .value = field,
-                        });
+                        };
                     }
-                    std.mem.reverse(Class.Member, fields.items);
-                    const instance = try self.createInstance(value.obj, try fields.toOwnedSlice(self.alloc));
-                    try self.pushAlloc(.{ .instance = instance });
+                    const instance_val = try self.createInstance(value.obj, fields);
+                    self.stack.resize(pairs_base);
+                    try self.push(instance_val);
                 },
                 .range => {
                     const left = try self.pop();
@@ -1201,60 +1212,98 @@ pub const Vm = struct {
         return result;
     }
 
-    fn clone(self: *Vm, value: Value) !Value {
+    /// Child clones are push-protected onto `self.stack` during construction
+    /// of each container so that a GC trigger in a later iteration cannot
+    /// collect clones sitting in a local (non-rooted) `ArrayList`/`HashMap`.
+    /// The protective pushes are popped before returning, so callers see no
+    /// stack side-effects.
+    fn clone(self: *Vm, value: Value) anyerror!Value {
         if (value != .obj) return value;
 
         const allocator = self.alloc;
         const obj = value.obj;
         switch (obj.data) {
             .list => |l| {
+                const base = self.stack.count;
                 var new_list = try std.ArrayList(Value).initCapacity(allocator, l.items.len);
                 for (l.items) |item| {
-                    try new_list.append(allocator, try self.clone(item));
+                    const child = try self.clone(item);
+                    try new_list.append(allocator, child);
+                    if (child == .obj) self.stack.push(child);
                 }
-                return try self.gc.create(self, .{ .list = new_list });
+                const result = try self.gc.create(self, .{ .list = new_list });
+                self.stack.resize(base);
+                return result;
             },
             .map => |m| {
+                const base = self.stack.count;
                 var new_map = Value.Obj.MapType.empty;
                 var it = m.iterator();
                 while (it.next()) |entry| {
-                    try new_map.put(allocator, try self.clone(entry.key_ptr.*), try self.clone(entry.value_ptr.*));
+                    const k = try self.clone(entry.key_ptr.*);
+                    if (k == .obj) self.stack.push(k);
+                    const v = try self.clone(entry.value_ptr.*);
+                    if (v == .obj) self.stack.push(v);
+                    try new_map.put(allocator, k, v);
                 }
-                return try self.gc.create(self, .{ .map = new_map });
+                const result = try self.gc.create(self, .{ .map = new_map });
+                self.stack.resize(base);
+                return result;
             },
             .set => |s| {
+                const base = self.stack.count;
                 var new_set = Value.Obj.SetType.empty;
                 var it = s.iterator();
                 while (it.next()) |entry| {
-                    try new_set.put(allocator, try self.clone(entry.key_ptr.*), {});
+                    const k = try self.clone(entry.key_ptr.*);
+                    if (k == .obj) self.stack.push(k);
+                    try new_set.put(allocator, k, {});
                 }
-                return try self.gc.create(self, .{ .set = new_set });
+                const result = try self.gc.create(self, .{ .set = new_set });
+                self.stack.resize(base);
+                return result;
             },
             .instance => |inst| {
+                const base = self.stack.count;
                 var values = try self.alloc.alloc(Value, inst.fields.len);
                 for (inst.fields, 0..) |inst_value, i| {
-                    values[i] = try self.clone(inst_value);
+                    const child = try self.clone(inst_value);
+                    values[i] = child;
+                    if (child == .obj) self.stack.push(child);
                 }
-                return try self.gc.create(self, .{ .instance = .{
+                const result = try self.gc.create(self, .{ .instance = .{
                     .base = inst.base,
                     .fields = values,
                 } });
+                self.stack.resize(base);
+                return result;
             },
             else => return value,
         }
     }
 
-    fn createInstance(self: *Vm, base: *Value.Obj, inst_fields: []Class.Member) !Class.Instance {
+    /// Cloned default field values are push-protected on `self.stack` while
+    /// the instance is being built, so a GC trigger in a subsequent clone
+    /// or in the final `gc.create` cannot collect earlier clones. Caller
+    /// is responsible for keeping `inst_fields` values GC-rooted.
+    fn createInstance(self: *Vm, base: *Value.Obj, inst_fields: []Class.Member) !Value {
         const class = base.data.class;
+        const stack_base = self.stack.count;
         var values = try self.alloc.alloc(Value, class.fields.len);
-        for (class.fields, 0..) |f, i| values[i] = try self.clone(f.value);
+        for (class.fields, 0..) |f, i| {
+            const cloned = try self.clone(f.value);
+            values[i] = cloned;
+            if (cloned == .obj) self.stack.push(cloned);
+        }
         for (inst_fields) |inst_field| {
             if (class.getFieldIndex(inst_field.name)) |i| values[i] = inst_field.value;
         }
-        return .{
+        const result = try self.gc.create(self, .{ .instance = .{
             .base = base,
             .fields = values,
-        };
+        } });
+        self.stack.resize(stack_base);
+        return result;
     }
 
     fn push(self: *Vm, value: Value) !void {
