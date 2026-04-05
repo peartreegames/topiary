@@ -33,6 +33,9 @@ const RuntimeErr = @import("error.zig").RuntimeErr;
 
 const LocaleProvider = @import("../locale.zig").LocaleProvider;
 
+const string_method_names = [_][]const u8{ "length", "has", "upper", "lower", "replace", "split", "substr", "trim" };
+const collection_method_names = [_][]const u8{ "count", "add", "remove", "has", "clear" };
+
 const stack_size = 4096;
 const frame_size = 255;
 const iterator_size = 255;
@@ -298,6 +301,39 @@ pub const Vm = struct {
                 return Error.BoughNotFound;
             }
         }
+    }
+
+    fn suggestClassMember(self: *Vm, c: Class, name: []const u8) !?[]const u8 {
+        var names: std.ArrayList([]const u8) = .empty;
+        defer names.deinit(self.alloc);
+        for (c.fields) |f| try names.append(self.alloc, f.name);
+        for (c.methods) |m| try names.append(self.alloc, m.name);
+        const match = (try backend.suggest.closest(self.alloc, name, names.items)) orelse return null;
+        defer self.alloc.free(match);
+        return try std.fmt.allocPrint(self.alloc, "did you mean '{s}'?", .{match});
+    }
+
+    fn failUnknownMethod(self: *Vm, comptime kind: []const u8, name: []const u8, valid: []const []const u8) !void {
+        const valid_list = try std.mem.join(self.alloc, ", ", valid);
+        defer self.alloc.free(valid_list);
+        const hint = blk: {
+            const match = backend.suggest.closest(self.alloc, name, valid) catch null;
+            if (match) |m| {
+                defer self.alloc.free(m);
+                break :blk std.fmt.allocPrint(self.alloc, "did you mean '{s}'?", .{m}) catch null;
+            }
+            break :blk null;
+        };
+        return self.failWithHelp(
+            "Unknown method '{s}' on " ++ kind ++ ". Valid methods are: {s}.",
+            .{ name, valid_list },
+            hint,
+        );
+    }
+
+    fn failWithHelp(self: *Vm, comptime msg: []const u8, args: anytype, suggestion: ?[]const u8) !void {
+        self.err.suggestion = suggestion;
+        return self.fail(msg, args);
     }
 
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {
@@ -763,7 +799,7 @@ pub const Vm = struct {
                                     if (builtins.string_methods.get(name)) |method_value| {
                                         try self.push(method_value);
                                         try self.push(target);
-                                    } else return self.fail("Unknown method '{s}' on string. Only 'length', 'has', 'upper', 'lower', 'replace', 'split', 'substr', 'trim' are allowed.", .{index.asString().?});
+                                    } else return self.failUnknownMethod("string", name, &string_method_names);
                                 }
                             },
                             .list => |l| {
@@ -771,7 +807,7 @@ pub const Vm = struct {
                                     if (builtins.methods.get(name)) |method_value| {
                                         try self.push(method_value);
                                         try self.push(target);
-                                    } else return self.fail("Unknown method '{s}' on list. Only 'count', 'add', 'remove', 'has', or 'clear' are allowed.", .{index.obj.data.string});
+                                    } else return self.failUnknownMethod("list", name, &collection_method_names);
                                 } else if (index == .number) {
                                     const i = @as(u32, @intFromFloat(index.number));
                                     if (i < 0 or i >= l.items.len) {
@@ -789,18 +825,21 @@ pub const Vm = struct {
                                     } else if (builtins.methods.get(name)) |method_value| {
                                         try self.push(method_value);
                                         try self.push(target);
-                                    } else return self.fail("Unknown method '{s}' on map. Only 'count', 'add', 'remove', 'has', or 'clear' are allowed.", .{index.obj.data.string});
+                                    } else return self.failUnknownMethod("map", name, &collection_method_names);
                                 } else try self.push(Nil);
                             },
                             .set => {
                                 const name = index.asString() orelse return self.fail("Can only query set methods by string name, found '{s}'", .{index.typeName()});
-                                const method = builtins.methods.get(name) orelse return self.fail("Unknown method '{s}' on set. Only 'count', 'add', 'remove', 'has', or 'clear' are allowed.", .{index.obj.data.string});
+                                const method = builtins.methods.get(name) orelse return self.failUnknownMethod("set", name, &collection_method_names);
                                 try self.push(method);
                                 try self.push(target);
                             },
                             .instance => |i| {
                                 const name = index.asString() orelse return self.fail("Can only query instance fields by string name, found '{s}'", .{index.typeName()});
-                                const value = try i.getProperty(name) orelse return self.fail("Unknown field '{s}' on instance of {s}.", .{ name, i.base.data.class.name });
+                                const value = try i.getProperty(name) orelse {
+                                    const hint = try self.suggestClassMember(i.base.data.class, name);
+                                    return self.failWithHelp("Unknown field '{s}' on instance of '{s}'", .{ name, i.base.data.class.name }, hint);
+                                };
                                 try self.push(value);
                                 if (value == .obj and value.obj.data == .function) {
                                     // push instance self
@@ -814,7 +853,17 @@ pub const Vm = struct {
                                         try self.push(.{ .enum_value = .{ .index = @intCast(i), .base = target.obj } });
                                         break;
                                     }
-                                } else return self.fail("Unknown value '{s}' on enum '{s}'", .{ index.obj.data.string, e.name });
+                                } else {
+                                    const hint = blk: {
+                                        const match = backend.suggest.closest(self.alloc, name, e.values) catch null;
+                                        if (match) |m| {
+                                            defer self.alloc.free(m);
+                                            break :blk std.fmt.allocPrint(self.alloc, "did you mean '{s}'?", .{m}) catch null;
+                                        }
+                                        break :blk null;
+                                    };
+                                    return self.failWithHelp("Unknown value '{s}' on enum '{s}'", .{ name, e.name }, hint);
+                                }
                             },
                             .class => |c| {
                                 const name = index.asString() orelse return self.fail("Can only query class fields by string name, found '{s}'", .{index.typeName()});
@@ -832,7 +881,10 @@ pub const Vm = struct {
                                             }
                                             break;
                                         }
-                                    } else return self.fail("Unknown value '{s}' on Class '{s}'", .{ name, c.name });
+                                    } else {
+                                    const hint = try self.suggestClassMember(c, name);
+                                    return self.failWithHelp("Unknown value '{s}' on Class '{s}'", .{ name, c.name }, hint);
+                                }
                                 }
                             },
                             else => return self.fail("Unknown target type '{s}' to index. Only lists, maps, sets, or instances can be indexed.", .{index.typeName()}),

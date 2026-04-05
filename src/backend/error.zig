@@ -6,6 +6,8 @@ pub const CompilerErr = struct {
     fmt: []const u8,
     severity: Severity,
     token: Token,
+    note: ?[]const u8 = null,
+    suggestion: ?[]const u8 = null,
 
     const Severity = enum {
         info,
@@ -17,9 +19,15 @@ pub const CompilerErr = struct {
         const color_prefix = switch (self.severity) {
             .err => "\x1b[0;31m",
             .info => "\x1b[0;37m",
-            .warn => "\x1b[0;36m",
+            .warn => "\x1b[0;33m",
         };
-        try writer.print("{s}error: \x1b[0m{s}\n", .{ color_prefix, self.fmt });
+        const help_prefix = "\x1b[0;36m";
+        const label = switch (self.severity) {
+            .err => "error",
+            .warn => "warning",
+            .info => "info",
+        };
+        try writer.print("{s}{s}: \x1b[0m{s}\n", .{ color_prefix, label, self.fmt });
         var start = self.token.start;
         var end = self.token.end;
         const line = self.token.line;
@@ -52,6 +60,13 @@ pub const CompilerErr = struct {
             break;
         }
         try writer.print("======\n", .{});
+
+        if (self.suggestion) |s| {
+            try writer.print("{s}help:\x1b[0m {s}\n", .{ help_prefix, s });
+        }
+        if (self.note) |n| {
+            try writer.print("{s}note:\x1b[0m {s}\n", .{ help_prefix, n });
+        }
     }
 };
 
@@ -73,9 +88,32 @@ pub const CompilerErrors = struct {
         });
     }
 
+    pub fn addWithHelp(
+        self: *CompilerErrors,
+        file_path: []const u8,
+        comptime fmt: []const u8,
+        token: Token,
+        severity: CompilerErr.Severity,
+        args: anytype,
+        suggestion: ?[]const u8,
+        note: ?[]const u8,
+    ) !void {
+        const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
+        try self.list.append(self.allocator, .{
+            .file_path = file_path,
+            .fmt = msg,
+            .severity = severity,
+            .token = token,
+            .suggestion = suggestion,
+            .note = note,
+        });
+    }
+
     pub fn deinit(self: *CompilerErrors) void {
         for (self.list.items) |err| {
             self.allocator.free(err.fmt);
+            if (err.suggestion) |s| self.allocator.free(s);
+            if (err.note) |n| self.allocator.free(n);
         }
         self.list.deinit(self.allocator);
     }

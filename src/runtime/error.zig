@@ -2,6 +2,8 @@ const std = @import("std");
 
 pub const RuntimeErr = struct {
     msg: ?[]const u8 = null,
+    suggestion: ?[]const u8 = null,
+    note: ?[]const u8 = null,
     trace: std.ArrayList(Trace) = .empty,
 
     pub const Trace = struct {
@@ -12,6 +14,8 @@ pub const RuntimeErr = struct {
 
     pub fn deinit(self: *RuntimeErr, allocator: std.mem.Allocator) void {
         if (self.msg) |m| allocator.free(m);
+        if (self.suggestion) |s| allocator.free(s);
+        if (self.note) |n| allocator.free(n);
         self.trace.deinit(allocator);
     }
 
@@ -24,6 +28,8 @@ pub const RuntimeErr = struct {
             }
             writer.print("\n", .{}) catch {};
         }
+        if (self.suggestion) |s| writer.print("  help: {s}\n", .{s}) catch {};
+        if (self.note) |n| writer.print("  note: {s}\n", .{n}) catch {};
         writer.flush() catch {};
     }
 };

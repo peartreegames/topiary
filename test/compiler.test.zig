@@ -1006,6 +1006,97 @@ test "Compile Classes" {
     }
 }
 
+test "Arity Mismatch Error" {
+    const inputs = .{
+        \\ fn add |a, b| { return a + b }
+        \\ === START {
+        \\   add(1)
+        \\ }
+        ,
+        \\ fn greet |name| { return name }
+        \\ === START {
+        \\   greet("hi", "extra")
+        \\ }
+    };
+    inline for (inputs) |input| {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        const res = compileSource(input, mod);
+        try testing.expectError(error.CompilerError, res);
+        // Verify the error mentions "argument"
+        var found = false;
+        for (mod.errors.list.items) |e| {
+            if (std.mem.indexOf(u8, e.fmt, "argument") != null) found = true;
+        }
+        try testing.expect(found);
+    }
+}
+
+test "Duplicate Bough Error" {
+    const input =
+        \\ === START {
+        \\   :: "one"
+        \\ }
+        \\ === START {
+        \\   :: "two"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    const res = compileSource(input, mod);
+    try testing.expectError(error.CompilerError, res);
+    var has_note = false;
+    for (mod.errors.list.items) |e| {
+        if (e.note != null) has_note = true;
+    }
+    try testing.expect(has_note);
+}
+
+test "Did-You-Mean Unknown Anchor" {
+    const input =
+        \\ === KITCHEN {
+        \\   :: "hello"
+        \\ }
+        \\ === START {
+        \\   => KITHCEN
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    const res = compileSource(input, mod);
+    try testing.expectError(error.CompilerError, res);
+    var has_suggestion = false;
+    for (mod.errors.list.items) |e| {
+        if (e.suggestion) |s| {
+            if (std.mem.indexOf(u8, s, "KITCHEN") != null) has_suggestion = true;
+        }
+    }
+    try testing.expect(has_suggestion);
+}
+
+test "Shadowing Warning" {
+    const input =
+        \\ var outer = 1
+        \\ === START {
+        \\   var outer = 2
+        \\   :: "hi"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = compileSource(input, mod) catch |err| {
+        std.log.warn("got err {}", .{err});
+        for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+        return err;
+    };
+    defer bytecode.free(allocator);
+    var has_warning = false;
+    for (mod.errors.list.items) |e| {
+        if (e.severity == .warn and std.mem.indexOf(u8, e.fmt, "hides") != null) has_warning = true;
+    }
+    try testing.expect(has_warning);
+}
+
 test "Compile Enums Error" {
     const tests = .{
         \\ enum TimeOfDay {

@@ -71,6 +71,16 @@ pub const Scope = struct {
         return symbol;
     }
 
+    /// Look for `name` in any enclosing scope (strictly NOT the current one)
+    /// without defining upvalues. Used for shadow-warning diagnostics.
+    pub fn resolveOuter(self: *Scope, name: []const u8) ?*Symbol {
+        var current: ?*Scope = self.parent;
+        while (current) |s| : (current = s.parent) {
+            if (s.symbols.get(name)) |sym| return sym;
+        }
+        return null;
+    }
+
     pub fn resolve(self: *Scope, name: []const u8) !?*Symbol {
         const symbol = self.symbols.get(name);
         if (symbol) |s| return s;

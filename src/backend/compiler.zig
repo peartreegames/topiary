@@ -29,6 +29,7 @@ const DebugInfo = @import("debug.zig").DebugInfo;
 const CompilerErrors = @import("error.zig").CompilerErrors;
 const Bytecode = @import("bytecode.zig").Bytecode;
 const OpCode = @import("opcode.zig").OpCode;
+const suggest = @import("suggest.zig");
 
 // Placeholder values for jump targets that get patched later.
 // Use values near maxInt(u32) to avoid collisions with real instruction addresses.
@@ -63,6 +64,10 @@ pub const Compiler = struct {
     emitted_files: std.StringArrayHashMapUnmanaged(void) = .empty,
     path_stack: std.ArrayList([]const u8) = .empty,
     anon_counters: std.ArrayList(usize) = .empty,
+
+    // Diagnostics tracking: keys are borrowed from `constants_map` keys.
+    decl_tokens: std.StringHashMapUnmanaged(Token) = .empty,
+    fn_arities: std.StringHashMapUnmanaged(u8) = .empty,
 
     pub const Chunk = struct {
         instructions: std.ArrayList(u8) = .empty,
@@ -189,6 +194,8 @@ pub const Compiler = struct {
         self.constants.deinit(self.alloc);
         self.path_stack.deinit(self.alloc);
         self.anon_counters.deinit(self.alloc);
+        self.decl_tokens.deinit(self.alloc);
+        self.fn_arities.deinit(self.alloc);
     }
 
     fn fail(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype) Error {
@@ -199,6 +206,136 @@ pub const Compiler = struct {
     fn failError(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype, err: Error) Error {
         try self.module.errors.add(self.current_file.path, msg, token, .err, args);
         return err;
+    }
+
+    fn failWithHelp(
+        self: *Compiler,
+        comptime msg: []const u8,
+        token: Token,
+        args: anytype,
+        suggestion: ?[]const u8,
+        note: ?[]const u8,
+    ) Error {
+        try self.module.errors.addWithHelp(self.current_file.path, msg, token, .err, args, suggestion, note);
+        return Error.CompilerError;
+    }
+
+    fn warnWithHelp(
+        self: *Compiler,
+        comptime msg: []const u8,
+        token: Token,
+        args: anytype,
+        suggestion: ?[]const u8,
+        note: ?[]const u8,
+    ) !void {
+        try self.module.errors.addWithHelp(self.current_file.path, msg, token, .warn, args, suggestion, note);
+    }
+
+    /// Build a "previous declaration at file:line" note string. Caller does
+    /// NOT own the returned slice; it is freed by `CompilerErrors.deinit`.
+    fn previousDeclNote(self: *Compiler, name: []const u8) !?[]const u8 {
+        const prev = self.decl_tokens.get(name) orelse return null;
+        const file_name = if (prev.file_index < self.module.includes.count())
+            std.fs.path.basename(self.module.includes.keys()[prev.file_index])
+        else
+            "?";
+        return try std.fmt.allocPrint(self.alloc, "previous declaration at {s}:{d}", .{ file_name, prev.line });
+    }
+
+    /// Build a "did you mean" suggestion by searching through currently-
+    /// visible symbol-table entries and top-level constants.
+    fn suggestForSymbol(self: *Compiler, name: []const u8) !?[]const u8 {
+        var names: std.ArrayList([]const u8) = .empty;
+        defer names.deinit(self.alloc);
+
+        // Collect all symbol names reachable from the current scope.
+        var current: ?*Scope = self.scope;
+        while (current) |s| : (current = s.parent) {
+            for (s.symbols.keys()) |k| try names.append(self.alloc, k);
+        }
+        // Plus all top-level (unqualified) constants — classes, enums,
+        // functions, boughs with no path prefix.
+        var it = self.constants_map.keyIterator();
+        while (it.next()) |k| {
+            if (std.mem.indexOfScalar(u8, k.*, '.') == null)
+                try names.append(self.alloc, k.*);
+        }
+
+        const match = (try suggest.closest(self.alloc, name, names.items)) orelse return null;
+        defer self.alloc.free(match);
+        return try std.fmt.allocPrint(self.alloc, "did you mean '{s}'?", .{match});
+    }
+
+    fn suggestFromConstants(self: *Compiler, name: []const u8) !?[]const u8 {
+        // Collect top-level names (those without a '.' in them) as the likely
+        // candidates for a typo. This avoids suggesting nested anchor paths.
+        var names: std.ArrayList([]const u8) = .empty;
+        defer names.deinit(self.alloc);
+        var it = self.constants_map.keyIterator();
+        while (it.next()) |k| {
+            try names.append(self.alloc, k.*);
+        }
+        const match = (try suggest.closest(self.alloc, name, names.items)) orelse return null;
+        defer self.alloc.free(match);
+        return try std.fmt.allocPrint(self.alloc, "did you mean '{s}'?", .{match});
+    }
+
+    /// Look up declared function arity by short name, searching through the
+    /// current path scope chain. Returns null if the name doesn't resolve to
+    /// a known user function (extern funcs / builtins / methods are skipped).
+    fn resolveFnArity(self: *Compiler, name: []const u8) ?u8 {
+        // Try qualified lookup walking up path_stack, then unqualified.
+        var i: usize = self.path_stack.items.len;
+        while (i > 0) : (i -= 1) {
+            const path = std.mem.join(self.alloc, ".", self.path_stack.items[0..i]) catch return null;
+            defer self.alloc.free(path);
+            const full = std.fmt.allocPrint(self.alloc, "{s}.{s}", .{ path, name }) catch return null;
+            defer self.alloc.free(full);
+            if (self.fn_arities.get(full)) |a| return a;
+        }
+        return self.fn_arities.get(name);
+    }
+
+    fn failRedeclared(self: *Compiler, name: []const u8, comptime kind: []const u8, token: Token) Error {
+        // Look up the previous declaration's full name in the declarations map.
+        // The caller passes the short name; we try the qualified form first.
+        var lookup_name: []const u8 = name;
+        const qualified = self.getQualifiedName(name) catch null;
+        defer if (qualified) |q| self.alloc.free(q);
+        if (qualified) |q| {
+            if (self.decl_tokens.contains(q)) lookup_name = q;
+        }
+        const note = try self.previousDeclNote(lookup_name);
+        return self.failWithHelp(kind ++ " '{s}' is already declared", token, .{name}, null, note);
+    }
+
+    fn suggestFromList(self: *Compiler, name: []const u8, haystack: []const []const u8) !?[]const u8 {
+        const match = (try suggest.closest(self.alloc, name, haystack)) orelse return null;
+        defer self.alloc.free(match);
+        return try std.fmt.allocPrint(self.alloc, "did you mean '{s}'?", .{match});
+    }
+
+    fn suggestClassField(self: *Compiler, class_def: types.Class, name: []const u8) !?[]const u8 {
+        var names: std.ArrayList([]const u8) = .empty;
+        defer names.deinit(self.alloc);
+        for (class_def.fields) |f| try names.append(self.alloc, f.name);
+        for (class_def.methods) |m| try names.append(self.alloc, m.name);
+        return try self.suggestFromList(name, names.items);
+    }
+
+    fn suggestAnchor(self: *Compiler, path: []const u8) !?[]const u8 {
+        var names: std.ArrayList([]const u8) = .empty;
+        defer names.deinit(self.alloc);
+        var it = self.constants_map.iterator();
+        while (it.next()) |entry| {
+            const val = self.constants.items[entry.value_ptr.*];
+            if (val == .obj and val.obj.data == .anchor) {
+                try names.append(self.alloc, entry.key_ptr.*);
+            }
+        }
+        const match = (try suggest.closest(self.alloc, path, names.items)) orelse return null;
+        defer self.alloc.free(match);
+        return try std.fmt.allocPrint(self.alloc, "did you mean '{s}'?", .{match});
     }
 
     pub fn bytecode(self: *Compiler) !Bytecode {
@@ -315,9 +452,14 @@ pub const Compiler = struct {
             .function => |f| {
                 const full_name = try self.getQualifiedName(f.name);
                 defer self.alloc.free(full_name);
-                self.addNamedConstant(full_name, .nil) catch {
-                    return self.fail("'{s}' is already declared", stmt.token, .{full_name});
+                self.addNamedConstantTok(full_name, .nil, stmt.token) catch |err| switch (err) {
+                    error.SymbolAlreadyDeclared => return self.failRedeclared(full_name, "Function", stmt.token),
+                    else => return err,
                 };
+                // Track arity so call sites can validate argument counts.
+                if (self.constants_map.getKey(full_name)) |persistent_key| {
+                    try self.fn_arities.put(self.alloc, persistent_key, @intCast(f.parameters.len));
+                }
                 if (f.is_extern) {
                     _ = try self.addConstant(.{ .obj = try self.compileExternFunctionObj(stmt) });
                 }
@@ -325,20 +467,28 @@ pub const Compiler = struct {
             .class => |c| {
                 const full_name = try self.getQualifiedName(c.name);
                 defer self.alloc.free(full_name);
-                self.addNamedConstant(full_name, .nil) catch {
-                    return self.fail("'{s}' is already declared", stmt.token, .{full_name});
+                self.addNamedConstantTok(full_name, .nil, stmt.token) catch |err| switch (err) {
+                    error.SymbolAlreadyDeclared => return self.failRedeclared(full_name, "Class", stmt.token),
+                    else => return err,
                 };
             },
             .@"enum" => |e| {
                 const full_name = try self.getQualifiedName(e.name);
                 defer self.alloc.free(full_name);
-                self.addNamedConstant(full_name, .nil) catch {
-                    return self.fail("'{s}' is already declared", stmt.token, .{full_name});
+                self.addNamedConstantTok(full_name, .nil, stmt.token) catch |err| switch (err) {
+                    error.SymbolAlreadyDeclared => return self.failRedeclared(full_name, "Enum", stmt.token),
+                    else => return err,
                 };
             },
             .bough => |b| {
                 const full_name = try self.getQualifiedName(b.name);
-                self.registerAnchor(full_name) catch |err| return self.fail("Could not register anchor {s}: {t}", stmt.token, .{ b.name, err });
+                self.registerAnchor(full_name, stmt.token) catch |err| switch (err) {
+                    error.SymbolAlreadyDeclared => {
+                        self.alloc.free(full_name);
+                        return self.failRedeclared(b.name, "Bough", stmt.token);
+                    },
+                    else => return err,
+                };
                 try self.pushPathScope(b.name);
                 defer self.popPathScope();
                 for (b.body) |s| try self.prepass(s);
@@ -349,7 +499,13 @@ pub const Compiler = struct {
                 defer self.alloc.free(fork_name);
 
                 const full_name = try self.getQualifiedName(fork_name);
-                self.registerAnchor(full_name) catch |err| return self.fail("Could not register anchor {s}: {t}", stmt.token, .{ fork_name, err });
+                self.registerAnchor(full_name, stmt.token) catch |err| switch (err) {
+                    error.SymbolAlreadyDeclared => {
+                        self.alloc.free(full_name);
+                        return self.failRedeclared(fork_name, "Fork", stmt.token);
+                    },
+                    else => return err,
+                };
                 try self.pushPathScope(fork_name);
                 defer self.popPathScope();
 
@@ -358,7 +514,13 @@ pub const Compiler = struct {
             .choice => |c| {
                 const name = c.name orelse &c.id;
                 const full_name = try self.getQualifiedName(name);
-                self.registerAnchor(full_name) catch |err| return self.fail("Could not register anchor {s}: {t}", stmt.token, .{ name, err });
+                self.registerAnchor(full_name, stmt.token) catch |err| switch (err) {
+                    error.SymbolAlreadyDeclared => {
+                        self.alloc.free(full_name);
+                        return self.failRedeclared(name, "Choice", stmt.token);
+                    },
+                    else => return err,
+                };
                 try self.path_stack.append(self.alloc, name);
                 defer _ = self.path_stack.pop();
                 for (c.body) |s| try self.prepass(s);
@@ -534,8 +696,22 @@ pub const Compiler = struct {
             .variable => |v| {
                 if (builtins.has(v.name))
                     return self.failError("'{s}' is a builtin function and cannot be used as a variable name", stmt.token, .{v.name}, Error.IllegalOperation);
+                // Warn when the new name hides a variable from an enclosing
+                // scope. Only warn for local-to-local shadowing so global
+                // variables intentionally re-used across scopes remain quiet.
+                if (self.scope.tag != .global) {
+                    if (self.scope.resolveOuter(v.name)) |_| {
+                        try self.warnWithHelp(
+                            "'{s}' hides a variable from an outer scope",
+                            token,
+                            .{v.name},
+                            null,
+                            null,
+                        );
+                    }
+                }
                 const symbol = self.scope.define(v.name, v.is_mutable) catch {
-                    return self.fail("'{s}' is already declared", token, .{v.name});
+                    return self.fail("'{s}' is already declared in this scope", token, .{v.name});
                 };
                 try self.compileExpression(&v.initializer);
                 try self.setSymbol(v.name, symbol, token, true);
@@ -614,7 +790,10 @@ pub const Compiler = struct {
                 if (anchor_idx) |idx| {
                     self.constants.items[idx].obj.data.anchor.ip = start_pos;
                     try self.compileVisit(idx, token);
-                } else return self.fail("Could not find anchor {s}", token, .{path});
+                } else {
+                    const hint = try self.suggestAnchor(path);
+                    return self.failWithHelp("Could not find anchor '{s}'", token, .{path}, hint, null);
+                }
 
                 try self.enterScope(.local);
                 try self.compileBlock(f.body);
@@ -643,7 +822,10 @@ pub const Compiler = struct {
                 defer _ = self.path_stack.pop();
 
                 const entry_ip = self.instructionPos();
-                const anchor_idx = try self.resolveConstant(full_name) orelse return self.fail("Could not find anchor {s}", token, .{full_name});
+                const anchor_idx = try self.resolveConstant(full_name) orelse {
+                    const hint = try self.suggestAnchor(full_name);
+                    return self.failWithHelp("Could not find anchor '{s}'", token, .{full_name}, hint, null);
+                };
                 self.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
 
                 const s = c.content.type.string;
@@ -700,7 +882,10 @@ pub const Compiler = struct {
                 errdefer self.exitScope() catch {};
 
                 const entry_ip = self.instructionPos();
-                const anchor_idx = try self.resolveConstant(full_name) orelse return self.fail("Could not find anchor {s}", token, .{full_name});
+                const anchor_idx = try self.resolveConstant(full_name) orelse {
+                    const hint = try self.suggestAnchor(full_name);
+                    return self.failWithHelp("Could not find anchor '{s}'", token, .{full_name}, hint, null);
+                };
                 self.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
                 try self.compileVisit(anchor_idx, token);
 
@@ -744,7 +929,14 @@ pub const Compiler = struct {
                 _ = try self.writeInt(u8, @as(u8, @intCast(d.tags.len)), token);
             },
             .divert => |d| {
-                const anchor_idx = self.resolveAnchor(d.path) orelse return self.fail("Could not find anchor {f}", token, .{fmt.array("{s}.", d.path)});
+                const anchor_idx = self.resolveAnchor(d.path) orelse {
+                    // Produce the joined path as a plain string for the message
+                    // and the suggestion hint.
+                    const joined = try std.mem.join(self.alloc, ".", d.path);
+                    defer self.alloc.free(joined);
+                    const hint = try self.suggestAnchor(joined);
+                    return self.failWithHelp("Could not find path '{s}'", token, .{joined}, hint, null);
+                };
                 if (d.is_backup) {
                     try self.writeOp(.backup, token);
                     const backup_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
@@ -959,7 +1151,11 @@ pub const Compiler = struct {
         }
     }
 
-    fn registerAnchor(self: *Compiler, full_name: []const u8) !void {
+    fn registerAnchor(self: *Compiler, full_name: []const u8, token: Token) !void {
+        // Check for duplicate up-front so the visit symbol is not allocated on
+        // failure (keeps error paths clean).
+        if (self.constants_map.contains(full_name)) return error.SymbolAlreadyDeclared;
+
         const visit_sym = try self.root_scope.define(full_name, false);
 
         var parent_idx: ?C.CONSTANT = null;
@@ -982,7 +1178,7 @@ pub const Compiler = struct {
             },
         };
 
-        try self.addNamedConstant(full_name, .{ .obj = anchor_obj });
+        try self.addNamedConstantTok(full_name, .{ .obj = anchor_obj }, token);
     }
 
     fn compileVisit(self: *Compiler, anchor_idx: C.CONSTANT, token: Token) !void {
@@ -1192,12 +1388,30 @@ pub const Compiler = struct {
                                         }
                                     },
                                     .@"enum" => |e| {
-                                        if (!arrayContains(u8, e.values, idx.index.type.identifier))
-                                            return self.fail("Enum {s} does not contain a value '{s}'", idx.index.token, .{ idx.target.type.identifier, idx.index.type.identifier });
+                                        const field = idx.index.type.identifier;
+                                        if (!arrayContains(u8, e.values, field)) {
+                                            const hint = try self.suggestFromList(field, e.values);
+                                            return self.failWithHelp(
+                                                "Enum '{s}' does not contain a value '{s}'",
+                                                idx.index.token,
+                                                .{ idx.target.type.identifier, field },
+                                                hint,
+                                                null,
+                                            );
+                                        }
                                     },
                                     .class => |c| {
-                                        if (c.getFieldIndex(idx.index.type.identifier) == null and c.getMethodIndex(idx.index.type.identifier) == null)
-                                            return self.fail("Class {s} does not contain a field '{s}'", idx.index.token, .{ idx.target.type.identifier, idx.index.type.identifier });
+                                        const field = idx.index.type.identifier;
+                                        if (c.getFieldIndex(field) == null and c.getMethodIndex(field) == null) {
+                                            const hint = try self.suggestClassField(c, field);
+                                            return self.failWithHelp(
+                                                "Class '{s}' does not contain a field '{s}'",
+                                                idx.index.token,
+                                                .{ idx.target.type.identifier, field },
+                                                hint,
+                                                null,
+                                            );
+                                        }
                                     },
                                     else => {},
                                 }
@@ -1251,7 +1465,14 @@ pub const Compiler = struct {
                 const class_def = class_val.obj.data.class;
                 for (ins.fields, 0..) |field_expr, i| {
                     if (class_def.getFieldIndex(ins.field_names[i]) == null) {
-                        return self.fail("Class {s} has no field '{s}'", token, .{ ins.name, ins.field_names[i] });
+                        const hint = try self.suggestClassField(class_def, ins.field_names[i]);
+                        return self.failWithHelp(
+                            "Class '{s}' has no field '{s}'",
+                            token,
+                            .{ ins.name, ins.field_names[i] },
+                            hint,
+                            null,
+                        );
                     }
 
                     try self.compileExpression(&field_expr);
@@ -1266,6 +1487,24 @@ pub const Compiler = struct {
                 _ = try self.writeInt(C.FIELDS, @as(C.FIELDS, @intCast(ins.fields.len)), token);
             },
             .call => |c| {
+                // Arity check for direct calls to known user functions. Skip
+                // dynamic calls (method access, calls on expressions) since we
+                // can't resolve them statically.
+                if (c.target.type == .identifier) {
+                    const callee_name = c.target.type.identifier;
+                    if (self.resolveFnArity(callee_name)) |expected| {
+                        if (expected != c.arguments.len) {
+                            const note = try self.previousDeclNote(callee_name);
+                            return self.failWithHelp(
+                                "'{s}' expects {d} argument(s), but got {d}",
+                                token,
+                                .{ callee_name, expected, c.arguments.len },
+                                null,
+                                note,
+                            );
+                        }
+                    }
+                }
                 try self.compileExpression(c.target);
                 for (c.arguments) |*arg| {
                     try self.compileExpression(arg);
@@ -1310,7 +1549,19 @@ pub const Compiler = struct {
                     _ = try self.writeInt(C.LOCAL, @as(C.LOCAL, @intCast(s.index)), token);
                 },
             }
-        } else return self.failError("Unknown symbol {s}", token, .{name}, Error.SymbolNotFound);
+        } else {
+            const hint = try self.suggestForSymbol(name);
+            try self.module.errors.addWithHelp(
+                self.current_file.path,
+                "Unknown name '{s}'",
+                token,
+                .err,
+                .{name},
+                hint,
+                null,
+            );
+            return Error.SymbolNotFound;
+        }
     }
 
     fn loadSymbol(self: *Compiler, name: []const u8, token: Token) !void {
@@ -1344,7 +1595,17 @@ pub const Compiler = struct {
             return;
         }
 
-        return self.failError("Unknown symbol '{s}'", token, .{name}, Error.SymbolNotFound);
+        const hint = try self.suggestForSymbol(name);
+        try self.module.errors.addWithHelp(
+            self.current_file.path,
+            "Unknown name '{s}'",
+            token,
+            .err,
+            .{name},
+            hint,
+            null,
+        );
+        return Error.SymbolNotFound;
     }
 
     fn calculateScopeDepth(self: *Compiler, symbol: *Symbol) usize {
@@ -1460,8 +1721,19 @@ pub const Compiler = struct {
     }
 
     pub fn addNamedConstant(self: *Compiler, name: []const u8, value: Value) !void {
+        return self.addNamedConstantTok(name, value, null);
+    }
+
+    /// Register a named constant and optionally record the source token that
+    /// declared it. Returns `error.SymbolAlreadyDeclared` if a constant with
+    /// that name already exists.
+    pub fn addNamedConstantTok(self: *Compiler, name: []const u8, value: Value, token: ?Token) !void {
+        if (self.constants_map.contains(name)) return error.SymbolAlreadyDeclared;
         const i = try self.addConstant(value);
-        try self.constants_map.putNoClobber(self.alloc, try self.alloc.dupe(u8, name), i);
+        const key = try self.alloc.dupe(u8, name);
+        errdefer self.alloc.free(key);
+        try self.constants_map.putNoClobber(self.alloc, key, i);
+        if (token) |t| try self.decl_tokens.put(self.alloc, key, t);
     }
 
     pub fn addLiteralConstant(self: *Compiler, value: Value) !C.CONSTANT {

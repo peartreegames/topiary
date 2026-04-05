@@ -16,3 +16,5 @@ pub const Compiler = compiler.Compiler;
 
 const debug = @import("debug.zig");
 pub const DebugInfo = debug.DebugInfo;
+
+pub const suggest = @import("suggest.zig");

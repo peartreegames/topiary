@@ -73,6 +73,20 @@ pub const Parser = struct {
         return ptr;
     }
 
+    /// Writer-friendly representation of a token for error messages. For
+    /// identifiers/numbers/strings we prefer the actual source text; for
+    /// punctuation/keywords we use the symbolic display form.
+    fn tokenLexeme(self: *Parser, token: Token) []const u8 {
+        return switch (token.token_type) {
+            .identifier, .number, .string, .string_fragment => if (self.file.source) |src|
+                src[token.start..token.end]
+            else
+                Token.toDisplay(token.token_type),
+            .eof => "end of file",
+            else => Token.toDisplay(token.token_type),
+        };
+    }
+
     inline fn fail(self: *Parser, comptime msg: []const u8, token: Token, args: anytype) Error {
         self.had_error = true;
         try self.file.module.errors.add(self.file.path, msg, token, .err, args);
@@ -439,7 +453,7 @@ pub const Parser = struct {
             .set => try self.setExpression(),
             .new => try self.instanceExpression(),
             .nil => .{ .token = self.current_token, .type = .nil },
-            else => return self.fail("Unexpected token in expression: '{s}'", self.current_token, .{Token.toDisplay(self.current_token.token_type)}),
+            else => return self.fail("Unexpected token in expression: '{s}'", self.current_token, .{self.tokenLexeme(self.current_token)}),
         };
 
         while (prec.val() < findPrecedence(self.peek_token.token_type).val()) {
@@ -455,7 +469,7 @@ pub const Parser = struct {
                 .percent_equal,
                 => blk: {
                     if (left.type != .identifier and left.type != .indexer)
-                        return self.fail("Cannot assign to '{s}'", left.token, .{Token.toDisplay(left.token.token_type)});
+                        return self.fail("Cannot assign to '{s}'", left.token, .{self.tokenLexeme(left.token)});
                     self.next();
                     const start_token = self.current_token;
                     const op = ast.BinaryOp.fromToken(self.current_token);
@@ -733,7 +747,7 @@ pub const Parser = struct {
         while (!self.currentIs(.right_brace)) {
             const item = try self.mapPairSetKey();
             if (item.type == .map_pair)
-                return self.fail("Item type '{s}' cannot be added set", item.token, .{@tagName(item.type)});
+                return self.fail("Item type '{s}' cannot be added to set", item.token, .{@tagName(item.type)});
             try list.append(self.allocator, item);
             self.next();
             if (self.currentIs(.comma) or self.peekIs(.right_brace)) self.next();
@@ -980,7 +994,7 @@ pub const Parser = struct {
         self.next();
         const index = if (start_token.token_type == .dot) blk: {
             if (!self.currentIs(.identifier))
-                return self.fail("Expected identifier after index '.', found '{s}'", self.current_token, .{Token.toDisplay(self.current_token.token_type)});
+                return self.fail("Expected identifier after index '.', found '{s}'", self.current_token, .{self.tokenLexeme(self.current_token)});
             break :blk try self.identifierExpression();
         } else if (start_token.token_type == .left_bracket) blk: {
             break :blk try self.expression(.lowest);

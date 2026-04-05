@@ -149,6 +149,8 @@ pub const Module = struct {
         while (self.errors.list.pop()) |err| {
             // free since we're removing from list
             defer self.allocator.free(err.fmt);
+            defer if (err.suggestion) |s| self.allocator.free(s);
+            defer if (err.note) |n| self.allocator.free(n);
             const file = self.includes.get(err.file_path).?;
             try err.write(file.source.?, writer);
         }
