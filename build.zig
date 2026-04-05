@@ -79,6 +79,12 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+
+    // Run with: `zig build fuzz --fuzz`
+    // The top-level `--fuzz` flag tells the build system to enable continuous
+    // fuzzing for tests that call `std.testing.fuzz`.
+    const fuzz_step = b.step("fuzz", "Run fuzz tests (add --fuzz to enable continuous fuzzing)");
+    fuzz_step.dependOn(&run_tests.step);
 }
 
 fn getVersion(b: *std.Build) ![]const u8 {

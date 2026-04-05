@@ -342,8 +342,15 @@ pub const Value = union(Type) {
         }
     }
 
+    pub const max_deserialize_depth: u32 = 64;
+
     // used for constant values only
     pub fn deserialize(reader: *std.Io.Reader, allocator: std.mem.Allocator) !Value {
+        return deserializeDepth(reader, allocator, 0);
+    }
+
+    fn deserializeDepth(reader: *std.Io.Reader, allocator: std.mem.Allocator, depth: u32) !Value {
+        if (depth > max_deserialize_depth) return error.BytecodeTooDeep;
         const value_type: Type = @enumFromInt(try reader.takeByte());
         return switch (value_type) {
             .nil => Nil,
@@ -427,7 +434,7 @@ pub const Value = union(Type) {
                         for (0..fields_len) |i| {
                             const f_name_len = try reader.takeByte();
                             const f_name = try reader.readAlloc(allocator, f_name_len);
-                            const f_val = try Value.deserialize(reader, allocator);
+                            const f_val = try Value.deserializeDepth(reader, allocator, depth + 1);
                             fields[i] = .{ .name = f_name, .value = f_val };
                         }
 
@@ -436,7 +443,7 @@ pub const Value = union(Type) {
                         for (0..methods_len) |i| {
                             const m_name_len = try reader.takeByte();
                             const m_name = try reader.readAlloc(allocator, m_name_len);
-                            const m_val = try Value.deserialize(reader, allocator);
+                            const m_val = try Value.deserializeDepth(reader, allocator, depth + 1);
                             methods[i] = .{ .name = m_name, .value = m_val };
                         }
 

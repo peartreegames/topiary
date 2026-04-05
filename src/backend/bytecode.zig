@@ -15,8 +15,19 @@ pub const Bytecode = struct {
     instructions: []u8,
     debug_info: []DebugInfo,
 
+    pub const magic = "TPBC";
+    pub const version: u16 = 1;
+    const prelude_size = magic.len + @sizeOf(u16) + 2; // magic + version + 2 reserved bytes
     const section_count = 4;
-    const header_size = section_count * @sizeOf(u64);
+    const offsets_size = section_count * @sizeOf(u64);
+    const header_size = prelude_size + offsets_size;
+
+    // Sanity caps to reject obviously malformed bytecode without attempting huge allocations.
+    // These are well above any realistic dialogue project.
+    pub const max_globals = 1_000_000;
+    pub const max_constants = 10_000_000;
+    pub const max_instructions = 100_000_000;
+    pub const max_debug_info = 10_000_000;
 
     pub const GlobalSymbol = struct {
         name: []const u8,
@@ -66,6 +77,10 @@ pub const Bytecode = struct {
 
         var offsets: [section_count]u64 = undefined;
 
+        try writer.writeAll(magic);
+        try writer.writeInt(u16, version, .little);
+        try writer.writeInt(u16, 0, .little); // reserved
+
         offsets[0] = header_size + allocating.written().len;
         try self.writeGlobals(alloc_writer);
 
@@ -88,10 +103,18 @@ pub const Bytecode = struct {
     }
 
     pub fn deserialize(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Bytecode {
-        // skip headers
-        try reader.discardAll(header_size);
+        // validate magic + version
+        var file_magic: [magic.len]u8 = undefined;
+        try reader.readSliceAll(&file_magic);
+        if (!std.mem.eql(u8, &file_magic, magic)) return error.InvalidBytecodeFormat;
+        const file_version = try reader.takeInt(u16, .little);
+        if (file_version != version) return error.UnsupportedBytecodeVersion;
+        _ = try reader.takeInt(u16, .little); // reserved
+        // skip section offsets (unused on read)
+        try reader.discardAll(offsets_size);
 
         const globals_count = try reader.takeInt(u64, .little);
+        if (globals_count > max_globals) return error.CorruptBytecode;
         var global_symbols = try allocator.alloc(GlobalSymbol, globals_count);
         var count: usize = 0;
         while (count < globals_count) : (count += 1) {
@@ -109,6 +132,7 @@ pub const Bytecode = struct {
         }
 
         const constant_count = try reader.takeInt(u64, .little);
+        if (constant_count > max_constants) return error.CorruptBytecode;
         var constants = try allocator.alloc(Value, constant_count);
         errdefer allocator.free(constants);
         for (0..constant_count) |i| {
@@ -116,11 +140,13 @@ pub const Bytecode = struct {
         }
 
         const instruction_count = try reader.takeInt(u64, .little);
+        if (instruction_count > max_instructions) return error.CorruptBytecode;
         const instructions = try allocator.alloc(u8, instruction_count);
         errdefer allocator.free(instructions);
         try reader.readSliceAll(instructions);
 
         const debug_info_count = try reader.takeInt(u32, .little);
+        if (debug_info_count > max_debug_info) return error.CorruptBytecode;
         var debug_info = try allocator.alloc(DebugInfo, debug_info_count);
         errdefer allocator.free(debug_info);
         for (0..debug_info_count) |i| {
