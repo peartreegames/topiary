@@ -25,11 +25,18 @@ pub const Scope = struct {
 
     pub fn create(allocator: std.mem.Allocator, parent: ?*Scope, tag: Tag) !*Scope {
         const scope = try allocator.create(Scope);
+        // Local scopes share the same stack frame as their parent, so they
+        // must start indexing after the parent's variables to avoid conflicts.
+        const initial_count: u32 = if (tag == .local)
+            if (parent) |p| p.count else 0
+        else
+            0;
         scope.* = .{
             .allocator = allocator,
             .parent = parent,
             .symbols = .empty,
             .tag = tag,
+            .count = initial_count,
         };
         return scope;
     }

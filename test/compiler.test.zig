@@ -1262,6 +1262,135 @@ test "Unreachable Code Warning - Backup Divert Does Not Fire Warning" {
     }
 }
 
+test "Fork Without Backup - Choice With No Exit Warns" {
+    const input =
+        \\ === START {
+        \\   fork {
+        \\     ~ "No exit choice" {
+        \\       :: "This ends silently"
+        \\     }
+        \\     ~ "Has exit" {
+        \\       => START
+        \\     }
+        \\   }
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = compileSource(input, mod) catch |err| {
+        for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+        return err;
+    };
+    defer bytecode.free(allocator);
+    var has_warning = false;
+    for (mod.errors.list.items) |e| {
+        if (e.severity == .warn and std.mem.indexOf(u8, e.fmt, "end silently") != null)
+            has_warning = true;
+    }
+    try testing.expect(has_warning);
+}
+
+test "Fork With Backup - Choice With No Exit Does Not Warn" {
+    const input =
+        \\ === START {
+        \\   fork^ {
+        \\     ~ "No exit choice" {
+        \\       :: "This is fine with fork^"
+        \\     }
+        \\   }
+        \\   :: "continues here"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = compileSource(input, mod) catch |err| {
+        for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+        return err;
+    };
+    defer bytecode.free(allocator);
+    for (mod.errors.list.items) |e| {
+        try testing.expect(std.mem.indexOf(u8, e.fmt, "end silently") == null);
+    }
+}
+
+test "Unreachable Code After Non-Backup Fork" {
+    const input =
+        \\ === START {
+        \\   fork {
+        \\     ~ "Go" {
+        \\       => START
+        \\     }
+        \\   }
+        \\   :: "unreachable line"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = compileSource(input, mod) catch |err| {
+        for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+        return err;
+    };
+    defer bytecode.free(allocator);
+    var has_warning = false;
+    for (mod.errors.list.items) |e| {
+        if (e.severity == .warn and std.mem.indexOf(u8, e.fmt, "Unreachable") != null and
+            std.mem.indexOf(u8, e.fmt, "fork") != null) has_warning = true;
+    }
+    try testing.expect(has_warning);
+}
+
+test "Unreachable Code After Backup Fork Does Not Warn" {
+    const input =
+        \\ === START {
+        \\   fork^ {
+        \\     ~ "Stay" {
+        \\       :: "chose to stay"
+        \\     }
+        \\   }
+        \\   :: "reachable after fork^"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = compileSource(input, mod) catch |err| {
+        for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+        return err;
+    };
+    defer bytecode.free(allocator);
+    for (mod.errors.list.items) |e| {
+        if (e.severity == .warn) {
+            try testing.expect(std.mem.indexOf(u8, e.fmt, "Unreachable") == null);
+        }
+    }
+}
+
+test "Nested Boughs After Fork Do Not Warn" {
+    const input =
+        \\ === START {
+        \\   fork {
+        \\     ~ "Go to inner" {
+        \\       => START.INNER
+        \\     }
+        \\   }
+        \\   === INNER {
+        \\     :: "inside inner bough"
+        \\   }
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = compileSource(input, mod) catch |err| {
+        for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+        return err;
+    };
+    defer bytecode.free(allocator);
+    for (mod.errors.list.items) |e| {
+        if (e.severity == .warn) {
+            try testing.expect(std.mem.indexOf(u8, e.fmt, "Unreachable") == null);
+        }
+    }
+}
+
 test "Compile Enums Error" {
     const tests = .{
         \\ enum TimeOfDay {

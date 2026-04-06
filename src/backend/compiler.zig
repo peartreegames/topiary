@@ -479,7 +479,13 @@ pub const Compiler = struct {
     fn exitScope(self: *Compiler) !void {
         const old_scope = self.scope;
         self.scope = old_scope.parent orelse return Error.OutOfScope;
-        self.locals_count = @max(self.locals_count, self.scope.count + old_scope.count);
+        if (old_scope.tag == .local) {
+            // Local scopes inherit the parent's count, so old_scope.count
+            // already includes the parent range — no need to add both.
+            self.locals_count = @max(self.locals_count, old_scope.count);
+        } else {
+            self.locals_count = @max(self.locals_count, self.scope.count + old_scope.count);
+        }
         old_scope.destroy();
     }
 
@@ -753,9 +759,9 @@ pub const Compiler = struct {
                 const jump_end = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
 
                 try self.enterScope(.local);
+                const capture = try self.scope.define(f.capture, false);
                 try self.writeOp(.set_local, token);
-                _ = try self.writeInt(C.LOCAL, 0, token);
-                _ = try self.scope.define(f.capture, false);
+                _ = try self.writeInt(C.LOCAL, @as(C.LOCAL, @intCast(capture.index)), token);
 
                 try self.compileBlock(f.body);
                 try self.writeOp(.jump, token);
@@ -917,6 +923,26 @@ pub const Compiler = struct {
                 try self.compileBlock(f.body);
                 try self.exitScope();
 
+                // Warn if a non-backup fork has choices whose bodies don't
+                // exit (divert/fin/return). Without fork^, execution ends
+                // silently after such a choice — almost never what writers want.
+                if (!f.is_backup) {
+                    for (f.body) |body_stmt| {
+                        if (body_stmt.type == .choice) {
+                            const choice = body_stmt.type.choice;
+                            if (!blockHasExit(choice.body)) {
+                                try self.warnWithHelp(
+                                    "choice has no divert or 'fin' — execution will end silently after this choice",
+                                    body_stmt.token,
+                                    .{},
+                                    try self.alloc.dupe(u8, "use 'fork^' to continue after the choice, or add a divert '=>' inside the choice body"),
+                                    null,
+                                );
+                            }
+                        }
+                    }
+                }
+
                 var backup_pos: usize = 0;
                 if (f.is_backup) {
                     try self.writeOp(.backup, token);
@@ -994,9 +1020,7 @@ pub const Compiler = struct {
                 try self.writeOp(.jump, token);
                 const start_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
 
-                const locals_count = self.scope.count;
                 try self.enterScope(.local);
-                self.scope.count = locals_count;
                 errdefer self.exitScope() catch {};
 
                 const entry_ip = self.instructionPos();
@@ -1253,6 +1277,8 @@ pub const Compiler = struct {
     }
 
     fn compileFunctionObj(self: *Compiler, stmt: Statement, token: Token) !*Value.Obj {
+        const saved_locals_count = self.locals_count;
+        self.locals_count = 0;
         try self.enterScope(.function);
         try self.enterChunk();
         const f = stmt.type.function;
@@ -1274,9 +1300,12 @@ pub const Compiler = struct {
 
         const chunk = try self.exitChunk();
         defer chunk.deinit();
-        const count = self.scope.count;
+        // Use the high-water mark: the function scope's own count may not
+        // include variables from nested local scopes (for/while/switch).
+        const count = @max(self.scope.count, self.locals_count);
 
         try self.exitScope();
+        self.locals_count = saved_locals_count;
         const obj = try self.alloc.create(Value.Obj);
 
         obj.* = .{
@@ -1328,14 +1357,19 @@ pub const Compiler = struct {
             try self.compileStatement(stmt);
         }
         if (exited_at) |i| {
-            if (i + 1 < stmts.len) {
-                try self.warnWithHelp(
-                    "Unreachable code after '{s}'",
-                    stmts[i + 1].token,
-                    .{exitKeyword(stmts[i])},
-                    null,
-                    null,
-                );
+            // Find the first non-bough statement after the exit — bough
+            // declarations are independent entry points, not sequential code.
+            for (stmts[i + 1 ..]) |next| {
+                if (next.type != .bough) {
+                    try self.warnWithHelp(
+                        "Unreachable code after '{s}'",
+                        next.token,
+                        .{exitKeyword(stmts[i])},
+                        null,
+                        null,
+                    );
+                    break;
+                }
             }
         }
     }
@@ -1343,6 +1377,7 @@ pub const Compiler = struct {
     fn isUnconditionalExit(stmt: Statement) bool {
         return switch (stmt.type) {
             .return_expression, .return_void, .fin => true,
+            .fork => |f| !f.is_backup,
             .divert => |d| !d.is_backup,
             else => false,
         };
@@ -1353,8 +1388,16 @@ pub const Compiler = struct {
             .return_expression, .return_void => "return",
             .fin => "fin",
             .divert => "divert",
+            .fork => "fork",
             else => "",
         };
+    }
+
+    fn blockHasExit(body: []const Statement) bool {
+        for (body) |stmt| {
+            if (isUnconditionalExit(stmt)) return true;
+        }
+        return false;
     }
 
     fn registerAnchor(self: *Compiler, full_name: []const u8, token: Token) !void {

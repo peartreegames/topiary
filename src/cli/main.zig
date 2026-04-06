@@ -296,6 +296,7 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
         try writeErrors(mod);
         return if (args.verbose) err else {};
     };
+    try writeErrors(mod);
     mod.deinit();
     defer bytecode.free(alloc);
 
@@ -359,6 +360,7 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
         try writeErrors(mod);
         return if (args.verbose) err else {};
     };
+    try writeErrors(mod);
     mod.deinit();
     defer bytecode.free(alloc);
 
@@ -433,6 +435,7 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
         try writeErrors(mod);
         return if (args.verbose) err else {};
     };
+    try writeErrors(mod);
     mod.deinit();
     defer bytecode.free(alloc);
 

@@ -774,7 +774,7 @@ pub const Vm = struct {
                         const field = self.stack.backing[pairs_base + (i * 2)];
                         const name = self.stack.backing[pairs_base + (i * 2) + 1];
                         fields[i] = .{
-                            .name = name.obj.data.string,
+                            .name = name.asString().?,
                             .value = field,
                         };
                     }
@@ -963,7 +963,7 @@ pub const Vm = struct {
                             const frame = try Frame.create(value.obj, self.stack.count - arg_count);
                             if (self.frames.count >= frame_size) return self.fail("Stack overflow: too many nested function calls (max {d})", .{frame_size});
                             self.frames.push(frame);
-                            self.stack.count = frame.bp + f.locals_count;
+                            self.stack.resize(frame.bp + f.locals_count);
                         },
                         .@"extern" => |e| {
                             if (e.context_ptr) |ptr| {
