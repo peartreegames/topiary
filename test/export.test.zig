@@ -16,6 +16,39 @@ const ExportChoice = exp.ExportChoice;
 const allocator = std.testing.allocator;
 
 var output: std.ArrayList([]const u8) = .empty;
+
+fn clearOutput() void {
+    for (output.items) |o| {
+        allocator.free(o);
+    }
+    output.clearRetainingCapacity();
+}
+
+/// Helper: write source to a temp file, compile via the export API, return
+/// the bytecode buffer (caller owns).
+fn compileSource(text: []const u8) ![]u8 {
+    const file = try std.fs.cwd().createFile("tmp_export.topi", .{ .read = false });
+    defer file.close();
+    var file_buf: [1024]u8 = undefined;
+    var file_writer = file.writer(&file_buf);
+    const file_write = &file_writer.interface;
+    try file_write.writeAll(text);
+    try file_write.flush();
+
+    const dir_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+    const path = try std.fs.path.resolve(allocator, &.{ dir_path, "tmp_export.topi" ++ "\x00" });
+    defer allocator.free(path);
+    const path_ptr: [*:0]const u8 = path[0 .. path.len - 1 :0];
+    const calc_size = main.calculateCompileSize(path_ptr, @ptrCast(&TestRunner.log), @intFromEnum(ExportLogger.Severity.debug));
+    if (calc_size == 0) return error.CompileFailed;
+    const buf = try allocator.alloc(u8, calc_size);
+    errdefer allocator.free(buf);
+    const compile_size = main.compile(path_ptr, buf.ptr, buf.len, @ptrCast(&TestRunner.log), @intFromEnum(ExportLogger.Severity.debug));
+    try std.testing.expectEqual(compile_size, calc_size);
+    return buf;
+}
+
 const TestRunner = struct {
     pub fn onLine(vm_ptr: *anyopaque, dialogue: *ExportLine) callconv(.c) void {
         output.append(allocator, allocator.dupe(u8, dialogue.content.ptr[0..dialogue.content.len]) catch unreachable) catch unreachable;
@@ -81,32 +114,13 @@ test "Export Create and Destroy Vm" {
         \\
     ;
     defer {
-        for (output.items) |o| {
-            allocator.free(o);
-        }
+        clearOutput();
         output.deinit(allocator);
     }
 
-    const file = try std.fs.cwd().createFile("tmp.topi", .{ .read = false });
-    defer std.fs.cwd().deleteFile("tmp.topi") catch {};
-    defer file.close();
-    var file_buf: [1024]u8 = undefined;
-    var file_writer = file.writer(&file_buf);
-    const file_write = &file_writer.interface;
-    try file_write.writeAll(text);
-    try file_write.flush();
-
-    try file.seekTo(0);
-    const dir_path = try std.fs.cwd().realpathAlloc(allocator, ".");
-    defer allocator.free(dir_path);
-    const path = try std.fs.path.resolve(allocator, &.{ dir_path, "tmp.topi" ++ "\x00" });
-    defer allocator.free(path);
-    const path_ptr: [*:0]const u8 = path[0 .. path.len - 1 :0];
-    const calc_size = main.calculateCompileSize(path_ptr, @ptrCast(&TestRunner.log), @intFromEnum(ExportLogger.Severity.debug));
-    const buf = try allocator.alloc(u8, calc_size);
+    const buf = try compileSource(text);
     defer allocator.free(buf);
-    const compile_size = main.compile(path_ptr, buf.ptr, buf.len, @ptrCast(&TestRunner.log), @intFromEnum(ExportLogger.Severity.debug));
-    try std.testing.expectEqual(compile_size, calc_size);
+    defer std.fs.cwd().deleteFile("tmp_export.topi") catch {};
 
     const vm_ptr = main.createVm(
         buf.ptr,
@@ -150,4 +164,176 @@ test "Export Create and Destroy Vm" {
     for (expected, 0..) |e, i| {
         try std.testing.expectEqualSlices(u8, e, output.items[i]);
     }
+}
+
+test "Export State Save and Load" {
+    const text =
+        \\ var count = 0
+        \\ count += 10
+        \\ var name = "hello"
+        \\ === START {
+        \\     :: "count is {count}"
+        \\ }
+    ;
+    output = .empty;
+    defer {
+        clearOutput();
+        output.deinit(allocator);
+    }
+
+    const buf = try compileSource(text);
+    defer allocator.free(buf);
+    defer std.fs.cwd().deleteFile("tmp_export.topi") catch {};
+
+    // Create first VM, run to completion
+    const vm1_ptr = main.createVm(
+        buf.ptr,
+        buf.len,
+        @ptrCast(&TestRunner.onLine),
+        @ptrCast(&TestRunner.onChoices),
+        @ptrCast(&TestRunner.onValueChanged),
+        @ptrCast(&TestRunner.log),
+        @intFromEnum(ExportLogger.Severity.debug),
+    ) orelse return error.InternalError;
+    defer main.destroyVm(vm1_ptr);
+
+    main.start(vm1_ptr, "");
+    const vm1: *Vm = @ptrCast(@alignCast(vm1_ptr));
+    while (main.canContinue(vm1_ptr)) {
+        main.run(vm1_ptr);
+        if (vm1.err.msg) |_| break;
+    }
+    try std.testing.expectEqual(@as(usize, 1), output.items.len);
+    try std.testing.expectEqualSlices(u8, "count is 10", output.items[0]);
+
+    // Save state via FFI
+    const state_size = main.calculateStateSize(vm1_ptr);
+    try std.testing.expect(state_size > 0);
+    const state_buf = try allocator.allocSentinel(u8, state_size, 0);
+    defer allocator.free(state_buf);
+    const saved_size = main.saveState(vm1_ptr, state_buf.ptr, state_buf.len);
+    try std.testing.expect(saved_size > 0);
+
+    // Create second VM from same bytecode, load state
+    clearOutput();
+    const vm2_ptr = main.createVm(
+        buf.ptr,
+        buf.len,
+        @ptrCast(&TestRunner.onLine),
+        @ptrCast(&TestRunner.onChoices),
+        @ptrCast(&TestRunner.onValueChanged),
+        @ptrCast(&TestRunner.log),
+        @intFromEnum(ExportLogger.Severity.debug),
+    ) orelse return error.InternalError;
+    defer main.destroyVm(vm2_ptr);
+
+    const loaded = main.loadState(vm2_ptr, state_buf.ptr, saved_size);
+    try std.testing.expect(loaded);
+
+    // Run second VM — should produce "count is 10" (restored state + re-exec)
+    main.start(vm2_ptr, "");
+    const vm2: *Vm = @ptrCast(@alignCast(vm2_ptr));
+    while (main.canContinue(vm2_ptr)) {
+        main.run(vm2_ptr);
+        if (vm2.err.msg) |_| break;
+    }
+
+    // After interpret, count = restored(10) then += 10 again = 20
+    try std.testing.expectEqual(@as(usize, 1), output.items.len);
+    try std.testing.expectEqualSlices(u8, "count is 20", output.items[0]);
+}
+
+test "Export Invalid Bytecode Returns Null" {
+    // Garbage bytes should cause createVm to return null, not crash.
+    const garbage = [_]u8{ 0xDE, 0xAD, 0xBE, 0xEF } ** 16;
+    const result = main.createVm(
+        &garbage,
+        garbage.len,
+        @ptrCast(&TestRunner.onLine),
+        @ptrCast(&TestRunner.onChoices),
+        @ptrCast(&TestRunner.onValueChanged),
+        @ptrCast(&TestRunner.log),
+        @intFromEnum(ExportLogger.Severity.debug),
+    );
+    try std.testing.expect(result == null);
+
+    // Empty input
+    const empty = [_]u8{0};
+    const result2 = main.createVm(
+        &empty,
+        0,
+        @ptrCast(&TestRunner.onLine),
+        @ptrCast(&TestRunner.onChoices),
+        @ptrCast(&TestRunner.onValueChanged),
+        @ptrCast(&TestRunner.log),
+        @intFromEnum(ExportLogger.Severity.debug),
+    );
+    try std.testing.expect(result2 == null);
+}
+
+test "Export Subscribe and Unsubscribe Lifecycle" {
+    const text =
+        \\ var count = 0
+        \\ === START {
+        \\     count = 1
+        \\     :: "line1"
+        \\     count = 2
+        \\     :: "line2"
+        \\     count = 3
+        \\     :: "line3"
+        \\ }
+    ;
+    output = .empty;
+    defer {
+        clearOutput();
+        output.deinit(allocator);
+    }
+
+    const buf = try compileSource(text);
+    defer allocator.free(buf);
+    defer std.fs.cwd().deleteFile("tmp_export.topi") catch {};
+
+    const vm_ptr = main.createVm(
+        buf.ptr,
+        buf.len,
+        @ptrCast(&TestRunner.onLine),
+        @ptrCast(&TestRunner.onChoices),
+        @ptrCast(&TestRunner.onValueChanged),
+        @ptrCast(&TestRunner.log),
+        @intFromEnum(ExportLogger.Severity.debug),
+    ) orelse return error.InternalError;
+    defer main.destroyVm(vm_ptr);
+
+    // Subscribe to count
+    const subscribed = main.subscribe(vm_ptr, "count");
+    try std.testing.expect(subscribed);
+
+    // Subscribing to a non-existent variable should return false
+    const bad_sub = main.subscribe(vm_ptr, "nonexistent");
+    try std.testing.expect(!bad_sub);
+
+    main.start(vm_ptr, "");
+    const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
+    while (main.canContinue(vm_ptr)) {
+        main.run(vm_ptr);
+        if (vm.err.msg) |_| break;
+    }
+
+    // Should have onValueChanged callbacks interleaved with lines
+    // count=1, "line1", count=2, "line2", count=3, "line3"
+    var value_changed_count: usize = 0;
+    for (output.items) |item| {
+        if (std.mem.startsWith(u8, item, "onValueChanged")) {
+            value_changed_count += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 3), value_changed_count);
+
+    // Unsubscribe
+    const unsub = main.unsubscribe(vm_ptr, "count");
+    try std.testing.expect(unsub);
+
+    // Unsubscribing again should return false
+    const unsub2 = main.unsubscribe(vm_ptr, "count");
+    try std.testing.expect(!unsub2);
 }

@@ -2164,6 +2164,243 @@ test "State Cross-Module Class Resolution" {
     try testing.expect(found_module_class);
 }
 
+test "State Variation Round-Trip: cycle and sequence" {
+    // Advance cycle to index 2 and sequence to index 2, save, load into
+    // a fresh VM, and verify the next calls resume from the saved position.
+    // Use separate lists for each function since they share a content-hash key.
+    const script =
+        \\ var lc = List{10, 20, 30}
+        \\ var r1 = cycle(lc)
+        \\ var r2 = cycle(lc)
+        \\ var ls = List{100, 200, 300}
+        \\ var s1 = sequence(ls)
+        \\ var s2 = sequence(ls)
+    ;
+    const alloc = testing.allocator;
+
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(script, mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(alloc);
+    try vm.interpret();
+
+    // After interpret: cycle at index 2, sequence at index 2
+    // r1=10 (cycle 0→1), r2=20 (cycle 1→2)
+    // s1=100 (seq 0→1), s2=200 (seq 1→2)
+    try testing.expectEqual(@as(f32, 10), vm.globals[1].number);
+    try testing.expectEqual(@as(f32, 20), vm.globals[2].number);
+    try testing.expectEqual(@as(f32, 100), vm.globals[4].number);
+    try testing.expectEqual(@as(f32, 200), vm.globals[5].number);
+
+    // Serialize
+    var data: std.io.Writer.Allocating = .init(alloc);
+    defer data.deinit();
+    try State.serialize(&vm, &data.writer);
+
+    // Load into fresh VM that calls cycle/sequence once more.
+    // Use NEW variable names (next_c, next_s) so decl_global doesn't skip
+    // the initialization — the deserialized state has r1/r2/s1/s2 but not
+    // next_c/next_s, so their globals start as void and the call executes.
+    const script2 =
+        \\ var lc = List{10, 20, 30}
+        \\ var next_c = cycle(lc)
+        \\ var ls = List{100, 200, 300}
+        \\ var next_s = sequence(ls)
+    ;
+    var mod2 = try Module.initEmpty(allocator);
+    defer mod2.deinit();
+    var vm2 = try initTestVm(script2, mod2, false);
+    defer vm2.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm2.runner))).deinit();
+    defer vm2.bytecode.free(alloc);
+
+    var reader = std.Io.Reader.fixed(data.written());
+    try State.deserialize(&vm2, &reader);
+    try vm2.interpret();
+
+    // cycle should resume at index 2 → return 30, advance to 0
+    const nc_idx = try vm2.getGlobalsIndex("next_c");
+    try testing.expectEqual(@as(f32, 30), vm2.globals[nc_idx].number);
+    // sequence should resume at index 2 → return 300, stay at 2
+    const ns_idx = try vm2.getGlobalsIndex("next_s");
+    try testing.expectEqual(@as(f32, 300), vm2.globals[ns_idx].number);
+}
+
+test "State Variation Round-Trip: shuffle preserves order" {
+    // Run shuffle once (creates a permutation, advances index to 1),
+    // save, load, and verify the next shuffle returns the second element
+    // of the same permutation (not a fresh reshuffle).
+    const script =
+        \\ var l = List{10, 20, 30}
+        \\ var r1 = shuffle(l)
+    ;
+    const alloc = testing.allocator;
+
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(script, mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(alloc);
+    try vm.interpret();
+
+    const first_result = vm.globals[1].number;
+    // Sanity: should be one of 10, 20, 30
+    try testing.expect(first_result == 10 or first_result == 20 or first_result == 30);
+
+    // Serialize
+    var data: std.io.Writer.Allocating = .init(alloc);
+    defer data.deinit();
+    try State.serialize(&vm, &data.writer);
+
+    // Load into fresh VM that calls shuffle once more.
+    // Use a new variable name so decl_global actually calls shuffle.
+    const script2 =
+        \\ var l = List{10, 20, 30}
+        \\ var next = shuffle(l)
+    ;
+    var mod2 = try Module.initEmpty(allocator);
+    defer mod2.deinit();
+    var vm2 = try initTestVm(script2, mod2, false);
+    defer vm2.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm2.runner))).deinit();
+    defer vm2.bytecode.free(alloc);
+
+    var reader = std.Io.Reader.fixed(data.written());
+    try State.deserialize(&vm2, &reader);
+    try vm2.interpret();
+
+    const next_idx = try vm2.getGlobalsIndex("next");
+    const second_result = vm2.globals[next_idx].number;
+    // Should be a valid element
+    try testing.expect(second_result == 10 or second_result == 20 or second_result == 30);
+    // Should be different from first (second element of same permutation)
+    try testing.expect(second_result != first_result);
+}
+
+test "State Schema Evolution: removed global" {
+    // Save state with globals a, b, c. Load into script with only a and c.
+    // b should be silently ignored.
+    const script1 =
+        \\ var a = 1
+        \\ var b = 2
+        \\ var c = 3
+    ;
+    const script2 =
+        \\ var a = 0
+        \\ var c = 0
+    ;
+    const alloc = testing.allocator;
+
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(script1, mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(alloc);
+    try vm.interpret();
+
+    var data: std.io.Writer.Allocating = .init(alloc);
+    defer data.deinit();
+    try State.serialize(&vm, &data.writer);
+
+    var mod2 = try Module.initEmpty(allocator);
+    defer mod2.deinit();
+    var vm2 = try initTestVm(script2, mod2, false);
+    defer vm2.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm2.runner))).deinit();
+    defer vm2.bytecode.free(alloc);
+
+    var reader = std.Io.Reader.fixed(data.written());
+    try State.deserialize(&vm2, &reader);
+
+    // a should be restored, c should be restored, b is gone
+    const a_idx = try vm2.getGlobalsIndex("a");
+    const c_idx = try vm2.getGlobalsIndex("c");
+    try testing.expectEqual(@as(f32, 1), vm2.globals[a_idx].number);
+    try testing.expectEqual(@as(f32, 3), vm2.globals[c_idx].number);
+}
+
+test "State Schema Evolution: added global" {
+    // Save state with global a. Load into script with a and b (new).
+    // a should be restored, b should keep its declaration default.
+    const script1 =
+        \\ var a = 42
+    ;
+    const script2 =
+        \\ var a = 0
+        \\ var b = 99
+    ;
+    const alloc = testing.allocator;
+
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(script1, mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(alloc);
+    try vm.interpret();
+
+    var data: std.io.Writer.Allocating = .init(alloc);
+    defer data.deinit();
+    try State.serialize(&vm, &data.writer);
+
+    var mod2 = try Module.initEmpty(allocator);
+    defer mod2.deinit();
+    var vm2 = try initTestVm(script2, mod2, false);
+    defer vm2.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm2.runner))).deinit();
+    defer vm2.bytecode.free(alloc);
+
+    // Load state (only has a), then interpret (sets b=99)
+    var reader = std.Io.Reader.fixed(data.written());
+    try State.deserialize(&vm2, &reader);
+
+    const a_idx = try vm2.getGlobalsIndex("a");
+    try testing.expectEqual(@as(f32, 42), vm2.globals[a_idx].number);
+
+    // Run the script — b gets its default value
+    try vm2.interpret();
+    const b_idx = try vm2.getGlobalsIndex("b");
+    try testing.expectEqual(@as(f32, 99), vm2.globals[b_idx].number);
+}
+
+test "State Malformed JSON" {
+    // Verify deserialize fails cleanly with invalid JSON input.
+    const script =
+        \\ var x = 1
+    ;
+    const alloc = testing.allocator;
+
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(script, mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(alloc);
+
+    // Empty input
+    {
+        var reader = std.Io.Reader.fixed("");
+        try testing.expectError(error.UnexpectedEndOfInput, State.deserialize(&vm, &reader));
+    }
+
+    // Truncated JSON
+    {
+        var reader = std.Io.Reader.fixed("{\"x\":{\"num");
+        try testing.expectError(error.UnexpectedEndOfInput, State.deserialize(&vm, &reader));
+    }
+
+    // Not JSON at all
+    {
+        var reader = std.Io.Reader.fixed("not json");
+        const result = State.deserialize(&vm, &reader);
+        try testing.expectError(error.SyntaxError, result);
+    }
+}
+
 test "Runtime Includes" {
     const main_contents =
         \\ include "./test1.topi"
@@ -2625,4 +2862,99 @@ test "GC: class default string containers do not leak compile-time items" {
     try testing.expect(lookup.keys().len == 1);
     try testing.expectEqualStrings("k", lookup.keys()[0].obj.data.string);
     try testing.expectEqualStrings("v", lookup.values()[0].obj.data.string);
+}
+
+test "GC: circular instance references under pressure" {
+    // Two instances reference each other (a.other = b, b.other = a).
+    // Under threshold 0, the mark algorithm must handle the cycle via its
+    // is_marked early-exit without looping or sweeping reachable objects.
+    const source =
+        \\ class Node {
+        \\     other = nil,
+        \\     value = 0,
+        \\ }
+        \\ var a = new Node{}
+        \\ var b = new Node{}
+        \\ a.value = 1
+        \\ b.value = 2
+        \\ a.other = b
+        \\ b.other = a
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try gcStressVm(source, mod);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    vm.interpret() catch |err| {
+        printErr(&vm);
+        return err;
+    };
+    const a_idx = try vm.getGlobalsIndex("a");
+    const b_idx = try vm.getGlobalsIndex("b");
+    const a_inst = vm.globals[a_idx].obj.data.instance;
+    const b_inst = vm.globals[b_idx].obj.data.instance;
+    // a.value == 1, b.value == 2
+    try testing.expectEqual(@as(f32, 1), a_inst.fields[1].number);
+    try testing.expectEqual(@as(f32, 2), b_inst.fields[1].number);
+    // a.other is b, b.other is a (circular)
+    try testing.expectEqual(vm.globals[b_idx].obj.id, a_inst.fields[0].obj.id);
+    try testing.expectEqual(vm.globals[a_idx].obj.id, b_inst.fields[0].obj.id);
+}
+
+test "GC: string method chaining under pressure" {
+    // Each string method allocates a new GC string. Under threshold 0,
+    // intermediates must survive on the stack until consumed by the next
+    // method call.
+    const source =
+        \\ var s1 = "hello".upper()
+        \\ var s2 = "WORLD".lower()
+        \\ var s3 = "abcabc".replace("a", "x")
+        \\ var s4 = "hello world".upper().replace("HELLO", "HI")
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try gcStressVm(source, mod);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    vm.interpret() catch |err| {
+        printErr(&vm);
+        return err;
+    };
+    const s1_idx = try vm.getGlobalsIndex("s1");
+    const s2_idx = try vm.getGlobalsIndex("s2");
+    const s3_idx = try vm.getGlobalsIndex("s3");
+    const s4_idx = try vm.getGlobalsIndex("s4");
+    try testing.expectEqualStrings("HELLO", vm.globals[s1_idx].obj.data.string);
+    try testing.expectEqualStrings("world", vm.globals[s2_idx].obj.data.string);
+    try testing.expectEqualStrings("xbcxbc", vm.globals[s3_idx].obj.data.string);
+    try testing.expectEqualStrings("HI WORLD", vm.globals[s4_idx].obj.data.string);
+}
+
+test "GC: map construction with dynamic keys under pressure" {
+    // Build a map by inserting string keys produced by split() and string
+    // values produced by upper(). Both key and value are freshly allocated
+    // GC objects; under threshold 0, neither can be collected before the
+    // map insertion completes.
+    const source =
+        \\ var parts = "a,b,c".split(",")
+        \\ var m = Map{}
+        \\ for parts |p| {
+        \\     m[p] = p.upper()
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try gcStressVm(source, mod);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    vm.interpret() catch |err| {
+        printErr(&vm);
+        return err;
+    };
+    const m_idx = try vm.getGlobalsIndex("m");
+    const map = vm.globals[m_idx].obj.data.map;
+    try testing.expectEqual(@as(usize, 3), map.keys().len);
 }
