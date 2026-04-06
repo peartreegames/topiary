@@ -57,6 +57,11 @@ pub const ExportLogger = struct {
     }
 };
 
+/// Wraps a C function for use as an extern function in Topi scripts.
+/// When the C function returns an ExportValue containing allocated memory (strings,
+/// lists, maps, sets), Topiary will copy the data and then call the `free` callback
+/// to release the original. The host's `free` must be able to deallocate whatever
+/// the delegate allocated.
 pub const ExportFunction = struct {
     func: Delegate,
     free: Free,
@@ -132,6 +137,8 @@ pub const ExportRunner = struct {
         };
     }
 
+    /// String pointers in ExportLine are valid only during the on_line callback.
+    /// The host must copy any strings it needs to retain.
     pub fn onLine(runner: *Runner, vm: *Vm, dialogue: Line) void {
         var self: *ExportRunner = @fieldParentPtr("runner", runner);
 
@@ -150,6 +157,8 @@ pub const ExportRunner = struct {
         self.on_line(@intFromPtr(vm), &self.dialogue);
     }
 
+    /// String pointers in ExportChoice are valid only during the on_choices callback.
+    /// The host must copy any strings it needs to retain.
     pub fn onChoices(runner: *Runner, vm: *Vm, choices: []Choice) void {
         var self: *ExportRunner = @fieldParentPtr("runner", runner);
         var i: usize = 0;
@@ -181,6 +190,8 @@ pub const ExportRunner = struct {
         self.allocator.free(result);
     }
 
+    /// String pointers in the ExportValue are valid only during the on_value_changed callback.
+    /// The host must copy any strings it needs to retain.
     pub fn onValueChanged(runner: *Runner, vm: *Vm, name: []const u8, value: Value) void {
         var self: *ExportRunner = @fieldParentPtr("runner", runner);
         const exp_value = ExportValue.fromValue(value, vm.alloc);

@@ -86,6 +86,10 @@ pub const ExportValue = extern struct {
         };
     }
 
+    /// Converts a C ExportValue back into a VM Value. For types with allocated memory
+    /// (string, list, set, map, enum), the data is duped into the VM's allocator and the
+    /// original is released via the `free` callback. The caller's `free` must match whatever
+    /// allocator produced the ExportValue's pointers.
     pub fn toValue(self: *const ExportValue, vm: *Vm, free: ExportFunction.Free) !Value {
         return switch (self.tag) {
             .nil => NilValue,

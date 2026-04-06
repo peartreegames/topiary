@@ -70,16 +70,29 @@ const TestRunner = struct {
         _ = severity;
     }
 
-    pub fn free(ptr: *anyopaque) void {
-        _ = ptr;
+    var free_called: bool = false;
+
+    pub fn free(ptr: usize) callconv(.c) void {
+        if (ptr == 0) return;
+        free_called = true;
+        std.c.free(@ptrFromInt(ptr));
     }
 
     // *const fn (vm_ptr: *anyopaque, args: [*c]ExportValue, args_len: u8) callconv(.c) ExportValue;
-    pub fn sum(_: *anyopaque, args: [*c]ExportValue, _: u8) callconv(.c) ExportValue {
+    pub fn sum(_: usize, args: [*c]ExportValue, _: u8) callconv(.c) ExportValue {
         const arg1 = args[0].data.number;
         const arg2 = args[1].data.number;
         output.append(allocator, std.fmt.allocPrint(allocator, "extern sum {d} + {d} = {d}", .{ arg1, arg2, arg1 + arg2 }) catch unreachable) catch unreachable;
         return .{ .tag = .number, .data = .{ .number = arg1 + arg2 } };
+    }
+
+    /// Extern function that returns a string ExportValue allocated with C malloc.
+    /// Tests the string ownership path: toValue dupes the string then calls free.
+    pub fn greet(_: usize, _: [*c]ExportValue, _: u8) callconv(.c) ExportValue {
+        const greeting = "hello from C";
+        const ptr: [*]u8 = @ptrCast(std.c.malloc(greeting.len) orelse unreachable);
+        @memcpy(ptr[0..greeting.len], greeting);
+        return .{ .tag = .string, .data = .{ .string = .{ .ptr = ptr, .len = greeting.len } } };
     }
 };
 
@@ -336,4 +349,49 @@ test "Export Subscribe and Unsubscribe Lifecycle" {
     // Unsubscribing again should return false
     const unsub2 = main.unsubscribe(vm_ptr, "count");
     try std.testing.expect(!unsub2);
+}
+
+test "Export Extern Function Returning String" {
+    const text =
+        \\ extern fn greet || return "default"
+        \\ === START {
+        \\     :: "{greet()}"
+        \\ }
+    ;
+    output = .empty;
+    defer {
+        clearOutput();
+        output.deinit(allocator);
+    }
+
+    const buf = try compileSource(text);
+    defer allocator.free(buf);
+    defer std.fs.cwd().deleteFile("tmp_export.topi") catch {};
+
+    const vm_ptr = main.createVm(
+        buf.ptr,
+        buf.len,
+        @ptrCast(&TestRunner.onLine),
+        @ptrCast(&TestRunner.onChoices),
+        @ptrCast(&TestRunner.onValueChanged),
+        @ptrCast(&TestRunner.log),
+        @intFromEnum(ExportLogger.Severity.debug),
+    ) orelse return error.InternalError;
+    defer main.destroyVm(vm_ptr);
+
+    TestRunner.free_called = false;
+    const free_ptr: *const anyopaque = @ptrCast(&TestRunner.free);
+    main.setExternFunc(vm_ptr, "greet", @ptrCast(&TestRunner.greet), 0, free_ptr);
+
+    main.start(vm_ptr, "");
+    const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
+    while (main.canContinue(vm_ptr)) {
+        main.run(vm_ptr);
+        if (vm.err.msg) |_| break;
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), output.items.len);
+    try std.testing.expectEqualSlices(u8, "hello from C", output.items[0]);
+    // Verify the free callback was invoked to release the C-allocated string
+    try std.testing.expect(TestRunner.free_called);
 }

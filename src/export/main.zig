@@ -215,6 +215,10 @@ pub export fn unsubscribe(vm_ptr: *anyopaque, name_ptr: [*:0]const u8) bool {
     return vm.unsubscribeToValueChange(name);
 }
 
+/// Creates a VM from serialized bytecode. Returns null on failure.
+/// The returned VM is single-threaded: all export functions must be called from
+/// the same thread. String pointers in callbacks (onLine, onChoices, onValueChanged)
+/// are valid only for the duration of the callback — the host must copy them to persist.
 pub export fn createVm(
     source_ptr: [*]const u8,
     source_len: usize,
@@ -237,8 +241,9 @@ pub export fn createVm(
     };
 
     logger.log("Creating ExportRunner", .{}, .info);
-    var extern_runner = alloc.create(ExportRunner) catch {
+    const extern_runner = alloc.create(ExportRunner) catch {
         logger.log("Could not allocate runner", .{}, .err);
+        bytecode.free(alloc);
         return null;
     };
     logger.log("Initializing ExportRunner", .{}, .info);
@@ -247,16 +252,23 @@ pub export fn createVm(
     logger.log("Creating Vm", .{}, .info);
     const vm = alloc.create(Vm) catch {
         logger.log("Could not allocate vm", .{}, .err);
+        alloc.destroy(extern_runner);
+        bytecode.free(alloc);
         return null;
     };
     logger.log("Initializing Vm, globals: {}", .{bytecode.global_symbols.len}, .info);
     vm.* = Vm.init(alloc, bytecode, &extern_runner.runner) catch {
         logger.log("Could not initialize Vm", .{}, .err);
+        alloc.destroy(vm);
+        alloc.destroy(extern_runner);
+        bytecode.free(alloc);
         return null;
     };
     return @ptrCast(vm);
 }
 
+/// Destroys the VM and frees all associated memory. Safe to call at any point,
+/// including while the VM is paused mid-dialogue waiting for input.
 pub export fn destroyVm(vm_ptr: *anyopaque) void {
     var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
