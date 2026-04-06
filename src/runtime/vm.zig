@@ -704,6 +704,7 @@ pub const Vm = struct {
                 .list => {
                     var count = self.takeInt(C.COLLECTION);
                     var list = try std.ArrayList(Value).initCapacity(self.alloc, count);
+                    errdefer list.deinit(self.alloc);
                     while (count > 0) : (count -= 1) {
                         list.appendAssumeCapacity(try self.pop());
                     }
@@ -713,6 +714,7 @@ pub const Vm = struct {
                 .map => {
                     var count = self.takeInt(C.COLLECTION);
                     var map = Value.Obj.MapType.empty;
+                    errdefer map.deinit(self.alloc);
                     while (count > 0) : (count -= 1) {
                         const value = try self.pop();
                         const key = try self.pop();
@@ -724,6 +726,7 @@ pub const Vm = struct {
                 .set => {
                     var count = self.takeInt(C.COLLECTION);
                     var set = Value.Obj.SetType.empty;
+                    errdefer set.deinit(self.alloc);
                     while (count > 0) : (count -= 1) {
                         try set.put(self.alloc, try self.pop(), {});
                     }
@@ -1225,7 +1228,9 @@ pub const Vm = struct {
         switch (obj.data) {
             .list => |l| {
                 const base = self.stack.count;
+                errdefer self.stack.resize(base);
                 var new_list = try std.ArrayList(Value).initCapacity(allocator, l.items.len);
+                errdefer new_list.deinit(allocator);
                 for (l.items) |item| {
                     const child = try self.clone(item);
                     try new_list.append(allocator, child);
@@ -1237,7 +1242,9 @@ pub const Vm = struct {
             },
             .map => |m| {
                 const base = self.stack.count;
+                errdefer self.stack.resize(base);
                 var new_map = Value.Obj.MapType.empty;
+                errdefer new_map.deinit(allocator);
                 var it = m.iterator();
                 while (it.next()) |entry| {
                     const k = try self.clone(entry.key_ptr.*);
@@ -1252,7 +1259,9 @@ pub const Vm = struct {
             },
             .set => |s| {
                 const base = self.stack.count;
+                errdefer self.stack.resize(base);
                 var new_set = Value.Obj.SetType.empty;
+                errdefer new_set.deinit(allocator);
                 var it = s.iterator();
                 while (it.next()) |entry| {
                     const k = try self.clone(entry.key_ptr.*);
@@ -1265,7 +1274,9 @@ pub const Vm = struct {
             },
             .instance => |inst| {
                 const base = self.stack.count;
+                errdefer self.stack.resize(base);
                 var values = try self.alloc.alloc(Value, inst.fields.len);
+                errdefer self.alloc.free(values);
                 for (inst.fields, 0..) |inst_value, i| {
                     const child = try self.clone(inst_value);
                     values[i] = child;

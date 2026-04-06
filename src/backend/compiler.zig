@@ -861,18 +861,28 @@ pub const Compiler = struct {
             },
             .@"enum" => |e| {
                 var values = try self.alloc.alloc([]const u8, e.values.len);
+                var values_filled: usize = 0;
+                errdefer {
+                    for (values[0..values_filled]) |v| self.alloc.free(v);
+                    self.alloc.free(values);
+                }
+
                 const obj = try self.alloc.create(Value.Obj);
+                errdefer self.alloc.destroy(obj);
 
                 for (e.values, 0..) |value, i| {
                     values[i] = try self.alloc.dupe(u8, value);
+                    values_filled = i + 1;
                 }
 
+                const enum_name = try self.alloc.dupe(u8, e.name);
+                errdefer self.alloc.free(enum_name);
                 obj.* = .{
                     .id = UUID.fromStringHash(e.name),
                     .data = .{
                         .@"enum" = .{
                             .is_seq = e.is_seq,
-                            .name = try self.alloc.dupe(u8, e.name),
+                            .name = enum_name,
                             .values = values,
                         },
                     },
@@ -1075,6 +1085,7 @@ pub const Compiler = struct {
         switch (expr.type) {
             .binary => |bin| {
                 const left = try self.evaluateLiteral(bin.left);
+                errdefer left.destroyStatic(self.alloc);
                 const right = try self.evaluateLiteral(bin.right);
 
                 if (left == .number and right == .number) {
@@ -1171,6 +1182,10 @@ pub const Compiler = struct {
             .nil => return .nil,
             .list => |l| {
                 var list = try std.ArrayList(Value).initCapacity(self.alloc, l.len);
+                errdefer {
+                    for (list.items) |item| item.destroyStatic(self.alloc);
+                    list.deinit(self.alloc);
+                }
                 for (l) |*item| {
                     try list.append(self.alloc, try self.evaluateLiteral(item));
                 }
@@ -1180,6 +1195,10 @@ pub const Compiler = struct {
             },
             .set => |s| {
                 var set = Value.Obj.SetType.empty;
+                errdefer {
+                    for (set.keys()) |k| k.destroyStatic(self.alloc);
+                    set.deinit(self.alloc);
+                }
                 for (s) |*item| {
                     try set.put(self.alloc, try self.evaluateLiteral(item), {});
                 }
@@ -1189,9 +1208,20 @@ pub const Compiler = struct {
             },
             .map => |m| {
                 var map = Value.Obj.MapType.empty;
+                errdefer {
+                    var it = map.iterator();
+                    while (it.next()) |entry| {
+                        entry.key_ptr.*.destroyStatic(self.alloc);
+                        entry.value_ptr.*.destroyStatic(self.alloc);
+                    }
+                    map.deinit(self.alloc);
+                }
                 for (m) |*mp| {
                     const pair = mp.type.map_pair;
-                    try map.put(self.alloc, try self.evaluateLiteral(pair.key), try self.evaluateLiteral(pair.value));
+                    const key = try self.evaluateLiteral(pair.key);
+                    errdefer key.destroyStatic(self.alloc);
+                    const value = try self.evaluateLiteral(pair.value);
+                    try map.put(self.alloc, key, value);
                 }
                 const obj = try self.alloc.create(Value.Obj);
                 obj.* = .{ .id = UUID.new(), .data = .{ .map = map } };
