@@ -52,7 +52,7 @@ pub const CompilerErr = struct {
             var lineStart: usize = 0;
             if (lineNumber == 1) lineStart = if (std.mem.startsWith(u8, l, "\xEF\xBB\xBF")) 3 else @as(usize, 0);
             try writer.print("{s}\n", .{l[lineStart..]});
-            const offset_col: u8 = if (lineNumber == 1) 1 else 2;
+            const offset_col: u8 = 1;
             var count = @max(column - offset_col, 0);
             while (count > 0) : (count -= 1) {
                 try writer.writeByte(' ');

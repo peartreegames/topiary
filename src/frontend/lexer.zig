@@ -204,7 +204,7 @@ pub const Lexer = struct {
         while (isWhitespace(self.char) or self.char == ';') {
             if (isEndOfLine(self.char)) {
                 self.line += 1;
-                self.column = 1;
+                self.column = 0;
             }
             self.readChar();
         }
