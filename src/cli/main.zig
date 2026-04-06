@@ -498,7 +498,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                 return;
             };
             if (args.dry) {
-                try print("Successfully generated localilzation.", .{});
+                try print("Successfully generated localization.", .{});
             } else try print("Successfully generated localization into {s}\n", .{folder});
         },
         .@"export" => {
@@ -511,6 +511,10 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                     return;
                 };
             } else {
+                if (args.output == null) {
+                    try print("Error: export requires -o <file> or --dry\n", .{});
+                    return;
+                }
                 const dir = std.fs.cwd();
                 if (std.fs.path.dirname(args.output.?)) |dir_name| {
                     try dir.makePath(dir_name);

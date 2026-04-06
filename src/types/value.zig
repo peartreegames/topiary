@@ -445,14 +445,7 @@ pub const Value = union(Type) {
                         const obj = try allocator.create(Value.Obj);
                         obj.* = .{
                             .id = id,
-                            .data = .{
-                                .builtin = .{
-                                    .name = builtin.obj.data.builtin.name,
-                                    .arity = builtin.obj.data.builtin.arity,
-                                    .is_method = builtin.obj.data.builtin.is_method,
-                                    .backing = builtin.obj.data.builtin.backing,
-                                },
-                            },
+                            .data = .{ .builtin = builtin },
                         };
                         return .{ .obj = obj };
                     },

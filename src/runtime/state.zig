@@ -38,6 +38,8 @@ pub const State = struct {
             .options = .{ .whitespace = .minified },
         };
         try stream.beginObject();
+        try stream.objectField("__version");
+        try stream.write(@as(u32, 1));
         for (vm.bytecode.global_symbols) |s| {
             const value = vm.globals[s.index];
             if (value == .void) continue;
@@ -199,7 +201,7 @@ pub const State = struct {
                 try stream.endArray();
                 try stream.endObject();
             },
-            else => return error.NotImplemented,
+            .string, .@"extern", .builtin, .anchor => return error.NotImplemented,
         }
         try stream.endObject();
     }
@@ -239,7 +241,7 @@ pub const State = struct {
                     },
                 }
             },
-            else => return error.NotImplemented,
+            .range, .timestamp, .map_pair => return error.NotImplemented,
         }
         try stream.endObject();
     }
@@ -263,6 +265,9 @@ pub const State = struct {
         var refs = std.AutoHashMapUnmanaged(UUID.ID, Value).empty;
         defer refs.deinit(vm.alloc);
         const root = value.object;
+        if (root.get("__version")) |ver| {
+            if (ver != .integer or ver.integer > 1) return error.UnsupportedStateVersion;
+        }
         for (vm.bytecode.global_symbols) |sym| {
             const maybe_entry = root.get(sym.name);
             if (maybe_entry) |entry| {
@@ -313,6 +318,7 @@ pub const State = struct {
                 try refs.put(vm.alloc, UUID.fromString(v.string), value);
                 return value;
             }
+            std.log.debug("state: dangling ref {s} — returning void", .{v.string});
             return Void;
         }
         if (entry.object.get("enum_value")) |v| {

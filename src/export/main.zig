@@ -347,6 +347,32 @@ pub export fn loadState(vm_ptr: *anyopaque, json_str: [*]const u8, json_len: usi
     return true;
 }
 
+pub export fn setLocaleFile(vm_ptr: *anyopaque, path_ptr: [*:0]const u8) bool {
+    var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
+    const path = std.mem.sliceTo(path_ptr, 0);
+    vm.setLocale(path) catch |err| {
+        const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
+        runner.logger.log("Could not set locale '{s}': {s}", .{ path, @errorName(err) }, .err);
+        return false;
+    };
+    return true;
+}
+
+pub export fn setLocale(vm_ptr: *anyopaque, data_ptr: [*]const u8, data_len: usize) bool {
+    var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
+    vm.setLocaleFromBuffer("mem", data_ptr[0..data_len]) catch |err| {
+        const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
+        runner.logger.log("Could not set locale from buffer: {s}", .{@errorName(err)}, .err);
+        return false;
+    };
+    return true;
+}
+
+pub export fn removeLocale(vm_ptr: *anyopaque) void {
+    var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
+    vm.removeLocale();
+}
+
 pub export fn calculateFormatSize(path_ptr: [*:0]const u8, indent_width: u8, log_ptr: *const anyopaque, log_severity: u8) usize {
     const logger = ExportLogger{
         .on_log = @ptrCast(@alignCast(log_ptr)),

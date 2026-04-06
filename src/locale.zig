@@ -43,8 +43,9 @@ pub const LocaleProvider = struct {
         const count = try reader.readInt(C.CONSTANT, .little);
         var map: std.AutoHashMapUnmanaged(UUID.ID, []const u8) = .empty;
 
-        const table_size = count * IndexEntry.Size;
+        const table_size = std.math.mul(C.CONSTANT, count, IndexEntry.Size) catch return error.CorruptLocaleFile;
         const blob_start = header_size + table_size;
+        if (blob_start > buffer.len) return error.CorruptLocaleFile;
 
         for (0..count) |_| {
             var entry: IndexEntry = undefined;

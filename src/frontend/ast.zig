@@ -40,6 +40,7 @@ pub const Expression = struct {
         },
         instance: struct {
             name: []const u8,
+            name_token: Token,
             field_names: [][]const u8,
             fields: []const Expression,
         },
@@ -185,6 +186,7 @@ pub const Statement = struct {
             index: Expression,
             iterator: Expression,
             capture: []const u8,
+            capture_token: Token,
             body: []const Statement,
         },
         fork: struct {
@@ -209,6 +211,7 @@ pub const Statement = struct {
         include: []const u8,
         divert: struct {
             path: [][]const u8,
+            path_tokens: []Token,
             end_token: Token,
             is_backup: bool,
         },

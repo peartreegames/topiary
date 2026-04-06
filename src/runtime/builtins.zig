@@ -33,121 +33,88 @@ pub const VariationMap = std.AutoHashMapUnmanaged(u32, VariationState);
 
 var r: ?std.Random.DefaultPrng = null;
 
-pub const functions = std.StaticStringMap(Value).initComptime(.{ .{
-    "rnd",
-    create("rnd", 2, false, rnd),
+pub const functions = std.StaticStringMap(Builtin).initComptime(.{ .{
+    "rnd", Builtin{ .arity = 2, .backing = rnd, .is_method = false, .name = "rnd" },
 }, .{
-    "rnd01",
-    create("rnd01", 0, false, rnd01),
+    "rnd01", Builtin{ .arity = 0, .backing = rnd01, .is_method = false, .name = "rnd01" },
 }, .{
-    "print",
-    create("print", 1, false, print),
+    "print", Builtin{ .arity = 1, .backing = print, .is_method = false, .name = "print" },
 }, .{
-    "round",
-    create("round", 1, false, round),
+    "round", Builtin{ .arity = 1, .backing = round, .is_method = false, .name = "round" },
 }, .{
-    "abs",
-    create("abs", 1, false, abs),
+    "abs", Builtin{ .arity = 1, .backing = abs, .is_method = false, .name = "abs" },
 }, .{
-    "assert",
-    create("assert", 2, false, assert),
+    "assert", Builtin{ .arity = 2, .backing = assert, .is_method = false, .name = "assert" },
 }, .{
-    "mstime",
-    create("mstime", 0, false, mstime),
+    "mstime", Builtin{ .arity = 0, .backing = mstime, .is_method = false, .name = "mstime" },
 }, .{
-    "weighted",
-    create("weighted", 2, false, weighted),
+    "weighted", Builtin{ .arity = 2, .backing = weighted, .is_method = false, .name = "weighted" },
 }, .{
-    "cycle",
-    create("cycle", 1, false, cycle),
+    "cycle", Builtin{ .arity = 1, .backing = cycle, .is_method = false, .name = "cycle" },
 }, .{
-    "shuffle",
-    create("shuffle", 1, false, shuffle),
+    "shuffle", Builtin{ .arity = 1, .backing = shuffle, .is_method = false, .name = "shuffle" },
 }, .{
-    "sequence",
-    create("sequence", 1, false, sequence),
+    "sequence", Builtin{ .arity = 1, .backing = sequence, .is_method = false, .name = "sequence" },
 }, .{
-    "random",
-    create("random", 1, false, random),
+    "random", Builtin{ .arity = 1, .backing = random, .is_method = false, .name = "random" },
+}, .{
+    "typeOf", Builtin{ .arity = 1, .backing = typeOf, .is_method = false, .name = "typeOf" },
 } });
 
-pub const methods = std.StaticStringMap(Value).initComptime(.{ .{
-    "count",
-    create("count", 1, true, count_method),
+pub const methods = std.StaticStringMap(Builtin).initComptime(.{ .{
+    "count", Builtin{ .arity = 1, .backing = count_method, .is_method = true, .name = "count" },
 }, .{
-    "add",
-    create("add", 2, true, add_method),
+    "add", Builtin{ .arity = 2, .backing = add_method, .is_method = true, .name = "add" },
 }, .{
-    "__addmap",
-    create("add", 3, true, addmap_method),
+    "__addmap", Builtin{ .arity = 3, .backing = addmap_method, .is_method = true, .name = "add" },
 }, .{
-    "remove",
-    create("remove", 2, true, remove_method),
+    "remove", Builtin{ .arity = 2, .backing = remove_method, .is_method = true, .name = "remove" },
 }, .{
-    "has",
-    create("has", 2, true, has_method),
+    "has", Builtin{ .arity = 2, .backing = has_method, .is_method = true, .name = "has" },
 }, .{
-    "clear",
-    create("clear", 1, true, clear_method),
+    "clear", Builtin{ .arity = 1, .backing = clear_method, .is_method = true, .name = "clear" },
 }, .{
-    "upper",
-    create("upper", 1, true, upper_method),
+    "upper", Builtin{ .arity = 1, .backing = upper_method, .is_method = true, .name = "upper" },
 }, .{
-    "lower",
-    create("lower", 1, true, lower_method),
+    "lower", Builtin{ .arity = 1, .backing = lower_method, .is_method = true, .name = "lower" },
 }, .{
-    "replace",
-    create("replace", 3, true, replace_method),
+    "replace", Builtin{ .arity = 3, .backing = replace_method, .is_method = true, .name = "replace" },
 }, .{
-    "split",
-    create("split", 2, true, split_method),
+    "split", Builtin{ .arity = 2, .backing = split_method, .is_method = true, .name = "split" },
 }, .{
-    "substr",
-    create("substr", 3, true, substr_method),
+    "substr", Builtin{ .arity = 3, .backing = substr_method, .is_method = true, .name = "substr" },
 }, .{
-    "trim",
-    create("trim", 1, true, trim_method),
+    "trim", Builtin{ .arity = 1, .backing = trim_method, .is_method = true, .name = "trim" },
 } });
 
-pub const string_methods = std.StaticStringMap(Value).initComptime(.{ .{
-    "has",
-    create("has", 2, true, has_method),
-}, .{
-    "length",
-    create("length", 1, true, length_method),
-}, .{
-    "upper",
-    create("upper", 1, true, upper_method),
-}, .{
-    "lower",
-    create("lower", 1, true, lower_method),
-}, .{
-    "replace",
-    create("replace", 3, true, replace_method),
-}, .{
-    "split",
-    create("split", 2, true, split_method),
-}, .{
-    "substr",
-    create("substr", 3, true, substr_method),
-}, .{
-    "trim",
-    create("trim", 1, true, trim_method),
-} });
+pub const string_methods = std.StaticStringMap(Builtin).initComptime(.{
+    .{
+        "has", Builtin{ .arity = 2, .backing = has_method, .is_method = true, .name = "has" },
+    },
+    .{
+        "length", Builtin{ .arity = 1, .backing = length_method, .is_method = true, .name = "length" },
+    },
+    .{
+        "upper", Builtin{ .arity = 1, .backing = upper_method, .is_method = true, .name = "upper" },
+    },
+    .{
+        "lower", Builtin{ .arity = 1, .backing = lower_method, .is_method = true, .name = "lower" },
+    },
+    .{
+        "replace", Builtin{ .arity = 3, .backing = replace_method, .is_method = true, .name = "replace" },
+    },
+    .{
+        "split", Builtin{ .arity = 2, .backing = split_method, .is_method = true, .name = "split" },
+    },
+    .{
+        "substr", Builtin{ .arity = 3, .backing = substr_method, .is_method = true, .name = "substr" },
+    },
+    .{
+        "trim", Builtin{ .arity = 1, .backing = trim_method, .is_method = true, .name = "trim" },
+    }
+});
 
-fn create(name: []const u8, arity: u8, is_method: bool, backing: *const fn (vm: *Vm, args: []Value) Value) Value {
-    const obj = Value.Obj{
-        .data = .{
-            .builtin = .{
-                .backing = backing,
-                .arity = arity,
-                .is_method = is_method,
-                .name = name,
-            },
-        },
-    };
-    return .{ .obj = @constCast(&obj) };
-}
+pub const BuiltinFn = Builtin.Fn;
 
 fn rnd(_: *Vm, args: []Value) Value {
     if (r == null) r = std.Random.DefaultPrng.init(std.crypto.random.int(u64));
@@ -576,4 +543,29 @@ fn weighted(_: *Vm, args: []Value) Value {
     }
 
     return items.items[items.items.len - 1];
+}
+
+fn typeOf(_: *Vm, args: []Value) Value {
+    return .{ .const_string = switch (args[0]) {
+        .void => "void",
+        .nil => "nil",
+        .bool => "bool",
+        .number, .visit => "number",
+        .range => "range",
+        .enum_value => "enum",
+        .const_string => "string",
+        .timestamp => "number",
+        .map_pair, .ref => "void",
+        .obj => |o| switch (o.data) {
+            .string => "string",
+            .list => "list",
+            .map => "map",
+            .set => "set",
+            .@"enum" => "enum",
+            .class => "class",
+            .instance => |i| i.base.data.class.name,
+            .function, .builtin, .@"extern" => "function",
+            .anchor => "anchor",
+        },
+    } };
 }

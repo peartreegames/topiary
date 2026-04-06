@@ -44,11 +44,13 @@ pub const UUID = struct {
 
     pub fn fromString(str: []const u8) ID {
         if (str.len != Size) return Empty;
-        var id: ID = undefined;
-        var i: usize = 0;
-        while (i < Size) : (i += 1) {
-            id[i] = str[i];
+        if (str[8] != '-') return Empty;
+        for (str, 0..) |c, i| {
+            if (i == 8) continue;
+            if (std.mem.indexOfScalar(u8, chars, c) == null) return Empty;
         }
+        var id: ID = undefined;
+        @memcpy(&id, str[0..Size]);
         return id;
     }
 

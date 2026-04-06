@@ -5,6 +5,11 @@ const Locale = topi.locale.Locale;
 const LocaleProvider = topi.locale.LocaleProvider;
 const C = topi.utils.C;
 const UUID = topi.utils.UUID;
+const Vm = topi.runtime.Vm;
+const Module = topi.module.Module;
+
+const compileSource = @import("compiler.test.zig").compileSource;
+const TestRunner = @import("runner.zig").TestRunner;
 
 test "Localization Duplicate Content Gets Unique Ids" {
     const input =
@@ -317,4 +322,101 @@ test "Localization Export CSV Merge Drops Removed Entries" {
     // Existing rows should still be present with translations
     try std.testing.expect(std.mem.indexOf(u8, result, "\"Une personne approche.\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"Salut.\"") != null);
+}
+
+test "Localization Unsupported Version" {
+    const alloc = std.testing.allocator;
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(alloc);
+    const w = buf.writer(alloc);
+    try w.writeAll(LocaleProvider.magic);
+    try w.writeInt(u16, 99, .little); // unsupported version
+    try w.writeInt(C.CONSTANT, 0, .little); // count = 0
+    const owned = try alloc.dupe(u8, buf.items);
+    try std.testing.expectError(error.UnsupportedLocaleVersion, LocaleProvider.init(alloc, "en", owned));
+    alloc.free(owned);
+}
+
+test "Localization Overflow Count" {
+    const alloc = std.testing.allocator;
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(alloc);
+    const w = buf.writer(alloc);
+    try w.writeAll(LocaleProvider.magic);
+    try w.writeInt(u16, LocaleProvider.version, .little);
+    try w.writeInt(C.CONSTANT, std.math.maxInt(C.CONSTANT), .little); // huge count
+    const owned = try alloc.dupe(u8, buf.items);
+    try std.testing.expectError(error.CorruptLocaleFile, LocaleProvider.init(alloc, "en", owned));
+    alloc.free(owned);
+}
+
+test "Localization Header Only CSV" {
+    const alloc = std.testing.allocator;
+    var allocating = std.Io.Writer.Allocating.init(alloc);
+    const writer = &allocating.writer;
+    defer allocating.deinit();
+
+    const header_only_csv =
+        \\"id","speaker","raw","en"
+        \\
+    ;
+
+    try Locale.generate(alloc, header_only_csv, 3, writer);
+    const written = try allocating.toOwnedSlice();
+
+    const lp = try LocaleProvider.init(alloc, "en", written);
+    defer lp.deinit(alloc);
+
+    // Should have zero entries
+    try std.testing.expectEqual(@as(usize, 0), lp.map.count());
+}
+
+test "Localization UUID Validation" {
+    // Valid UUID
+    const valid = UUID.fromString("8R955KPX-2WI5R816");
+    try std.testing.expect(!UUID.isEmpty(valid));
+
+    // Invalid: lowercase letters
+    const lowercase = UUID.fromString("8r955kpx-2wi5r816");
+    try std.testing.expect(UUID.isEmpty(lowercase));
+
+    // Invalid: missing dash
+    const no_dash = UUID.fromString("8R955KPXA2WI5R816");
+    try std.testing.expect(UUID.isEmpty(no_dash));
+
+    // Invalid: special characters
+    const special = UUID.fromString("8R955KP!-2WI5R816");
+    try std.testing.expect(UUID.isEmpty(special));
+
+    // Invalid: wrong length
+    const short = UUID.fromString("8R955KPX-2WI5R81");
+    try std.testing.expect(UUID.isEmpty(short));
+}
+
+test "Localization VM Deinit Cleans Up Locale" {
+    const alloc = std.testing.allocator;
+
+    // Generate a valid .topil buffer
+    var allocating = std.Io.Writer.Allocating.init(alloc);
+    const writer = &allocating.writer;
+    defer allocating.deinit();
+    try Locale.generate(alloc, csv_output, 3, writer);
+    const topil_data = try allocating.toOwnedSlice();
+    defer alloc.free(topil_data);
+
+    // Compile a minimal topi source and create a VM
+    var mod = try Module.initEmpty(alloc);
+    defer mod.deinit();
+    var bytecode = try compileSource("const x = 1", mod);
+    defer bytecode.free(alloc);
+    const test_runner = try TestRunner.init(alloc);
+    var vm = try Vm.init(alloc, bytecode, &test_runner.runner);
+    defer vm.deinit();
+    defer test_runner.deinit();
+
+    // Set locale from buffer — VM.deinit should clean this up without leaks
+    try vm.setLocaleFromBuffer("test", topil_data);
+    try std.testing.expect(vm.loc_provider != null);
+
+    // deinit happens via defer — testing allocator will catch any leaks
 }

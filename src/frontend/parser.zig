@@ -545,6 +545,7 @@ pub const Parser = struct {
     fn instanceExpression(self: *Parser) Error!Expression {
         const start = self.current_token;
         self.next();
+        const name_token = self.current_token;
         const name = try self.consumeIdentifier();
         try self.expectCurrent(.left_brace);
         self.next();
@@ -571,6 +572,7 @@ pub const Parser = struct {
             .type = .{
                 .instance = .{
                     .name = name,
+                    .name_token = name_token,
                     .field_names = try field_names.toOwnedSlice(self.allocator),
                     .fields = try fields.toOwnedSlice(self.allocator),
                 },
@@ -813,6 +815,8 @@ pub const Parser = struct {
         const start_token = self.current_token;
         var list = std.ArrayList([]const u8).empty;
         errdefer list.deinit(self.allocator);
+        var token_list = std.ArrayList(Token).empty;
+        errdefer token_list.deinit(self.allocator);
         var is_backup: bool = false;
         if (self.peekIs(.caret)) {
             is_backup = true;
@@ -821,11 +825,13 @@ pub const Parser = struct {
 
         try self.expectPeek(.identifier);
 
+        try token_list.append(self.allocator, self.current_token);
         try list.append(self.allocator, try self.getStringValue());
 
         while (self.peekIs(.dot)) {
             self.next();
             self.next();
+            try token_list.append(self.allocator, self.current_token);
             try list.append(self.allocator, try self.getStringValue());
         }
 
@@ -836,6 +842,7 @@ pub const Parser = struct {
             .type = .{
                 .divert = .{
                     .path = try list.toOwnedSlice(self.allocator),
+                    .path_tokens = try token_list.toOwnedSlice(self.allocator),
                     .end_token = end_token,
                     .is_backup = is_backup,
                 },
@@ -1054,6 +1061,7 @@ pub const Parser = struct {
 
         try self.expectPeek(.pipe);
         self.next();
+        const capture_token = self.current_token;
         const capture = try self.consumeIdentifier();
         try self.expectPeek(.left_brace);
         const body = try self.block();
@@ -1063,6 +1071,7 @@ pub const Parser = struct {
                 .@"for" = .{
                     .index = ast.Expression.for_index,
                     .capture = capture,
+                    .capture_token = capture_token,
                     .iterator = iterator,
                     .body = body,
                 },

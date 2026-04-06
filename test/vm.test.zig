@@ -1959,7 +1959,7 @@ test "Runtime Save and Load State" {
     defer data2.deinit();
     const size = try State.calculateSize(&vm2);
     try State.serialize(&vm2, &data2.writer);
-    try testing.expectEqual(451, size);
+    try testing.expectEqual(465, size);
 }
 
 test "State Visit Counter Round-Trip" {
@@ -2247,16 +2247,12 @@ test "State Variation Round-Trip: shuffle preserves order" {
     try vm.interpret();
 
     const first_result = vm.globals[1].number;
-    // Sanity: should be one of 10, 20, 30
     try testing.expect(first_result == 10 or first_result == 20 or first_result == 30);
 
-    // Serialize
     var data: std.io.Writer.Allocating = .init(alloc);
     defer data.deinit();
     try State.serialize(&vm, &data.writer);
 
-    // Load into fresh VM that calls shuffle once more.
-    // Use a new variable name so decl_global actually calls shuffle.
     const script2 =
         \\ var l = List{10, 20, 30}
         \\ var next = shuffle(l)
@@ -2274,9 +2270,7 @@ test "State Variation Round-Trip: shuffle preserves order" {
 
     const next_idx = try vm2.getGlobalsIndex("next");
     const second_result = vm2.globals[next_idx].number;
-    // Should be a valid element
     try testing.expect(second_result == 10 or second_result == 20 or second_result == 30);
-    // Should be different from first (second element of same permutation)
     try testing.expect(second_result != first_result);
 }
 
@@ -2957,4 +2951,167 @@ test "GC: map construction with dynamic keys under pressure" {
     const m_idx = try vm.getGlobalsIndex("m");
     const map = vm.globals[m_idx].obj.data.map;
     try testing.expectEqual(@as(usize, 3), map.keys().len);
+}
+
+test "typeOf builtin: primitives" {
+    const test_cases = .{
+        .{ .input = "var r = typeOf(1)", .expected = "number" },
+        .{ .input = "var r = typeOf(true)", .expected = "bool" },
+        .{ .input = "var r = typeOf(\"hello\")", .expected = "string" },
+    };
+    inline for (test_cases) |tc| {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm(tc.input, mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        try vm.interpret();
+        const r_idx = try vm.getGlobalsIndex("r");
+        try testing.expectEqualStrings(tc.expected, vm.globals[r_idx].const_string);
+    }
+}
+
+test "typeOf builtin: collections" {
+    const test_cases = .{
+        .{ .input = "var r = typeOf(List{1, 2})", .expected = "list" },
+        .{ .input = "var r = typeOf(Map{\"a\": 1})", .expected = "map" },
+        .{ .input = "var r = typeOf(Set{1, 2})", .expected = "set" },
+    };
+    inline for (test_cases) |tc| {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var vm = try initTestVm(tc.input, mod, false);
+        defer vm.deinit();
+        defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+        defer vm.bytecode.free(testing.allocator);
+        try vm.interpret();
+        const r_idx = try vm.getGlobalsIndex("r");
+        try testing.expectEqualStrings(tc.expected, vm.globals[r_idx].const_string);
+    }
+}
+
+test "typeOf builtin: instance returns class name" {
+    const script =
+        \\ class Player {
+        \\    name = "default",
+        \\ }
+        \\ var p = new Player{}
+        \\ var r = typeOf(p)
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(script, mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    try vm.interpret();
+    const r_idx = try vm.getGlobalsIndex("r");
+    try testing.expectEqualStrings("Player", vm.globals[r_idx].const_string);
+}
+
+test "typeOf builtin: function" {
+    const script =
+        \\ fn add |x, y| return x + y
+        \\ var r = typeOf(add)
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(script, mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(testing.allocator);
+    try vm.interpret();
+    const r_idx = try vm.getGlobalsIndex("r");
+    try testing.expectEqualStrings("function", vm.globals[r_idx].const_string);
+}
+
+test "State version marker round-trip" {
+    const script =
+        \\ var x = 42
+    ;
+    const alloc = testing.allocator;
+
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(script, mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(alloc);
+    try vm.interpret();
+
+    // Serialize and verify __version is present
+    var data: std.io.Writer.Allocating = .init(alloc);
+    defer data.deinit();
+    try State.serialize(&vm, &data.writer);
+    const json = data.written();
+    try testing.expect(std.mem.indexOf(u8, json, "\"__version\":1") != null);
+
+    // Deserialize works fine with version marker
+    var mod2 = try Module.initEmpty(allocator);
+    defer mod2.deinit();
+    var vm2 = try initTestVm(script, mod2, false);
+    defer vm2.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm2.runner))).deinit();
+    defer vm2.bytecode.free(alloc);
+
+    var reader = std.Io.Reader.fixed(json);
+    try State.deserialize(&vm2, &reader);
+    try testing.expectEqual(@as(f32, 42), vm2.globals[0].number);
+}
+
+test "State version marker: future version rejected" {
+    const script =
+        \\ var x = 1
+    ;
+    const alloc = testing.allocator;
+
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(script, mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(alloc);
+
+    var reader = std.Io.Reader.fixed("{\"__version\":999,\"x\":{\"number\":1}}");
+    try testing.expectError(error.UnsupportedStateVersion, State.deserialize(&vm, &reader));
+}
+
+test "State version marker: legacy save without version loads fine" {
+    const script =
+        \\ var x = 1
+    ;
+    const alloc = testing.allocator;
+
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(script, mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(alloc);
+
+    // JSON without __version (simulating old save format)
+    var reader = std.Io.Reader.fixed("{\"x\":{\"number\":42.00000}}");
+    try State.deserialize(&vm, &reader);
+    try testing.expectEqual(@as(f32, 42), vm.globals[0].number);
+}
+
+test "State dangling ref returns Void" {
+    const script =
+        \\ var x = List{1, 2, 3}
+    ;
+    const alloc = testing.allocator;
+
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var vm = try initTestVm(script, mod, false);
+    defer vm.deinit();
+    defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
+    defer vm.bytecode.free(alloc);
+
+    // JSON where x references a UUID that doesn't exist in the root
+    var reader = std.Io.Reader.fixed("{\"__version\":1,\"x\":{\"ref\":\"AAAAAAAAAAAAAAAAA\"}}");
+    try State.deserialize(&vm, &reader);
+    // Dangling ref should resolve to void
+    try testing.expectEqual(vm.globals[0], .void);
 }

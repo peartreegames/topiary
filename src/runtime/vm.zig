@@ -57,6 +57,7 @@ pub const Vm = struct {
     value_subscribers: std.StringHashMapUnmanaged(void) = .empty,
     notifiable_objects: std.AutoHashMapUnmanaged(UUID.ID, usize) = .empty,
     variation_state: builtins.VariationMap = .empty,
+    builtin_cache: std.StringHashMapUnmanaged(Value) = .empty,
 
     stack: Stack(Value),
     /// Current iterators to allow easy nesting
@@ -136,6 +137,7 @@ pub const Vm = struct {
     }
 
     pub fn deinit(self: *Vm) void {
+        self.removeLocale();
         self.alloc.destroy(self.frames.backing[0].func);
         self.frames.deinit();
         self.gc.deinit();
@@ -157,9 +159,24 @@ pub const Vm = struct {
             }
             self.variation_state.deinit(self.alloc);
         }
+        {
+            var it = self.builtin_cache.valueIterator();
+            while (it.next()) |v| self.alloc.destroy(v.obj);
+            self.builtin_cache.deinit(self.alloc);
+        }
         self.alloc.free(self.globals);
         if (!self.choices_freed) self.alloc.free(self.current_choices);
         self.err.deinit(self.alloc);
+    }
+
+    fn builtinValue(self: *Vm, b: builtins.Builtin) !Value {
+        const gop = try self.builtin_cache.getOrPut(self.alloc, b.name);
+        if (!gop.found_existing) {
+            const obj = try self.alloc.create(Value.Obj);
+            obj.* = .{ .data = .{ .builtin = b } };
+            gop.value_ptr.* = .{ .obj = obj };
+        }
+        return gop.value_ptr.*;
     }
 
     pub fn setLocale(self: *Vm, path: []const u8) !void {
@@ -171,9 +188,17 @@ pub const Vm = struct {
 
         const size = (try file.stat()).size;
         const buffer = try self.alloc.alloc(u8, size);
+        errdefer self.alloc.free(buffer);
         _ = try file.readAll(buffer);
         self.removeLocale();
         self.loc_provider = try LocaleProvider.init(self.alloc, path, buffer);
+    }
+
+    pub fn setLocaleFromBuffer(self: *Vm, key: []const u8, buffer: []const u8) !void {
+        const owned = try self.alloc.dupe(u8, buffer);
+        errdefer self.alloc.free(owned);
+        self.removeLocale();
+        self.loc_provider = try LocaleProvider.init(self.alloc, key, owned);
     }
 
     pub fn removeLocale(self: *Vm) void {
@@ -810,16 +835,16 @@ pub const Vm = struct {
                         .obj => |o| switch (o.data) {
                             .string => {
                                 if (index.asString()) |name| {
-                                    if (builtins.string_methods.get(name)) |method_value| {
-                                        try self.push(method_value);
+                                    if (builtins.string_methods.get(name)) |method| {
+                                        try self.push(try self.builtinValue(method));
                                         try self.push(target);
                                     } else return self.failUnknownMethod("string", name, &string_method_names);
                                 }
                             },
                             .list => |l| {
                                 if (index.asString()) |name| {
-                                    if (builtins.methods.get(name)) |method_value| {
-                                        try self.push(method_value);
+                                    if (builtins.methods.get(name)) |method| {
+                                        try self.push(try self.builtinValue(method));
                                         try self.push(target);
                                     } else return self.failUnknownMethod("list", name, &collection_method_names);
                                 } else if (index == .number) {
@@ -834,10 +859,10 @@ pub const Vm = struct {
                                     try self.push(v);
                                 } else if (index.asString()) |name| {
                                     if (std.mem.eql(u8, name, "add")) {
-                                        try self.push(builtins.methods.get("__addmap").?);
+                                        try self.push(try self.builtinValue(builtins.methods.get("__addmap").?));
                                         try self.push(target);
-                                    } else if (builtins.methods.get(name)) |method_value| {
-                                        try self.push(method_value);
+                                    } else if (builtins.methods.get(name)) |method| {
+                                        try self.push(try self.builtinValue(method));
                                         try self.push(target);
                                     } else return self.failUnknownMethod("map", name, &collection_method_names);
                                 } else try self.push(Nil);
@@ -845,7 +870,7 @@ pub const Vm = struct {
                             .set => {
                                 const name = index.asString() orelse return self.fail("Can only query set methods by string name, found '{s}'", .{index.typeName()});
                                 const method = builtins.methods.get(name) orelse return self.failUnknownMethod("set", name, &collection_method_names);
-                                try self.push(method);
+                                try self.push(try self.builtinValue(method));
                                 try self.push(target);
                             },
                             .instance => |i| {

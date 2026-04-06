@@ -441,7 +441,7 @@ pub const Compiler = struct {
         const tree = self.module.entry.tree orelse return Error.IllegalOperation;
         for (builtins.keys()) |name| {
             const obj = try self.alloc.create(Value.Obj);
-            obj.* = .{ .data = builtins.get(name).?.obj.data };
+            obj.* = .{ .data = .{ .builtin = builtins.get(name).? } };
             try self.addNamedConstant(name, .{ .obj = obj });
         }
         for (tree.root) |stmt| {
@@ -456,7 +456,8 @@ pub const Compiler = struct {
         // Add one final end at the end of file to grab the initial jump_request
         if (self.chunk.debug_markers.items.len > 0) {
             const dupe = self.chunk.debug_markers.items[self.chunk.debug_markers.items.len - 1];
-            try self.chunk.debug_markers.append(self.alloc, dupe);
+            try self.chunk.debug_markers.ensureTotalCapacity(self.alloc, self.chunk.debug_markers.items.len + 1);
+            self.chunk.debug_markers.appendAssumeCapacity(dupe);
             try self.chunk.instructions.append(self.alloc, @intFromEnum(OpCode.end));
         }
     }
