@@ -1964,8 +1964,8 @@ test "Runtime Save and Load State" {
 
 test "State Visit Counter Round-Trip" {
     const test_case =
-        \\ === START {
-        \\    :speaker: "Hello"
+        \\ === START @A1B2C3D4-E5F6G7H8 {
+        \\    :speaker: "Hello" @I9J0K1L2-M3N4O5P6
         \\ }
     ;
     const alloc = testing.allocator;
@@ -3045,7 +3045,7 @@ test "State version marker round-trip" {
     defer data.deinit();
     try State.serialize(&vm, &data.writer);
     const json = data.written();
-    try testing.expect(std.mem.indexOf(u8, json, "\"__version\":1") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"__version\":2") != null);
 
     // Deserialize works fine with version marker
     var mod2 = try Module.initEmpty(allocator);

@@ -421,6 +421,7 @@ pub const Value = union(Type) {
                         const obj = try allocator.create(Value.Obj);
                         obj.* = .{ .id = id, .data = .{ .anchor = .{
                             .name = buf,
+                            .uuid = id,
                             .ip = ip,
                             .visit_index = visit_idx,
                             .parent_anchor_index = parent_anchor_idx,

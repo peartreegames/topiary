@@ -1,9 +1,12 @@
 const std = @import("std");
-const C = @import("../utils/index.zig").C;
+const utils = @import("../utils/index.zig");
+const C = utils.C;
+const UUID = utils.UUID;
 
 pub const Symbol = struct {
     index: C.GLOBAL,
     name: []const u8,
+    uuid: UUID.ID = UUID.Empty,
     tag: Scope.Tag,
     is_mutable: bool,
 };

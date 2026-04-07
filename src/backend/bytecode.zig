@@ -16,7 +16,7 @@ pub const Bytecode = struct {
     debug_info: []DebugInfo,
 
     pub const magic = "TPBC";
-    pub const version: u16 = 1;
+    pub const version: u16 = 2;
     const prelude_size = magic.len + @sizeOf(u16) + 2; // magic + version + 2 reserved bytes
     const section_count = 4;
     const offsets_size = section_count * @sizeOf(u64);
@@ -31,6 +31,7 @@ pub const Bytecode = struct {
 
     pub const GlobalSymbol = struct {
         name: []const u8,
+        uuid: UUID.ID,
         index: C.GLOBAL,
         is_mutable: bool,
     };
@@ -52,6 +53,7 @@ pub const Bytecode = struct {
             try writer.writeAll(sym.name);
             try writer.writeInt(C.GLOBAL, @as(C.GLOBAL, @intCast(sym.index)), .little);
             try writer.writeByte(if (sym.is_mutable) 1 else 0);
+            try writer.writeAll(&sym.uuid);
         }
     }
 
@@ -124,8 +126,11 @@ pub const Bytecode = struct {
             try reader.readSliceAll(buf);
             const index = try reader.takeInt(C.GLOBAL, .little);
             const is_mutable = if (try reader.takeByte() == 1) true else false;
+            var uuid: UUID.ID = undefined;
+            try reader.readSliceAll(&uuid);
             global_symbols[count] = GlobalSymbol{
                 .name = buf,
+                .uuid = uuid,
                 .index = index,
                 .is_mutable = is_mutable,
             };

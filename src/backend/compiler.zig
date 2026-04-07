@@ -422,6 +422,7 @@ pub const Compiler = struct {
         for (self.scope.symbols.values(), 0..) |s, i| {
             global_symbols[i] = Bytecode.GlobalSymbol{
                 .name = try self.alloc.dupe(u8, s.name),
+                .uuid = s.uuid,
                 .index = s.index,
                 .is_mutable = s.is_mutable,
             };
@@ -561,7 +562,7 @@ pub const Compiler = struct {
             },
             .bough => |b| {
                 const full_name = try self.getQualifiedName(b.name);
-                self.registerAnchor(full_name, stmt.token) catch |err| switch (err) {
+                self.registerAnchor(full_name, b.id, stmt.token) catch |err| switch (err) {
                     error.SymbolAlreadyDeclared => {
                         self.alloc.free(full_name);
                         return self.failRedeclared(b.name, "Bough", stmt.token);
@@ -578,7 +579,7 @@ pub const Compiler = struct {
                 defer self.alloc.free(fork_name);
 
                 const full_name = try self.getQualifiedName(fork_name);
-                self.registerAnchor(full_name, stmt.token) catch |err| switch (err) {
+                self.registerAnchor(full_name, f.id, stmt.token) catch |err| switch (err) {
                     error.SymbolAlreadyDeclared => {
                         self.alloc.free(full_name);
                         return self.failRedeclared(fork_name, "Fork", stmt.token);
@@ -593,7 +594,7 @@ pub const Compiler = struct {
             .choice => |c| {
                 const name = c.name orelse &c.id;
                 const full_name = try self.getQualifiedName(name);
-                self.registerAnchor(full_name, stmt.token) catch |err| switch (err) {
+                self.registerAnchor(full_name, c.id, stmt.token) catch |err| switch (err) {
                     error.SymbolAlreadyDeclared => {
                         self.alloc.free(full_name);
                         return self.failRedeclared(name, "Choice", stmt.token);
@@ -1393,12 +1394,13 @@ pub const Compiler = struct {
         return false;
     }
 
-    fn registerAnchor(self: *Compiler, full_name: []const u8, token: Token) !void {
+    fn registerAnchor(self: *Compiler, full_name: []const u8, uuid: UUID.ID, token: Token) !void {
         // Check for duplicate up-front so the visit symbol is not allocated on
         // failure (keeps error paths clean).
         if (self.constants_map.contains(full_name)) return error.SymbolAlreadyDeclared;
 
         const visit_sym = try self.root_scope.define(full_name, false);
+        visit_sym.uuid = uuid;
 
         var parent_idx: ?C.CONSTANT = null;
         if (self.path_stack.items.len > 0) {
@@ -1409,10 +1411,11 @@ pub const Compiler = struct {
 
         const anchor_obj = try self.alloc.create(Value.Obj);
         anchor_obj.* = .{
-            .id = UUID.fromStringHash(full_name),
+            .id = uuid,
             .data = .{
                 .anchor = .{
                     .name = full_name,
+                    .uuid = uuid,
                     .visit_index = visit_sym.index,
                     .parent_anchor_index = parent_idx,
                     .ip = 0,

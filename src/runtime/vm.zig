@@ -57,7 +57,7 @@ pub const Vm = struct {
     value_subscribers: std.StringHashMapUnmanaged(void) = .empty,
     notifiable_objects: std.AutoHashMapUnmanaged(UUID.ID, usize) = .empty,
     variation_state: builtins.VariationMap = .empty,
-    builtin_cache: std.StringHashMapUnmanaged(Value) = .empty,
+    builtin_cache: std.AutoHashMapUnmanaged(*const fn (*Vm, []Value) Value, Value) = .empty,
 
     stack: Stack(Value),
     /// Current iterators to allow easy nesting
@@ -170,7 +170,7 @@ pub const Vm = struct {
     }
 
     fn builtinValue(self: *Vm, b: builtins.Builtin) !Value {
-        const gop = try self.builtin_cache.getOrPut(self.alloc, b.name);
+        const gop = try self.builtin_cache.getOrPut(self.alloc, b.backing);
         if (!gop.found_existing) {
             const obj = try self.alloc.create(Value.Obj);
             obj.* = .{ .data = .{ .builtin = b } };

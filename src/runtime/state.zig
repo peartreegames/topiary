@@ -39,7 +39,7 @@ pub const State = struct {
         };
         try stream.beginObject();
         try stream.objectField("__version");
-        try stream.write(@as(u32, 1));
+        try stream.write(@as(u32, 2));
         for (vm.bytecode.global_symbols) |s| {
             const value = vm.globals[s.index];
             if (value == .void) continue;
@@ -58,7 +58,11 @@ pub const State = struct {
             // or 'const' strings and functions;
             if (!is_mut and is_str) continue;
 
-            try stream.objectField(s.name);
+            if (value == .visit and !UUID.isEmpty(s.uuid)) {
+                try stream.objectField(&s.uuid);
+            } else {
+                try stream.objectField(s.name);
+            }
             try serializeValue(vm.alloc, value, &stream, &references);
         }
         while (references.pop()) |value| {
@@ -266,10 +270,13 @@ pub const State = struct {
         defer refs.deinit(vm.alloc);
         const root = value.object;
         if (root.get("__version")) |ver| {
-            if (ver != .integer or ver.integer > 1) return error.UnsupportedStateVersion;
+            if (ver != .integer or ver.integer > 2) return error.UnsupportedStateVersion;
         }
         for (vm.bytecode.global_symbols) |sym| {
-            const maybe_entry = root.get(sym.name);
+            const maybe_entry = if (!UUID.isEmpty(sym.uuid))
+                root.get(&sym.uuid)
+            else
+                root.get(sym.name);
             if (maybe_entry) |entry| {
                 vm.globals[sym.index] = try deserializeEntry(vm, &root, entry, &refs, null);
             }
