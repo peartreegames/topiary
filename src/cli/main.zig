@@ -12,6 +12,7 @@ const Compiler = topi.backend.Compiler;
 const Errors = topi.backend.CompilerErrors;
 
 const Locale = topi.locale.Locale;
+const Stamp = topi.stamp.Stamp;
 const Formatter = topi.frontend.Formatter;
 
 const version = @import("build").version;
@@ -28,6 +29,7 @@ const Command = enum {
     compile,
     fmt,
     loc,
+    stamp,
     @"test",
     version,
 };
@@ -55,7 +57,10 @@ fn usage(comptime msg: []const u8) !void {
     try print("       -d, --dry                     Do not write to file on end\n", .{});
     try print("       -o, --output <file>           Write to file on end\n", .{});
     try print("       -v, --verbose\n", .{});
-    try print("   topi loc validate <file>      Validate dialogue localization ids\n", .{});
+    try print("   topi stamp <file>             Insert @UUID tokens into source\n", .{});
+    try print("       -d, --dry                     Print to stdout instead of writing\n", .{});
+    try print("       -v, --verbose\n", .{});
+    try print("   topi loc validate <file>      Check for missing localization ids\n", .{});
     try print("       -d, --dry                     Do not write to file on end\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi loc export <file>        Export dialogue localization to csv\n", .{});
@@ -205,6 +210,22 @@ const FmtArgs = struct {
     }
 };
 
+const StampArgs = struct {
+    file: ?[]const u8 = null,
+    dry: bool = false,
+    verbose: bool = false,
+    fn init(self: *StampArgs, iter: *std.process.ArgIterator) !void {
+        while (iter.next()) |arg| {
+            if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--dry")) {
+                self.dry = true;
+            } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
+                self.verbose = true;
+            } else self.file = arg;
+        }
+        if (self.file == null) return usage("Missing file");
+    }
+};
+
 pub fn print(comptime msg: []const u8, args: anytype) !void {
     var buffer: [128]u8 = undefined;
     var writer = std.fs.File.stdout().writer(&buffer);
@@ -265,6 +286,13 @@ pub fn main() !void {
                 return if (args.verbose) err else {};
             };
             try testCommand(args, arena.allocator());
+        },
+        .stamp => {
+            var args = StampArgs{};
+            args.init(&iter) catch |err| {
+                return if (args.verbose) err else {};
+            };
+            try stampCommand(args, arena.allocator());
         },
         .loc => {
             var args = LocalizeArgs{};
@@ -423,6 +451,30 @@ fn fmtCommand(args: FmtArgs, alloc: std.mem.Allocator) !void {
     }
 }
 
+fn stampCommand(args: StampArgs, alloc: std.mem.Allocator) !void {
+    const full_path = std.fs.cwd().realpathAlloc(alloc, args.file.?) catch |err| {
+        try print("Could not find file at {s}\n", .{args.file.?});
+        return if (args.verbose) err else {};
+    };
+    const stamped = Stamp.stampFileAtPath(full_path, alloc) catch |err| {
+        try print("Could not stamp file\n", .{});
+        return if (args.verbose) err else {};
+    };
+    defer alloc.free(stamped);
+
+    if (args.dry) {
+        var buffer: [128]u8 = undefined;
+        var writer = std.fs.File.stdout().writer(&buffer);
+        const stdout = &writer.interface;
+        try stdout.writeAll(stamped);
+        try stdout.flush();
+    } else {
+        const new_file = try std.fs.createFileAbsolute(full_path, .{});
+        defer new_file.close();
+        try new_file.writeAll(stamped);
+    }
+}
+
 fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
     var mod = createModule(alloc, args) catch |err| {
         try print("Could not create module {t}", .{err});
@@ -541,17 +593,14 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
             }
         },
         .validate => {
-            const validated = Locale.validateFileAtPath(full_path, alloc) catch |err| {
+            const missing = Locale.checkFileAtPath(full_path, alloc) catch |err| {
                 if (args.verbose) return err;
                 return;
             };
-            defer alloc.free(validated);
-            if (args.dry) {
-                try print("{s}\n", .{validated});
+            if (missing == 0) {
+                try print("All localization IDs present.\n", .{});
             } else {
-                const new_file = try std.fs.createFileAbsolute(full_path, .{});
-                defer new_file.close();
-                try new_file.writeAll(validated);
+                try print("{d} missing localization ID(s). Run `topi stamp {s}` to add them.\n", .{ missing, args.file.? });
             }
         },
     }

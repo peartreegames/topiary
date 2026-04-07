@@ -80,6 +80,21 @@ pub const LocaleProvider = struct {
 pub const Locale = struct {
     // This could be refactored to a fmt with an option to add localization ids
     // Would need to modify so every node in the ast writes its output
+    pub fn checkFileAtPath(full_path: []const u8, allocator: std.mem.Allocator) !usize {
+        var mod = try Module.init(allocator, full_path);
+        defer mod.deinit();
+        try mod.entry.loadSource();
+        try mod.entry.buildTree();
+        return checkFile(mod.entry);
+    }
+
+    pub fn checkFile(file: *module.File) !usize {
+        const tree = file.tree orelse return error.FileTreeNotLoaded;
+        var count: usize = 0;
+        try walkLocalizable(tree.root, CheckContext{ .count = &count }, CheckContext.onLeaf);
+        return count;
+    }
+
     pub fn validateFileAtPath(full_path: []const u8, allocator: std.mem.Allocator) ![]const u8 {
         var mod = try Module.init(allocator, full_path);
         defer mod.deinit();
@@ -146,23 +161,24 @@ pub const Locale = struct {
             };
             if (has_valid_source_id) return;
 
-            const content_token: ?Token = switch (stmt.type) {
-                .choice => |c| c.content.token,
-                .dialogue => |d| d.content.token,
-                else => null,
-            };
-            if (content_token == null) return;
-
             const id_token: ?Token = switch (stmt.type) {
                 .choice => |c| c.id_token,
                 .dialogue => |d| d.id_token,
                 else => null,
             };
 
+            // Position after the closing " (handles both simple and interpolated strings)
+            const after_quote: ?usize = switch (stmt.type) {
+                .choice => |c| c.content.token.start + c.content.type.string.raw.len + 1,
+                .dialogue => |d| d.content.token.start + d.content.type.string.raw.len + 1,
+                else => null,
+            };
+            if (after_quote == null) return;
+
             const w = ctx.buf.writer(ctx.alloc);
 
             // Copy source up to: the @ char if replacing, or after closing " if inserting
-            const copy_end = if (id_token) |idt| idt.start - 1 else content_token.?.end + 1;
+            const copy_end = if (id_token) |idt| idt.start - 1 else after_quote.?;
             try w.writeAll(ctx.source[ctx.last_pos.*..copy_end]);
 
             const new_id = UUID.new();
@@ -170,7 +186,22 @@ pub const Locale = struct {
             _ = try std.fmt.bufPrint(&tmp, "@{s}", .{new_id});
             try w.writeAll(&tmp);
 
-            ctx.last_pos.* = if (id_token) |idt| idt.end else content_token.?.end + 1;
+            ctx.last_pos.* = if (id_token) |idt| idt.end else after_quote.?;
+        }
+    };
+
+    const CheckContext = struct {
+        count: *usize,
+
+        pub const Error = error{};
+
+        fn onLeaf(ctx: CheckContext, stmt: Statement) @This().Error!void {
+            const missing = switch (stmt.type) {
+                .choice => |c| c.id_token == null or UUID.isEmpty(c.id),
+                .dialogue => |d| d.id_token == null or UUID.isEmpty(d.id),
+                else => false,
+            };
+            if (missing) ctx.count.* += 1;
         }
     };
 
