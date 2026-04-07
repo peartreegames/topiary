@@ -361,7 +361,7 @@ pub const Parser = struct {
             self.next();
             id_token = self.current_token;
             break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
-        } else UUID.create(std.hash.Wyhash.hash(0, name));
+        } else UUID.new();
         const body = try self.block();
         return .{
             .token = start,
@@ -879,7 +879,7 @@ pub const Parser = struct {
             id_token = self.current_token;
             end_token = self.current_token;
             break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
-        } else UUID.create(std.hash.Wyhash.hash(start.start, name orelse ""));
+        } else UUID.new();
 
         return .{
             .token = start,
@@ -915,7 +915,7 @@ pub const Parser = struct {
             self.next();
             id_token = self.current_token;
             break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
-        } else UUID.create(std.hash.Wyhash.hash(start.start, text.type.string.raw));
+        } else UUID.new();
         self.next();
         return .{
             .token = start,
@@ -962,7 +962,7 @@ pub const Parser = struct {
             self.next();
             id_token = self.current_token;
             break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
-        } else UUID.create(std.hash.Wyhash.hash(start_token.start, text.type.string.raw));
+        } else UUID.new();
 
         return .{
             .token = start_token,
