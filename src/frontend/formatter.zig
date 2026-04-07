@@ -162,7 +162,7 @@ pub const Formatter = struct {
                 }
                 for (c.tags) |tag| {
                     try self.write(" #");
-                    try self.write(tag);
+                    try self.write(tag.name);
                 }
                 if (c.body.len > 0) {
                     if (isSingleLineBody(c.body) and !self.sourceHasBraces(c.body)) {
@@ -189,7 +189,7 @@ pub const Formatter = struct {
                 try self.writeExpression(d.content.*);
                 for (d.tags) |tag| {
                     try self.write(" #");
-                    try self.write(tag);
+                    try self.write(tag.name);
                 }
             },
             .divert => |d| {

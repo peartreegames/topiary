@@ -25,9 +25,9 @@ test "Localization Duplicate Content Gets Unique Ids" {
     const bough = tree.root[0].type.bough;
     const id1 = bough.body[0].type.dialogue.id;
     const id2 = bough.body[1].type.dialogue.id;
-    // Both are auto-IDs (suffix zeroed) but must be distinct
-    try std.testing.expect(UUID.isAuto(id1));
-    try std.testing.expect(UUID.isAuto(id2));
+    // Both are auto-IDs (no id_token) but must be distinct
+    try std.testing.expect(bough.body[0].type.dialogue.id_token == null);
+    try std.testing.expect(bough.body[1].type.dialogue.id_token == null);
     try std.testing.expect(!std.mem.eql(u8, &id1, &id2));
 }
 

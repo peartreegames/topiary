@@ -356,12 +356,19 @@ pub const Parser = struct {
         self.next();
         const name_token = self.current_token;
         const name = try self.consumeIdentifier();
+        var id_token: ?Token = null;
+        const id: UUID.ID = if (self.peekIs(.at)) blk: {
+            self.next();
+            id_token = self.current_token;
+            break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
+        } else UUID.create(std.hash.Wyhash.hash(0, name));
         const body = try self.block();
         return .{
             .token = start,
             .type = .{
                 .bough = .{
-                    .id = UUID.create(std.hash.Wyhash.hash(0, name)),
+                    .id = id,
+                    .id_token = id_token,
                     .name = name,
                     .name_token = name_token,
                     .body = body,
@@ -866,11 +873,20 @@ pub const Parser = struct {
             end_token = self.current_token;
             name = try self.consumeIdentifier();
         }
+        var id_token: ?Token = null;
+        const id: UUID.ID = if (self.peekIs(.at)) blk: {
+            self.next();
+            id_token = self.current_token;
+            end_token = self.current_token;
+            break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
+        } else UUID.create(std.hash.Wyhash.hash(start.start, name orelse ""));
 
         return .{
             .token = start,
             .type = .{
                 .fork = .{
+                    .id = id,
+                    .id_token = id_token,
                     .name = name,
                     .end_token = end_token,
                     .body = try self.block(),
@@ -892,18 +908,14 @@ pub const Parser = struct {
         }
         self.next();
         const text = try self.parseStringExpression();
+        const tags = try self.getTagsList();
 
         var id_token: ?Token = null;
         const id: UUID.ID = if (self.peekIs(.at)) blk: {
             self.next();
             id_token = self.current_token;
             break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
-        } else blk: {
-            var new_id = UUID.create(std.hash.Wyhash.hash(start.start, text.type.string.raw));
-            UUID.setAuto(&new_id);
-            break :blk new_id;
-        };
-        const tags = try self.getTagsList();
+        } else UUID.create(std.hash.Wyhash.hash(start.start, text.type.string.raw));
         self.next();
         return .{
             .token = start,
@@ -921,12 +933,13 @@ pub const Parser = struct {
         };
     }
 
-    fn getTagsList(self: *Parser) Error![][]const u8 {
-        var tags = std.ArrayList([]const u8).empty;
+    fn getTagsList(self: *Parser) Error![]const ast.Tag {
+        var tags = std.ArrayList(ast.Tag).empty;
         while (self.peekIs(.hash)) {
             self.next();
+            const tag_token = self.current_token;
             const tag = try self.getStringValue();
-            try tags.append(self.allocator, tag);
+            try tags.append(self.allocator, .{ .name = tag, .token = tag_token });
         }
         return tags.toOwnedSlice(self.allocator);
     }
@@ -942,18 +955,15 @@ pub const Parser = struct {
         try self.expectCurrent(.colon);
         self.next();
         const text = try self.parseStringExpression();
+        const tags = try self.getTagsList();
+
         var id_token: ?Token = null;
         const id: UUID.ID = if (self.peekIs(.at)) blk: {
             self.next();
             id_token = self.current_token;
             break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
-        } else blk: {
-            var new_id = UUID.create(std.hash.Wyhash.hash(start_token.start, text.type.string.raw));
-            UUID.setAuto(&new_id);
-            break :blk new_id;
-        };
+        } else UUID.create(std.hash.Wyhash.hash(start_token.start, text.type.string.raw));
 
-        const tags = try self.getTagsList();
         return .{
             .token = start_token,
             .type = .{

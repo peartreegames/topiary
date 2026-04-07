@@ -1471,7 +1471,7 @@ test "Runtime Visits" {
             .input =
             \\ === START {
             \\     :speaker: "Question"
-            \\    fork^ {
+            \\    fork^ ANON {
             \\        ~* ONE "Answer one" {
             \\            :speaker: "You chose one"
             \\        }
@@ -1480,8 +1480,8 @@ test "Runtime Visits" {
             \\        }
             \\    }
             \\ assert(START == 1, "START == 1")
-            \\ assert(START._0.ONE == 1, "START._0.ONE == 1")
-            \\ assert(START._0.TWO == 0, "START._0.TWO == 0")
+            \\ assert(START.ANON.ONE == 1, "START.ANON.ONE == 1")
+            \\ assert(START.ANON.TWO == 0, "START.ANON.TWO == 0")
             \\ }
             ,
             .expected = &[_][]const u8{"Question", "You chose one" }
@@ -1492,7 +1492,7 @@ test "Runtime Visits" {
             \\     :speaker: "Starting"
             \\    === INNER {
             \\        :speaker: "Inside question"
-            \\        fork^ {
+            \\        fork^ ANON {
             \\            ~* ONE "Answer one" {
             \\                :speaker: "You chose one"
             \\            }
@@ -1504,8 +1504,8 @@ test "Runtime Visits" {
             \\ =>^ INNER
             \\ assert(START == 1, "START == 1")
             \\ assert(START.INNER == 1, "START.INNER == 1")
-            \\ assert(START.INNER._0.ONE == 1, "START.INNER._0.ONE == 1")
-            \\ assert(START.INNER._0.TWO == 0, "START.INNER._0.TWO == 0")
+            \\ assert(START.INNER.ANON.ONE == 1, "START.INNER.ANON.ONE == 1")
+            \\ assert(START.INNER.ANON.TWO == 0, "START.INNER.ANON.TWO == 0")
             \\ }
             ,
             .expected = &[_][]const u8{"Starting", "Inside question", "You chose one" }

@@ -139,12 +139,12 @@ pub const Locale = struct {
         pub const Error = error{ OutOfMemory, NoSpaceLeft };
 
         fn onLeaf(ctx: LocalizeContext, stmt: Statement) @This().Error!void {
-            const id: UUID.ID = switch (stmt.type) {
-                .choice => |c| c.id,
-                .dialogue => |d| d.id,
+            const has_valid_source_id = switch (stmt.type) {
+                .choice => |c| c.id_token != null and !UUID.isEmpty(c.id),
+                .dialogue => |d| d.id_token != null and !UUID.isEmpty(d.id),
                 else => unreachable,
             };
-            if (!UUID.isEmpty(id) and !UUID.isAuto(id)) return;
+            if (has_valid_source_id) return;
 
             const content_token: ?Token = switch (stmt.type) {
                 .choice => |c| c.content.token,
@@ -182,12 +182,12 @@ pub const Locale = struct {
         fn onLeaf(ctx: ExportContext, stmt: Statement) @This().Error!void {
             switch (stmt.type) {
                 .choice => |c| {
-                    if (UUID.isEmpty(c.id) or UUID.isAuto(c.id)) return error.WriteFailure;
+                    if (c.id_token == null or UUID.isEmpty(c.id)) return error.WriteFailure;
                     const str = c.content.type.string;
                     ctx.writer.print("\"{s}\",\"CHOICE\",\"{s}\",\"{s}\"\n", .{ &c.id, str.raw, str.value }) catch return error.WriteFailure;
                 },
                 .dialogue => |d| {
-                    if (UUID.isEmpty(d.id) or UUID.isAuto(d.id)) return error.WriteFailure;
+                    if (d.id_token == null or UUID.isEmpty(d.id)) return error.WriteFailure;
                     const str = d.content.type.string;
                     ctx.writer.print("\"{s}\",\"{s}\",\"{s}\",\"{s}\"\n", .{ &d.id, d.speaker orelse "NONE", str.raw, str.value }) catch return error.WriteFailure;
                 },
@@ -203,12 +203,18 @@ pub const Locale = struct {
         pub const Error = error{WriteFailure};
 
         fn onLeaf(ctx: MergeExportContext, stmt: Statement) @This().Error!void {
+            const has_valid_source_id = switch (stmt.type) {
+                .choice => |c| c.id_token != null and !UUID.isEmpty(c.id),
+                .dialogue => |d| d.id_token != null and !UUID.isEmpty(d.id),
+                else => unreachable,
+            };
+            if (!has_valid_source_id) return error.WriteFailure;
+
             const id: UUID.ID = switch (stmt.type) {
                 .choice => |c| c.id,
                 .dialogue => |d| d.id,
                 else => unreachable,
             };
-            if (UUID.isEmpty(id) or UUID.isAuto(id)) return error.WriteFailure;
 
             switch (stmt.type) {
                 .choice => |c| {

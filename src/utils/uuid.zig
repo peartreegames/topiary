@@ -32,16 +32,6 @@ pub const UUID = struct {
         return std.mem.eql(u8, &id, &UUID.Empty);
     }
 
-    pub fn isAuto(id: ID) bool {
-        var zero_arr: [UUID.Size - 9]u8 = undefined;
-        @memset(zero_arr[0..], '0');
-        return std.mem.eql(u8, id[9..], &zero_arr);
-    }
-
-    pub fn setAuto(id: *ID) void {
-        @memset(id[9..], '0');
-    }
-
     pub fn fromString(str: []const u8) ID {
         if (str.len != Size) return Empty;
         if (str[8] != '-') return Empty;

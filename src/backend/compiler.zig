@@ -63,7 +63,6 @@ pub const Compiler = struct {
     current_file: *File,
     emitted_files: std.StringArrayHashMapUnmanaged(void) = .empty,
     path_stack: std.ArrayList([]const u8) = .empty,
-    anon_counters: std.ArrayList(usize) = .empty,
 
     // Diagnostics tracking: keys are borrowed from `constants_map` keys.
     decl_tokens: std.StringHashMapUnmanaged(Token) = .empty,
@@ -193,7 +192,6 @@ pub const Compiler = struct {
         self.literal_cache.deinit(self.alloc);
         self.constants.deinit(self.alloc);
         self.path_stack.deinit(self.alloc);
-        self.anon_counters.deinit(self.alloc);
         self.decl_tokens.deinit(self.alloc);
         self.fn_arities.deinit(self.alloc);
     }
@@ -490,24 +488,18 @@ pub const Compiler = struct {
         old_scope.destroy();
     }
 
-    fn resolveForkName(self: *Compiler, name: ?[]const u8) Error![]const u8 {
+    fn resolveForkName(self: *Compiler, name: ?[]const u8, id: UUID.ID) Error![]const u8 {
         if (name) |n| return self.alloc.dupe(u8, n);
-        if (self.anon_counters.items.len == 0) return Error.CompilerError;
-        const current_depth = self.anon_counters.items.len - 1;
-        const count = self.anon_counters.items[current_depth];
-        const fork_name = try std.fmt.allocPrint(self.alloc, "_{d}", .{count});
-        self.anon_counters.items[current_depth] += 1;
-        return fork_name;
+        if (self.path_stack.items.len == 0) return Error.CompilerError;
+        return self.alloc.dupe(u8, &id);
     }
 
     fn pushPathScope(self: *Compiler, name: []const u8) Error!void {
         try self.path_stack.append(self.alloc, name);
-        try self.anon_counters.append(self.alloc, 0);
     }
 
     fn popPathScope(self: *Compiler) void {
         _ = self.path_stack.pop();
-        _ = self.anon_counters.pop();
     }
 
     const IncludeResult = struct {
@@ -581,7 +573,7 @@ pub const Compiler = struct {
                 for (b.body) |s| try self.prepass(s);
             },
             .fork => |f| {
-                const fork_name = self.resolveForkName(f.name) catch
+                const fork_name = self.resolveForkName(f.name, f.id) catch
                     return self.fail("fork must be inside a bough", stmt.token, .{});
                 defer self.alloc.free(fork_name);
 
@@ -900,7 +892,7 @@ pub const Compiler = struct {
                 try self.replaceConstant(full_name, .{ .obj = obj }, token);
             },
             .fork => |f| {
-                const fork_name = self.resolveForkName(f.name) catch
+                const fork_name = self.resolveForkName(f.name, f.id) catch
                     return self.fail("fork must be inside a bough", stmt.token, .{});
                 defer self.alloc.free(fork_name);
 
@@ -957,7 +949,7 @@ pub const Compiler = struct {
             },
             .choice => |c| {
                 for (c.tags) |tag| {
-                    try self.addIdentifierConstant(tag, token);
+                    try self.addIdentifierConstant(tag.name, token);
                 }
                 const name = c.name orelse &c.id;
                 const full_name = try self.getQualifiedName(name);
@@ -1041,7 +1033,7 @@ pub const Compiler = struct {
             },
             .dialogue => |d| {
                 for (d.tags) |tag| {
-                    try self.addIdentifierConstant(tag, token);
+                    try self.addIdentifierConstant(tag.name, token);
                 }
 
                 const s = d.content.type.string;

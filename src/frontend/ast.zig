@@ -147,6 +147,11 @@ pub const Expression = struct {
     }
 };
 
+pub const Tag = struct {
+    name: []const u8,
+    token: Token,
+};
+
 pub const Statement = struct {
     token: Token,
     type: StatementValue,
@@ -155,6 +160,7 @@ pub const Statement = struct {
         block: []const Statement,
         bough: struct {
             id: UUID.ID,
+            id_token: ?Token = null,
             name: []const u8,
             name_token: Token,
             body: []const Statement,
@@ -166,14 +172,14 @@ pub const Statement = struct {
             content: Expression,
             is_unique: bool,
             body: []const Statement,
-            tags: [][]const u8,
+            tags: []const Tag,
         },
         dialogue: struct {
             id: UUID.ID,
             id_token: ?Token = null,
             speaker: ?[]const u8,
             content: *Expression,
-            tags: [][]const u8,
+            tags: []const Tag,
         },
         @"enum": struct {
             name: []const u8,
@@ -190,6 +196,8 @@ pub const Statement = struct {
             body: []const Statement,
         },
         fork: struct {
+            id: UUID.ID,
+            id_token: ?Token = null,
             name: ?[]const u8,
             end_token: Token,
             body: []const Statement,

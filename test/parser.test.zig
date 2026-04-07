@@ -581,9 +581,9 @@ test "Parse Bough" {
     const line = bough.body[0].type.dialogue;
     try testing.expectEqualStrings("Speaker", line.speaker.?);
     try testing.expectEqualStrings("Text goes here", line.content.type.string.value);
-    try testing.expectEqualStrings("tagline", line.tags[0]);
-    try testing.expectEqualStrings("tagother", line.tags[1]);
-    try testing.expectEqualStrings("taglast", line.tags[2]);
+    try testing.expectEqualStrings("tagline", line.tags[0].name);
+    try testing.expectEqualStrings("tagother", line.tags[1].name);
+    try testing.expectEqualStrings("taglast", line.tags[2].name);
 }
 
 test "Parse No Speaker" {
