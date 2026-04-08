@@ -4,6 +4,7 @@ const Formatter = topi.frontend.Formatter;
 const Module = topi.module.Module;
 const File = topi.module.File;
 const Tree = topi.frontend.Tree;
+const UUID = topi.utils.UUID;
 
 const testing = std.testing;
 const allocator = testing.allocator;
@@ -26,7 +27,24 @@ fn formatSourceWithIndent(source: []const u8, indent_width: usize) ![]const u8 {
     mod.entry = file;
     try file.buildTree();
     const tree = file.tree orelse return error.NoTree;
-    return Formatter.format(source, tree, allocator, indent_width);
+    return Formatter.format(source, tree, allocator, indent_width, false);
+}
+
+fn formatSourceWithStamp(source: []const u8) ![]const u8 {
+    const mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    const file = try mod.arena.allocator().create(File);
+    file.* = .{
+        .module = mod,
+        .path = "_test_",
+        .name = "",
+        .dir_name = ".",
+        .source = source,
+    };
+    mod.entry = file;
+    try file.buildTree();
+    const tree = file.tree orelse return error.NoTree;
+    return Formatter.format(source, tree, allocator, 4, true);
 }
 
 test "format: simple variable declaration" {
@@ -426,4 +444,59 @@ test "format: idempotency" {
     const result = try formatSource(source);
     defer allocator.free(result);
     try testing.expectEqualStrings(source, result);
+}
+
+fn hasUuidAt(haystack: []const u8, pos: usize) bool {
+    if (pos + 1 + UUID.Size > haystack.len) return false;
+    if (haystack[pos] != '@') return false;
+    const candidate = haystack[pos + 1 .. pos + 1 + UUID.Size];
+    if (candidate[8] != '-') return false;
+    return !UUID.isEmpty(UUID.fromString(candidate));
+}
+
+fn countUuids(haystack: []const u8) usize {
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < haystack.len) : (i += 1) {
+        if (hasUuidAt(haystack, i)) count += 1;
+    }
+    return count;
+}
+
+test "format: stamp inserts IDs for unstamped nodes" {
+    const source =
+        \\=== START {
+        \\    :: "hello"
+        \\    fork {
+        \\        ~ "yes" :: "ok"
+        \\    }
+        \\}
+        \\
+    ;
+    const result = try formatSourceWithStamp(source);
+    defer allocator.free(result);
+    // bough, dialogue, fork, choice, inner dialogue = 5 UUIDs
+    try testing.expectEqual(@as(usize, 5), countUuids(result));
+}
+
+test "format: stamp preserves existing IDs" {
+    const id = UUID.create(42);
+    var source_buf: [256]u8 = undefined;
+    const source = try std.fmt.bufPrint(&source_buf, "=== START @{s} {{\n    :: \"hello\"\n}}\n", .{id});
+    const result = try formatSourceWithStamp(source);
+    defer allocator.free(result);
+    // The original bough ID should be preserved
+    try testing.expect(std.mem.indexOf(u8, result, &id) != null);
+}
+
+test "format: no stamp by default" {
+    const source =
+        \\=== START {
+        \\    :: "hello"
+        \\}
+        \\
+    ;
+    const result = try formatSource(source);
+    defer allocator.free(result);
+    try testing.expectEqual(@as(usize, 0), countUuids(result));
 }

@@ -8,6 +8,7 @@ const UnaryOp = ast.UnaryOp;
 const tok = @import("token.zig");
 const Token = tok.Token;
 const TokenType = tok.TokenType;
+const UUID = @import("../utils/index.zig").UUID;
 
 pub const Formatter = struct {
     buf: std.ArrayList(u8),
@@ -16,8 +17,9 @@ pub const Formatter = struct {
     indent_width: usize,
     allocator: std.mem.Allocator,
     suppress_indent: bool,
+    stamp: bool,
 
-    pub fn format(source: []const u8, tree: Tree, allocator: std.mem.Allocator, indent_width: usize) ![]const u8 {
+    pub fn format(source: []const u8, tree: Tree, allocator: std.mem.Allocator, indent_width: usize, stamp: bool) ![]const u8 {
         var self = Formatter{
             .buf = .empty,
             .source = source,
@@ -25,6 +27,7 @@ pub const Formatter = struct {
             .indent_width = indent_width,
             .allocator = allocator,
             .suppress_indent = false,
+            .stamp = stamp,
         };
 
         for (tree.root, 0..) |stmt, i| {
@@ -40,13 +43,19 @@ pub const Formatter = struct {
         return self.buf.toOwnedSlice(self.allocator);
     }
 
-    fn writeIdToken(self: *Formatter, id_token: ?Token) !void {
+    fn writeIdToken(self: *Formatter, id_token: ?Token, id: UUID.ID) !void {
         if (id_token) |idt| {
-            if (idt.start < self.source.len) {
+            if (idt.start < self.source.len and !UUID.isEmpty(id)) {
                 const end = @min(idt.end, self.source.len);
                 try self.write(" ");
                 try self.write(self.source[idt.start..end]);
+                return;
             }
+        }
+        if (self.stamp) {
+            const new_id = UUID.new();
+            try self.write(" @");
+            try self.write(&new_id);
         }
     }
 
@@ -134,7 +143,7 @@ pub const Formatter = struct {
                 try self.writeIndent();
                 try self.write("=== ");
                 try self.write(b.name);
-                try self.writeIdToken(b.id_token);
+                try self.writeIdToken(b.id_token, b.id);
                 try self.write(" {\n");
                 self.indent += 1;
                 try self.writeStatements(b.body);
@@ -150,7 +159,7 @@ pub const Formatter = struct {
                     try self.write(" ");
                     try self.write(name);
                 }
-                try self.writeIdToken(f.id_token);
+                try self.writeIdToken(f.id_token, f.id);
                 try self.write(" {\n");
                 self.indent += 1;
                 try self.writeStatements(f.body);
@@ -176,7 +185,7 @@ pub const Formatter = struct {
                     try self.write(" #");
                     try self.write(tag.name);
                 }
-                try self.writeIdToken(c.id_token);
+                try self.writeIdToken(c.id_token, c.id);
                 if (c.body.len > 0) {
                     if (isSingleLineBody(c.body) and !self.sourceHasBraces(c.body)) {
                         try self.write(" ");
@@ -204,7 +213,7 @@ pub const Formatter = struct {
                     try self.write(" #");
                     try self.write(tag.name);
                 }
-                try self.writeIdToken(d.id_token);
+                try self.writeIdToken(d.id_token, d.id);
             },
             .divert => |d| {
                 try self.writeIndent();

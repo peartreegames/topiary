@@ -420,7 +420,7 @@ fn formatInternal(path: []const u8, indent_width: u8, logger: ExportLogger) ?[]c
 
     const source = mod.entry.source orelse return null;
     const tree = mod.entry.tree orelse return null;
-    return Formatter.format(source, tree, alloc, indent_width) catch |err| {
+    return Formatter.format(source, tree, alloc, indent_width, false) catch |err| {
         logger.log("Could not format: {s}", .{@errorName(err)}, .err);
         return null;
     };
