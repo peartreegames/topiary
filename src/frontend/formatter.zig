@@ -40,6 +40,16 @@ pub const Formatter = struct {
         return self.buf.toOwnedSlice(self.allocator);
     }
 
+    fn writeIdToken(self: *Formatter, id_token: ?Token) !void {
+        if (id_token) |idt| {
+            if (idt.start < self.source.len) {
+                const end = @min(idt.end, self.source.len);
+                try self.write(" ");
+                try self.write(self.source[idt.start..end]);
+            }
+        }
+    }
+
     fn isTopLevelDecl(stmt: Statement) bool {
         return switch (stmt.type) {
             .bough, .function, .class, .@"enum" => true,
@@ -124,6 +134,7 @@ pub const Formatter = struct {
                 try self.writeIndent();
                 try self.write("=== ");
                 try self.write(b.name);
+                try self.writeIdToken(b.id_token);
                 try self.write(" {\n");
                 self.indent += 1;
                 try self.writeStatements(b.body);
@@ -139,6 +150,7 @@ pub const Formatter = struct {
                     try self.write(" ");
                     try self.write(name);
                 }
+                try self.writeIdToken(f.id_token);
                 try self.write(" {\n");
                 self.indent += 1;
                 try self.writeStatements(f.body);
@@ -164,6 +176,7 @@ pub const Formatter = struct {
                     try self.write(" #");
                     try self.write(tag.name);
                 }
+                try self.writeIdToken(c.id_token);
                 if (c.body.len > 0) {
                     if (isSingleLineBody(c.body) and !self.sourceHasBraces(c.body)) {
                         try self.write(" ");
@@ -191,6 +204,7 @@ pub const Formatter = struct {
                     try self.write(" #");
                     try self.write(tag.name);
                 }
+                try self.writeIdToken(d.id_token);
             },
             .divert => |d| {
                 try self.writeIndent();

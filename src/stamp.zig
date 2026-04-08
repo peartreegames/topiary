@@ -79,25 +79,25 @@ pub const Stamp = struct {
             switch (stmt.type) {
                 .bough => |b| {
                     if (b.id_token != null and !UUID.isEmpty(b.id)) return;
-                    try ctx.copyUpTo(if (b.id_token) |idt| idt.start - 1 else b.name_token.end);
+                    try ctx.copyUpTo(if (b.id_token) |idt| idt.start else b.name_token.end);
                     try ctx.writeId();
                     if (b.id_token) |idt| ctx.last_pos.* = idt.end;
                 },
                 .fork => |f| {
                     if (f.id_token != null and !UUID.isEmpty(f.id)) return;
-                    try ctx.copyUpTo(if (f.id_token) |idt| idt.start - 1 else f.end_token.end);
+                    try ctx.copyUpTo(if (f.id_token) |idt| idt.start else f.end_token.end);
                     try ctx.writeId();
                     if (f.id_token) |idt| ctx.last_pos.* = idt.end;
                 },
                 .dialogue => |d| {
                     if (d.id_token != null and !UUID.isEmpty(d.id)) return;
-                    try ctx.copyUpTo(if (d.id_token) |idt| idt.start - 1 else insertAfterContent(d.content, d.tags));
+                    try ctx.copyUpTo(if (d.id_token) |idt| idt.start else insertAfterContent(d.content, d.tags));
                     try ctx.writeId();
                     if (d.id_token) |idt| ctx.last_pos.* = idt.end;
                 },
                 .choice => |c| {
                     if (c.id_token != null and !UUID.isEmpty(c.id)) return;
-                    try ctx.copyUpTo(if (c.id_token) |idt| idt.start - 1 else insertAfterContent(&c.content, c.tags));
+                    try ctx.copyUpTo(if (c.id_token) |idt| idt.start else insertAfterContent(&c.content, c.tags));
                     try ctx.writeId();
                     if (c.id_token) |idt| ctx.last_pos.* = idt.end;
                 },

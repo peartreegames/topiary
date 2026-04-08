@@ -86,7 +86,7 @@ pub const Lexer = struct {
             } else .plus,
             ':' => .colon,
             '@' => {
-                const start = self.position + 1;
+                const start = self.position;
                 while (!isWhitespace(self.peekChar()) and !isEndOfLine(self.peekChar())) {
                     self.readChar();
                 }

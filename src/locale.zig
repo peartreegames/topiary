@@ -178,7 +178,7 @@ pub const Locale = struct {
             const w = ctx.buf.writer(ctx.alloc);
 
             // Copy source up to: the @ char if replacing, or after closing " if inserting
-            const copy_end = if (id_token) |idt| idt.start - 1 else after_quote.?;
+            const copy_end = if (id_token) |idt| idt.start else after_quote.?;
             try w.writeAll(ctx.source[ctx.last_pos.*..copy_end]);
 
             const new_id = UUID.new();

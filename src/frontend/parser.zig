@@ -359,7 +359,7 @@ pub const Parser = struct {
         var id_token: ?Token = null;
         const id: UUID.ID = if (self.currentIs(.at)) blk: {
             id_token = self.current_token;
-            const result = UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
+            const result = UUID.fromString(self.file.source.?[self.current_token.start + 1 .. self.current_token.end]);
             self.next();
             break :blk result;
         } else UUID.new();
@@ -878,7 +878,7 @@ pub const Parser = struct {
         const id: UUID.ID = if (self.currentIs(.at)) blk: {
             id_token = self.current_token;
             end_token = self.current_token;
-            const result = UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
+            const result = UUID.fromString(self.file.source.?[self.current_token.start + 1 .. self.current_token.end]);
             self.next();
             break :blk result;
         } else UUID.new();
@@ -916,7 +916,7 @@ pub const Parser = struct {
         const id: UUID.ID = if (self.peekIs(.at)) blk: {
             self.next();
             id_token = self.current_token;
-            break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
+            break :blk UUID.fromString(self.file.source.?[self.current_token.start + 1 .. self.current_token.end]);
         } else UUID.new();
         self.next();
         return .{
@@ -963,7 +963,7 @@ pub const Parser = struct {
         const id: UUID.ID = if (self.peekIs(.at)) blk: {
             self.next();
             id_token = self.current_token;
-            break :blk UUID.fromString(self.file.source.?[self.current_token.start..self.current_token.end]);
+            break :blk UUID.fromString(self.file.source.?[self.current_token.start + 1 .. self.current_token.end]);
         } else UUID.new();
 
         return .{
