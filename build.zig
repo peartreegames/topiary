@@ -85,6 +85,30 @@ pub fn build(b: *std.Build) void {
     // fuzzing for tests that call `std.testing.fuzz`.
     const fuzz_step = b.step("fuzz", "Run fuzz tests (add --fuzz to enable continuous fuzzing)");
     fuzz_step.dependOn(&run_tests.step);
+
+    // --- Benchmark fixture + run ---
+    // `zig build bench-gen` writes 1 entry + 20 chapter .topi files into bench/fixtures/.
+    // `zig build bench` runs that and then compiles the fixture with --time.
+    const bench_gen_exe = b.addExecutable(.{
+        .name = "bench-gen",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/gen.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    const run_bench_gen = b.addRunArtifact(bench_gen_exe);
+    run_bench_gen.addArg("bench/fixtures/");
+
+    const bench_gen_step = b.step("bench-gen", "Generate benchmark fixture (entry + 20 chapters)");
+    bench_gen_step.dependOn(&run_bench_gen.step);
+
+    const run_bench = b.addRunArtifact(exe);
+    run_bench.step.dependOn(&run_bench_gen.step);
+    run_bench.addArgs(&.{ "compile", "bench/fixtures/entry.topi", "--time" });
+
+    const bench_step = b.step("bench", "Generate fixture and run topi compile --time on it");
+    bench_step.dependOn(&run_bench.step);
 }
 
 fn getVersion(b: *std.Build) ![]const u8 {

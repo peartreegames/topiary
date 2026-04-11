@@ -16,6 +16,15 @@ const fs = std.fs;
 /// Group of files
 /// Manages all allocations and clears all with deinit
 pub const Module = struct {
+    pub const Timings = struct {
+        resolve_includes_ns: u64 = 0,
+        parse_ns: u64 = 0,
+        compile_ns: u64 = 0,
+        total_ns: u64 = 0,
+        file_count: usize = 0,
+        source_bytes: usize = 0,
+    };
+
     arena: std.heap.ArenaAllocator,
     allocator: std.mem.Allocator,
     errors: CompilerErrors,
@@ -23,6 +32,7 @@ pub const Module = struct {
     dir: fs.Dir,
     dir_path: []const u8,
     includes: std.StringArrayHashMap(*File),
+    timings: Timings = .{},
 
     pub fn init(allocator: std.mem.Allocator, entry_path: []const u8) !*Module {
         const mod = try allocator.create(Module);
@@ -66,14 +76,30 @@ pub const Module = struct {
     }
 
     pub fn generateBytecode(self: *Module, allocator: std.mem.Allocator) !Bytecode {
+        var total_timer = try std.time.Timer.start();
+        var phase_timer = try std.time.Timer.start();
+        // Capture whatever phases completed if we error out partway through.
+        errdefer self.timings.total_ns = total_timer.read();
+
         // Phase 1: Resolve all includes and load sources
         try self.resolveIncludes();
+        self.timings.resolve_includes_ns = phase_timer.lap();
+
+        // Populate file/source counts now that all sources are loaded.
+        self.timings.file_count = self.includes.count();
+        var bytes: usize = 0;
+        var src_it = self.includes.iterator();
+        while (src_it.next()) |kvp| {
+            if (kvp.value_ptr.*.source) |s| bytes += s.len;
+        }
+        self.timings.source_bytes = bytes;
 
         // Phase 2: Build parse trees for all files
         var it = self.includes.iterator();
         while (it.next()) |kvp| {
             try kvp.value_ptr.*.buildTree();
         }
+        self.timings.parse_ns = phase_timer.lap();
 
         // Phase 3: Compile
         var compiler = try Compiler.init(allocator, self);
@@ -82,7 +108,10 @@ pub const Module = struct {
         compiler.compile() catch |e| {
             return e;
         };
-        return try compiler.bytecode();
+        const result = try compiler.bytecode();
+        self.timings.compile_ns = phase_timer.lap();
+        self.timings.total_ns = total_timer.read();
+        return result;
     }
 
     const IncludeDirective = struct { path: []const u8, token: Token };

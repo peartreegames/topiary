@@ -57,6 +57,7 @@ fn usage(comptime msg: []const u8) !void {
     try print("   topi compile <file>           Compile dialogue to bytecode\n", .{});
     try print("       -d, --dry                     Do not write to file on end\n", .{});
     try print("       -o, --output <file>           Write to file on end\n", .{});
+    try print("       -t, --time                    Print compile phase timings\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi loc validate <file>      Check for missing localization ids\n", .{});
     try print("       -d, --dry                     Do not write to file on end\n", .{});
@@ -112,6 +113,7 @@ const CompileArgs = struct {
     file: ?[]const u8 = null,
     output: ?[]const u8 = null,
     dry: bool = false,
+    time: bool = false,
     verbose: bool = false,
 
     fn init(self: *CompileArgs, iter: *std.process.ArgIterator) !void {
@@ -120,6 +122,8 @@ const CompileArgs = struct {
                 self.output = iter.next();
             } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--dry")) {
                 self.dry = true;
+            } else if (std.mem.eql(u8, arg, "-t") or std.mem.eql(u8, arg, "--time")) {
+                self.time = true;
             } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
                 self.verbose = true;
             } else self.file = arg;
@@ -384,6 +388,7 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
         return if (args.verbose) err else {};
     };
     try writeErrors(mod);
+    if (args.time) try printCompileTimings(args.file.?, mod.timings);
     mod.deinit();
     defer bytecode.free(alloc);
 
@@ -391,6 +396,8 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
         try print("Success\n", .{});
         return;
     }
+    // --time alone (without -o) is a benchmark mode: timings already printed, nothing to write.
+    if (args.output == null) return;
     const dir = std.fs.cwd();
     if (std.fs.path.dirname(args.output.?)) |dir_name| {
         try dir.makePath(dir_name);
@@ -403,6 +410,27 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
         try print("Could not serialize bytecode\n", .{});
         return if (args.verbose) err else {};
     };
+}
+
+fn printCompileTimings(file_path: []const u8, t: Module.Timings) !void {
+    const ns_per_ms: f64 = 1_000_000.0;
+    const total_f = @as(f64, @floatFromInt(t.total_ns));
+    const total_ms = total_f / ns_per_ms;
+    const resolve_ms = @as(f64, @floatFromInt(t.resolve_includes_ns)) / ns_per_ms;
+    const parse_ms = @as(f64, @floatFromInt(t.parse_ns)) / ns_per_ms;
+    const compile_ms = @as(f64, @floatFromInt(t.compile_ns)) / ns_per_ms;
+    const resolve_pct = if (total_f > 0) (@as(f64, @floatFromInt(t.resolve_includes_ns)) * 100.0 / total_f) else 0.0;
+    const parse_pct = if (total_f > 0) (@as(f64, @floatFromInt(t.parse_ns)) * 100.0 / total_f) else 0.0;
+    const compile_pct = if (total_f > 0) (@as(f64, @floatFromInt(t.compile_ns)) * 100.0 / total_f) else 0.0;
+
+    try print("topi compile timings ({s})\n", .{std.fs.path.basename(file_path)});
+    try print("  files       {d}\n", .{t.file_count});
+    try print("  source      {d} bytes\n", .{t.source_bytes});
+    try print("  resolve     {d:.2} ms   ({d:.0}%)\n", .{ resolve_ms, resolve_pct });
+    try print("  parse       {d:.2} ms   ({d:.0}%)\n", .{ parse_ms, parse_pct });
+    try print("  compile     {d:.2} ms   ({d:.0}%)\n", .{ compile_ms, compile_pct });
+    try print("  ---------------------\n", .{});
+    try print("  total       {d:.2} ms\n", .{total_ms});
 }
 
 fn fmtCommand(args: FmtArgs, alloc: std.mem.Allocator) !void {
