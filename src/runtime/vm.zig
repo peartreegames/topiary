@@ -188,7 +188,15 @@ pub const Vm = struct {
             self.builtin_cache.deinit(self.alloc);
         }
         self.alloc.free(self.globals);
-        if (!self.choices_freed) self.alloc.free(self.current_choices);
+        if (!self.choices_freed) {
+            // Each Choice owns its `tags` slice (allocated by the `.choice`
+            // opcode and reallocated fresh by `Snapshot.restore` after a
+            // rewind/redo). selectChoice frees both, but if the VM is
+            // destroyed while still paused at a fork the tag arrays must
+            // be released here too.
+            for (self.current_choices) |c| self.alloc.free(c.tags);
+            self.alloc.free(self.current_choices);
+        }
         self.err.deinit(self.alloc);
     }
 

@@ -72,8 +72,8 @@ const RewindRunner = struct {
         self.fork_history.append(self.alloc, group) catch unreachable;
 
         if (self.action_index >= self.actions.len) {
-            // Default: pick first choice if we run out of scripted actions.
-            vm.selectChoice(0) catch {};
+            // No-op: leave the VM paused at this fork. The driving loop
+            // is responsible for stopping when actions are exhausted.
             return;
         }
         const action = self.actions[self.action_index];
@@ -391,6 +391,61 @@ test "Rewind: 3-fork chain rewind goes to previous, not current" {
     try testing.expectEqualStrings("C1", rr.fork_history.items[4][0]);
     try testing.expectEqual(@as(usize, 1), rr.output.items.len);
     try testing.expectEqualStrings("picked C1", rr.output.items[0]);
+}
+
+test "Rewind: deinit while paused at rewound fork doesn't leak" {
+    // Regression: rewinding allocates fresh `current_choices` and tag
+    // arrays in vm.alloc; if the host destroys the VM before the user
+    // picks (e.g. closes the conversation), Vm.deinit must free both the
+    // outer slice and each Choice.tags array. The testing allocator will
+    // fail this test if anything leaks.
+    const source =
+        \\ === START {
+        \\     fork^ {
+        \\         ~ "A1" #t1 #t2 => B
+        \\         ~ "A2" #t3 => B
+        \\     }
+        \\     === B {
+        \\         fork^ {
+        \\             ~ "B1" #t4 { :Sp: "B1" }
+        \\             ~ "B2" #t5 #t6 #t7 { :Sp: "B2" }
+        \\         }
+        \\     }
+        \\ }
+    ;
+    const actions = [_]RewindAction{
+        .{ .select = 0 }, // A1 -> B
+        .rewind, // back to first fork; restore allocates tag arrays
+        // No further action: VM will be deinit'd while paused at the
+        // rewound fork with un-freed current_choices.
+    };
+
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var rr = RewindRunner.init(allocator, &actions);
+    defer rr.deinit();
+    var vm = try initRewindVm(source, mod, &rr);
+    defer vm.deinit();
+    defer vm.bytecode.free(allocator);
+
+    // Drive the VM until the runner runs out of scripted actions and
+    // leaves us paused at the rewound first fork. Mirror vm.interpret()'s
+    // anchor-discovery so START is actually entered.
+    const start_path: ?[]const u8 = for (vm.bytecode.constants) |v| {
+        if (v == .obj and v.obj.data == .anchor) break v.obj.data.anchor.name;
+    } else null;
+    try vm.start(start_path);
+    var iterations: usize = 0;
+    while (vm.can_continue and iterations < 1000) : (iterations += 1) {
+        if (rr.action_index >= rr.actions.len and vm.is_waiting) break;
+        vm.run() catch break;
+    }
+
+    // VM should now be paused at the rewound first fork.
+    try testing.expect(vm.is_waiting);
+    try testing.expect(!vm.choices_freed);
+    // The defer chain above will deinit vm; if we leak tag arrays the
+    // testing allocator will report it and fail the test.
 }
 
 test "Rewind: GC stress with tight threshold" {
