@@ -255,7 +255,7 @@ test "Parse Include" {
     };
     const tree = file.tree.?;
     const include = tree.root[0].type.include;
-    try testing.expectEqualSlices(u8, "./globals.topi", include);
+    try testing.expectEqualSlices(u8, "./globals.topi", include.path);
 }
 
 test "Parse Declaration" {

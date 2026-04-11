@@ -93,6 +93,32 @@ pub const Parser = struct {
         return Error.ParserError;
     }
 
+    inline fn failSpan(
+        self: *Parser,
+        comptime msg: []const u8,
+        start_token: Token,
+        end_token: ?Token,
+        args: anytype,
+    ) Error {
+        self.had_error = true;
+        try self.file.module.errors.addSpan(self.file.path, msg, start_token, end_token, .err, args);
+        return Error.ParserError;
+    }
+
+    inline fn failSpanWithHelp(
+        self: *Parser,
+        comptime msg: []const u8,
+        start_token: Token,
+        end_token: ?Token,
+        args: anytype,
+        suggestion: ?[]const u8,
+        note: ?[]const u8,
+    ) Error {
+        self.had_error = true;
+        try self.file.module.errors.addSpanWithHelp(self.file.path, msg, start_token, end_token, .err, args, suggestion, note);
+        return Error.ParserError;
+    }
+
     pub fn synchronize(self: *Parser) void {
         while (!self.currentIs(.eof)) {
             switch (self.current_token.token_type) {
@@ -196,26 +222,30 @@ pub const Parser = struct {
         const start = self.current_token;
         self.next();
 
+        const path_token = self.current_token;
         const path = try self.getStringValue();
 
-        if (self.file.path.len == 0) return self.fail("Cannot include. Current file path not set", start, .{});
+        if (self.file.path.len == 0) return self.failSpan("Cannot include. Current file path not set", start, path_token, .{});
 
         // Resolve path to module-root-relative form.
         // The file should already exist in module.includes from the resolution phase.
         const resolved = self.file.module.resolveIncludePath(self.file, path) catch {
-            return self.fail("Could not resolve include path '{s}'", start, .{path});
+            return self.failSpan("Could not resolve include path '{s}'", start, path_token, .{path});
         };
 
         if (self.file.module.includes.get(resolved)) |_| {
             return .{
                 .token = start,
                 .type = .{
-                    .include = path,
+                    .include = .{
+                        .path = path,
+                        .path_token = path_token,
+                    },
                 },
             };
         }
 
-        return self.fail("Include file '{s}' not found", start, .{resolved});
+        return self.failSpan("Include file '{s}' not found", start, path_token, .{resolved});
     }
 
     fn classDeclaration(self: *Parser) Error!Statement {
@@ -227,10 +257,12 @@ pub const Parser = struct {
         self.next();
 
         var names = std.ArrayList([]const u8).empty;
+        var name_tokens = std.ArrayList(Token).empty;
         var fields = std.ArrayList(Expression).empty;
         var methods = std.ArrayList(Statement).empty;
         errdefer {
             names.deinit(self.allocator);
+            name_tokens.deinit(self.allocator);
             fields.deinit(self.allocator);
             methods.deinit(self.allocator);
         }
@@ -242,7 +274,9 @@ pub const Parser = struct {
                 try methods.append(self.allocator, method);
                 self.next();
             } else {
+                const field_name_token = self.current_token;
                 try names.append(self.allocator, try self.consumeIdentifier());
+                try name_tokens.append(self.allocator, field_name_token);
                 try self.expectCurrent(.equal);
                 self.next();
                 const field = try self.expression(.lowest);
@@ -259,7 +293,14 @@ pub const Parser = struct {
         return .{
             .token = start,
             .type = .{
-                .class = .{ .name = name, .name_token = name_token, .field_names = try names.toOwnedSlice(self.allocator), .fields = try fields.toOwnedSlice(self.allocator), .methods = try methods.toOwnedSlice(self.allocator) },
+                .class = .{
+                    .name = name,
+                    .name_token = name_token,
+                    .field_names = try names.toOwnedSlice(self.allocator),
+                    .field_name_tokens = try name_tokens.toOwnedSlice(self.allocator),
+                    .fields = try fields.toOwnedSlice(self.allocator),
+                    .methods = try methods.toOwnedSlice(self.allocator),
+                },
             },
         };
     }
@@ -559,11 +600,15 @@ pub const Parser = struct {
         self.next();
 
         var field_names = std.ArrayList([]const u8).empty;
+        var field_name_tokens = std.ArrayList(Token).empty;
         var fields = std.ArrayList(Expression).empty;
         errdefer field_names.deinit(self.allocator);
+        errdefer field_name_tokens.deinit(self.allocator);
         errdefer fields.deinit(self.allocator);
         while (!self.currentIs(.right_brace)) {
+            const field_name_token = self.current_token;
             try field_names.append(self.allocator, try self.consumeIdentifier());
+            try field_name_tokens.append(self.allocator, field_name_token);
             try self.expectCurrent(.equal);
             self.next();
             const field = try self.expression(.lowest);
@@ -582,6 +627,7 @@ pub const Parser = struct {
                     .name = name,
                     .name_token = name_token,
                     .field_names = try field_names.toOwnedSlice(self.allocator),
+                    .field_name_tokens = try field_name_tokens.toOwnedSlice(self.allocator),
                     .fields = try fields.toOwnedSlice(self.allocator),
                 },
             },
@@ -950,7 +996,7 @@ pub const Parser = struct {
         const start_token = self.current_token;
         self.next();
         var speaker: ?[]const u8 = null;
-        if (self.currentIs(.string)) return self.fail("Strings are not permitted as Speakers", start_token, .{});
+        if (self.currentIs(.string)) return self.failSpan("Strings are not permitted as Speakers", start_token, self.current_token, .{});
         if (!self.currentIs(.colon)) {
             speaker = try self.consumeIdentifier();
         }
@@ -1022,7 +1068,7 @@ pub const Parser = struct {
         self.next();
         const index = if (start_token.token_type == .dot) blk: {
             if (!self.currentIs(.identifier))
-                return self.fail("Expected identifier after index '.', found '{s}'", self.current_token, .{self.tokenLexeme(self.current_token)});
+                return self.failSpan("Expected identifier after index '.', found '{s}'", start_token, self.current_token, .{self.tokenLexeme(self.current_token)});
             break :blk try self.identifierExpression();
         } else if (start_token.token_type == .left_bracket) blk: {
             break :blk try self.expression(.lowest);

@@ -70,10 +70,10 @@ pub const Formatter = struct {
 
     fn writeStatement(self: *Formatter, stmt: Statement) Error!void {
         switch (stmt.type) {
-            .include => |path| {
+            .include => |inc| {
                 try self.writeIndent();
                 try self.write("include \"");
-                try self.write(path);
+                try self.write(inc.path);
                 try self.write("\"");
             },
             .variable => |v| {

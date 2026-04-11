@@ -42,6 +42,7 @@ pub const Expression = struct {
             name: []const u8,
             name_token: Token,
             field_names: [][]const u8,
+            field_name_tokens: []Token,
             fields: []const Expression,
         },
         list: []const Expression,
@@ -216,7 +217,10 @@ pub const Statement = struct {
             then_branch: []const Statement,
             else_branch: ?[]const Statement,
         },
-        include: []const u8,
+        include: struct {
+            path: []const u8,
+            path_token: Token,
+        },
         divert: struct {
             path: [][]const u8,
             path_tokens: []Token,
@@ -230,6 +234,7 @@ pub const Statement = struct {
             name: []const u8,
             name_token: Token,
             field_names: [][]const u8,
+            field_name_tokens: []Token,
             fields: []const Expression,
             methods: []const Statement,
         },
@@ -264,7 +269,7 @@ pub const Statement = struct {
         }
         writer.print("{s}", .{prefix});
         switch (self.type) {
-            .include => |path| writer.print("INCLUDE:: {s}", .{path}),
+            .include => |inc| writer.print("INCLUDE:: {s}", .{inc.path}),
             .block => |b| {
                 writer.print("BLOCK::", .{});
                 for (b) |s| s.print(writer, "", depth + 1);

@@ -218,6 +218,17 @@ pub const Compiler = struct {
         return Error.CompilerError;
     }
 
+    fn failSpan(
+        self: *Compiler,
+        comptime msg: []const u8,
+        start_token: Token,
+        end_token: ?Token,
+        args: anytype,
+    ) Error {
+        try self.module.errors.addSpan(self.current_file.path, msg, start_token, end_token, .err, args);
+        return Error.CompilerError;
+    }
+
     fn failSpanWithHelp(
         self: *Compiler,
         comptime msg: []const u8,
@@ -244,6 +255,18 @@ pub const Compiler = struct {
         return err;
     }
 
+    fn failErrorSpan(
+        self: *Compiler,
+        comptime msg: []const u8,
+        start_token: Token,
+        end_token: ?Token,
+        args: anytype,
+        err: Error,
+    ) Error {
+        try self.module.errors.addSpan(self.current_file.path, msg, start_token, end_token, .err, args);
+        return err;
+    }
+
     fn warnWithHelp(
         self: *Compiler,
         comptime msg: []const u8,
@@ -253,6 +276,18 @@ pub const Compiler = struct {
         note: ?[]const u8,
     ) !void {
         try self.module.errors.addWithHelp(self.current_file.path, msg, token, .warn, args, suggestion, note);
+    }
+
+    fn warnSpanWithHelp(
+        self: *Compiler,
+        comptime msg: []const u8,
+        start_token: Token,
+        end_token: ?Token,
+        args: anytype,
+        suggestion: ?[]const u8,
+        note: ?[]const u8,
+    ) !void {
+        try self.module.errors.addSpanWithHelp(self.current_file.path, msg, start_token, end_token, .warn, args, suggestion, note);
     }
 
     /// Build a "previous declaration at file:line" note string. Caller does
@@ -320,7 +355,7 @@ pub const Compiler = struct {
         return self.fn_arities.get(name);
     }
 
-    fn failRedeclared(self: *Compiler, name: []const u8, comptime kind: []const u8, token: Token) Error {
+    fn failRedeclared(self: *Compiler, name: []const u8, comptime kind: []const u8, token: Token, end_token: ?Token) Error {
         // Look up the previous declaration's full name in the declarations map.
         // The caller passes the short name; we try the qualified form first.
         var lookup_name: []const u8 = name;
@@ -330,7 +365,7 @@ pub const Compiler = struct {
             if (self.decl_tokens.contains(q)) lookup_name = q;
         }
         const note = try self.previousDeclNote(lookup_name);
-        return self.failWithHelp(kind ++ " '{s}' is already declared", token, .{name}, null, note);
+        return self.failSpanWithHelp(kind ++ " '{s}' is already declared", token, end_token, .{name}, null, note);
     }
 
     fn suggestFromList(self: *Compiler, name: []const u8, haystack: []const []const u8) !?[]const u8 {
@@ -508,12 +543,12 @@ pub const Compiler = struct {
         tree: []const Statement,
     };
 
-    fn resolveInclude(self: *Compiler, raw_path: []const u8, token: Token) Error!?IncludeResult {
+    fn resolveInclude(self: *Compiler, raw_path: []const u8, token: Token, end_token: ?Token) Error!?IncludeResult {
         // Resolve original path to module-root-relative form
         const resolved = self.current_file.module.resolveIncludePath(self.current_file, raw_path) catch
-            return self.fail("Could not resolve include path '{s}'", token, .{raw_path});
+            return self.failSpan("Could not resolve include path '{s}'", token, end_token, .{raw_path});
         const file = self.module.includes.get(resolved) orelse
-            return self.fail("Unknown include file {s}", token, .{raw_path});
+            return self.failSpan("Unknown include file {s}", token, end_token, .{raw_path});
         if (self.emitted_files.contains(resolved)) return null;
         try self.emitted_files.put(self.alloc, resolved, {});
         const tree = file.tree orelse return Error.NotInitialized;
@@ -523,7 +558,7 @@ pub const Compiler = struct {
     fn prepass(self: *Compiler, stmt: Statement) Error!void {
         switch (stmt.type) {
             .include => |i| {
-                const result = try self.resolveInclude(i, stmt.token) orelse return;
+                const result = try self.resolveInclude(i.path, stmt.token, i.path_token) orelse return;
                 const tmp = self.current_file;
                 defer self.current_file = tmp;
                 self.current_file = result.file;
@@ -533,7 +568,7 @@ pub const Compiler = struct {
                 const full_name = try self.getQualifiedName(f.name);
                 defer self.alloc.free(full_name);
                 self.addNamedConstantTok(full_name, .nil, stmt.token) catch |err| switch (err) {
-                    error.SymbolAlreadyDeclared => return self.failRedeclared(full_name, "Function", stmt.token),
+                    error.SymbolAlreadyDeclared => return self.failRedeclared(full_name, "Function", stmt.token, f.name_token),
                     else => return err,
                 };
                 // Track arity so call sites can validate argument counts.
@@ -548,7 +583,7 @@ pub const Compiler = struct {
                 const full_name = try self.getQualifiedName(c.name);
                 defer self.alloc.free(full_name);
                 self.addNamedConstantTok(full_name, .nil, stmt.token) catch |err| switch (err) {
-                    error.SymbolAlreadyDeclared => return self.failRedeclared(full_name, "Class", stmt.token),
+                    error.SymbolAlreadyDeclared => return self.failRedeclared(full_name, "Class", stmt.token, c.name_token),
                     else => return err,
                 };
             },
@@ -556,7 +591,7 @@ pub const Compiler = struct {
                 const full_name = try self.getQualifiedName(e.name);
                 defer self.alloc.free(full_name);
                 self.addNamedConstantTok(full_name, .nil, stmt.token) catch |err| switch (err) {
-                    error.SymbolAlreadyDeclared => return self.failRedeclared(full_name, "Enum", stmt.token),
+                    error.SymbolAlreadyDeclared => return self.failRedeclared(full_name, "Enum", stmt.token, e.name_token),
                     else => return err,
                 };
             },
@@ -565,7 +600,7 @@ pub const Compiler = struct {
                 self.registerAnchor(full_name, b.id, stmt.token) catch |err| switch (err) {
                     error.SymbolAlreadyDeclared => {
                         self.alloc.free(full_name);
-                        return self.failRedeclared(b.name, "Bough", stmt.token);
+                        return self.failRedeclared(b.name, "Bough", stmt.token, b.name_token);
                     },
                     else => return err,
                 };
@@ -575,14 +610,14 @@ pub const Compiler = struct {
             },
             .fork => |f| {
                 const fork_name = self.resolveForkName(f.name, f.id) catch
-                    return self.fail("fork must be inside a bough", stmt.token, .{});
+                    return self.failSpan("fork must be inside a bough", stmt.token, f.end_token, .{});
                 defer self.alloc.free(fork_name);
 
                 const full_name = try self.getQualifiedName(fork_name);
                 self.registerAnchor(full_name, f.id, stmt.token) catch |err| switch (err) {
                     error.SymbolAlreadyDeclared => {
                         self.alloc.free(full_name);
-                        return self.failRedeclared(fork_name, "Fork", stmt.token);
+                        return self.failRedeclared(fork_name, "Fork", stmt.token, f.end_token);
                     },
                     else => return err,
                 };
@@ -597,7 +632,7 @@ pub const Compiler = struct {
                 self.registerAnchor(full_name, c.id, stmt.token) catch |err| switch (err) {
                     error.SymbolAlreadyDeclared => {
                         self.alloc.free(full_name);
-                        return self.failRedeclared(name, "Choice", stmt.token);
+                        return self.failRedeclared(name, "Choice", stmt.token, null);
                     },
                     else => return err,
                 };
@@ -625,7 +660,7 @@ pub const Compiler = struct {
         const token = stmt.token;
         switch (stmt.type) {
             .include => |i| {
-                const result = try self.resolveInclude(i, stmt.token) orelse return;
+                const result = try self.resolveInclude(i.path, stmt.token, i.path_token) orelse return;
                 const tmp_file = self.current_file;
                 defer self.current_file = tmp_file;
                 self.current_file = result.file;
@@ -775,15 +810,16 @@ pub const Compiler = struct {
             },
             .variable => |v| {
                 if (builtins.has(v.name))
-                    return self.failError("'{s}' is a builtin function and cannot be used as a variable name", stmt.token, .{v.name}, Error.IllegalOperation);
+                    return self.failErrorSpan("'{s}' is a builtin function and cannot be used as a variable name", stmt.token, v.name_token, .{v.name}, Error.IllegalOperation);
                 // Warn when the new name hides a variable from an enclosing
                 // scope. Only warn for local-to-local shadowing so global
                 // variables intentionally re-used across scopes remain quiet.
                 if (self.scope.tag != .global) {
                     if (self.scope.resolveOuter(v.name)) |_| {
-                        try self.warnWithHelp(
+                        try self.warnSpanWithHelp(
                             "'{s}' hides a variable from an outer scope",
                             token,
+                            v.name_token,
                             .{v.name},
                             null,
                             null,
@@ -791,7 +827,7 @@ pub const Compiler = struct {
                     }
                 }
                 const symbol = self.scope.define(v.name, v.is_mutable) catch {
-                    return self.fail("'{s}' is already declared in this scope", token, .{v.name});
+                    return self.failSpan("'{s}' is already declared in this scope", token, v.name_token, .{v.name});
                 };
                 try self.compileExpression(&v.initializer);
                 try self.setSymbol(v.name, symbol, token, true);
@@ -894,7 +930,7 @@ pub const Compiler = struct {
             },
             .fork => |f| {
                 const fork_name = self.resolveForkName(f.name, f.id) catch
-                    return self.fail("fork must be inside a bough", stmt.token, .{});
+                    return self.failSpan("fork must be inside a bough", stmt.token, f.end_token, .{});
                 defer self.alloc.free(fork_name);
 
                 const path = try self.getQualifiedName(fork_name);
@@ -1458,7 +1494,7 @@ pub const Compiler = struct {
                             if (idx.target.type == .identifier) {
                                 if (self.constants_map.get(idx.target.type.identifier)) |i| {
                                     const val = self.constants.items[i];
-                                    return self.fail("Cannot reassign field on a {s}", token, .{objKindName(val.obj.data)});
+                                    return self.failSpan("Cannot reassign field on a {s}", idx.target.token, idx.index.token, .{objKindName(val.obj.data)});
                                 }
                             }
                             try self.compileExpression(bin.right);
@@ -1511,7 +1547,7 @@ pub const Compiler = struct {
                                     if (self.constants_map.get(idx.target.type.identifier)) |i| {
                                         const val = self.constants.items[i];
                                         if (val == .obj and (val.obj.data == .class or val.obj.data == .@"enum" or val.obj.data == .function)) {
-                                            return self.fail("Cannot assign to a {s} member", token, .{objKindName(val.obj.data)});
+                                            return self.failSpan("Cannot assign to a {s} member", idx.target.token, idx.index.token, .{objKindName(val.obj.data)});
                                         }
                                     }
                                 }
@@ -1636,8 +1672,9 @@ pub const Compiler = struct {
                                         const field = idx.index.type.identifier;
                                         if (!arrayContains(u8, e.values, field)) {
                                             const hint = try self.suggestFromList(field, e.values);
-                                            return self.failWithHelp(
+                                            return self.failSpanWithHelp(
                                                 "Enum '{s}' does not contain a value '{s}'",
+                                                idx.target.token,
                                                 idx.index.token,
                                                 .{ idx.target.type.identifier, field },
                                                 hint,
@@ -1649,8 +1686,9 @@ pub const Compiler = struct {
                                         const field = idx.index.type.identifier;
                                         if (c.getFieldIndex(field) == null and c.getMethodIndex(field) == null) {
                                             const hint = try self.suggestClassField(c, field);
-                                            return self.failWithHelp(
+                                            return self.failSpanWithHelp(
                                                 "Class '{s}' does not contain a field '{s}'",
+                                                idx.target.token,
                                                 idx.index.token,
                                                 .{ idx.target.type.identifier, field },
                                                 hint,
@@ -1701,11 +1739,11 @@ pub const Compiler = struct {
             },
             .instance => |ins| {
                 const const_idx = self.constants_map.get(ins.name) orelse
-                    return self.fail("Unknown class '{s}'", token, .{ins.name});
+                    return self.failSpan("Unknown class '{s}'", token, ins.name_token, .{ins.name});
 
                 const class_val = self.constants.items[const_idx];
                 if (class_val != .obj or class_val.obj.data != .class)
-                    return self.fail("'{s}' is not a class", token, .{ins.name});
+                    return self.failSpan("'{s}' is not a class", token, ins.name_token, .{ins.name});
 
                 const class_def = class_val.obj.data.class;
                 for (ins.fields, 0..) |field_expr, i| {
@@ -1713,7 +1751,7 @@ pub const Compiler = struct {
                         const hint = try self.suggestClassField(class_def, ins.field_names[i]);
                         return self.failWithHelp(
                             "Class '{s}' has no field '{s}'",
-                            token,
+                            ins.field_name_tokens[i],
                             .{ ins.name, ins.field_names[i] },
                             hint,
                             null,
