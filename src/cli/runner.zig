@@ -57,9 +57,27 @@ pub const CliRunner = struct {
             for (choices, 0..) |choice, i| {
                 print("[{d}] {s}\n", .{ i, choice.content }) catch {};
             }
+            if (vm.canRewind()) print("[b] back  ", .{}) catch {};
+            if (vm.canRedo()) print("[f] forward  ", .{}) catch {};
+            if (vm.canRewind() or vm.canRedo()) print("\n", .{}) catch {};
 
             while (stdin.takeDelimiterExclusive('\n')) |line| {
-                index = std.fmt.parseInt(usize, line, 10) catch null;
+                const trimmed = std.mem.trim(u8, line, " \r\n\t");
+                if (vm.canRewind() and (std.mem.eql(u8, trimmed, "b") or std.mem.eql(u8, trimmed, "B"))) {
+                    vm.rewind() catch |err| {
+                        print("Rewind failed: {}\n", .{err}) catch {};
+                        break;
+                    };
+                    return;
+                }
+                if (vm.canRedo() and (std.mem.eql(u8, trimmed, "f") or std.mem.eql(u8, trimmed, "F"))) {
+                    vm.redo() catch |err| {
+                        print("Redo failed: {}\n", .{err}) catch {};
+                        break;
+                    };
+                    return;
+                }
+                index = std.fmt.parseInt(usize, trimmed, 10) catch null;
                 if (index == null or index.? >= choices.len) {
                     index = null;
                     print("Invalid value '{s}'.\n", .{line}) catch {};

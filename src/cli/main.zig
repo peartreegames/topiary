@@ -42,6 +42,7 @@ fn usage(comptime msg: []const u8) !void {
     try print("       -b, --bough <name>            Starting bough\n", .{});
     try print("       -k, --locale-key-file <file>  Localization key file\n", .{});
     try print("       -l, --load <file>             Read save from file on start\n", .{});
+    try print("       -r, --rewind                  Enable rewind/redo at choice prompts (debug)\n", .{});
     try print("       -s, --save <file>             Write save to file on end\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi test <file> <count>      Run dialogue <count> times, selecting random choices\n", .{});
@@ -88,6 +89,7 @@ const RunArgs = struct {
     save: ?[]const u8 = null,
     load: ?[]const u8 = null,
     verbose: bool = false,
+    rewind: bool = false,
 
     fn init(self: *RunArgs, iter: *std.process.ArgIterator) !void {
         while (iter.next()) |arg| {
@@ -101,6 +103,8 @@ const RunArgs = struct {
                 self.load = iter.next();
             } else if (std.mem.eql(u8, arg, "-k") or std.mem.eql(u8, arg, "--locale-key-file")) {
                 self.locale_key_file = iter.next();
+            } else if (std.mem.eql(u8, arg, "-r") or std.mem.eql(u8, arg, "--rewind")) {
+                self.rewind = true;
             } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
                 self.verbose = true;
             } else self.file = arg;
@@ -332,6 +336,7 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
         try print("Could not initialize Vm\n", .{});
         return if (args.verbose) err else {};
     };
+    if (args.rewind) vm.history_capacity = 16;
 
     if (args.load) |file_path| {
         const file = try if (std.fs.path.isAbsolute(file_path)) std.fs.openFileAbsolute(file_path, .{}) else std.fs.cwd().openFile(file_path, .{});

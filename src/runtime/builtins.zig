@@ -33,6 +33,17 @@ pub const VariationMap = std.AutoHashMapUnmanaged(u32, VariationState);
 
 var r: ?std.Random.DefaultPrng = null;
 
+/// Capture the current RNG state for snapshotting. Returns null if the RNG
+/// has not yet been lazily initialised.
+pub fn snapshotRng() ?std.Random.DefaultPrng {
+    return r;
+}
+
+/// Restore RNG state from a snapshot.
+pub fn restoreRng(state: ?std.Random.DefaultPrng) void {
+    r = state;
+}
+
 pub const functions = std.StaticStringMap(Builtin).initComptime(.{ .{
     "rnd", Builtin{ .arity = 2, .backing = rnd, .is_method = false, .name = "rnd" },
 }, .{

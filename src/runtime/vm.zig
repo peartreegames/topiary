@@ -24,6 +24,7 @@ const Stack = @import("stack.zig").Stack;
 const Gc = @import("gc.zig").Gc;
 const Frame = @import("frame.zig").Frame;
 const builtins = @import("builtins.zig");
+const Snapshot = @import("snapshot.zig").Snapshot;
 
 const runners = @import("runner.zig");
 const Runner = runners.Runner;
@@ -85,6 +86,19 @@ pub const Vm = struct {
 
     loc_provider: ?*LocaleProvider = null,
 
+    /// Bounded fork-history ring buffer for rewind/redo. When
+    /// `history_capacity == 0`, snapshots are never taken (zero cost).
+    /// `history_cursor` indexes the next free slot — i.e. it equals the
+    /// number of "live" snapshots ahead of any redo entries. Snapshots
+    /// at indices `[history_cursor..history.items.len)` are redo entries.
+    history: std.ArrayList(Snapshot) = .empty,
+    history_cursor: usize = 0,
+    history_capacity: usize = 0,
+    /// Set by `rewind`/`redo` to signal `run()` that it should re-fire
+    /// `runner.onChoices` with the restored fork's choices instead of
+    /// continuing instruction execution.
+    rewind_pending: bool = false,
+
     runner: *Runner,
 
     pub const Error = error{
@@ -131,6 +145,13 @@ pub const Vm = struct {
             .iterators = try Stack(Iterator).init(allocator, iterator_size),
         };
 
+        // Initialize the entire operand stack backing to .void. Local slots
+        // are reserved by `resize` (here and at function-call sites) without
+        // being explicitly written; the compiler emits set_local before any
+        // get_local in normal execution, but snapshot capture and GC root
+        // marking iterate `stack.items[0..count]` unconditionally and would
+        // otherwise observe uninitialized memory.
+        @memset(vm.stack.backing, Void);
         vm.stack.resize(bytecode.locals_count);
         vm.frames.push(try Frame.create(main_func_obj, 0));
         return vm;
@@ -138,6 +159,8 @@ pub const Vm = struct {
 
     pub fn deinit(self: *Vm) void {
         self.removeLocale();
+        for (self.history.items) |*snap| snap.deinit(self.alloc);
+        self.history.deinit(self.alloc);
         self.alloc.destroy(self.frames.backing[0].func);
         self.frames.deinit();
         self.gc.deinit();
@@ -212,12 +235,15 @@ pub const Vm = struct {
     /// - globals (all symbol storage)
     /// - the live portion of the operand stack
     /// - open iterators (each holds a `Value` being iterated)
+    /// - rewind history snapshots (each holds cloned Values that must
+    ///   survive collections between fork captures)
     /// Note: `variation_state` currently only holds `u32` indices, not Values,
     /// so it is not scanned. If that ever changes, add it here.
     pub fn markRoots(self: *Vm) void {
         for (self.globals) |v| Gc.markValue(v);
         for (self.stack.items) |v| Gc.markValue(v);
         for (self.iterators.items) |it| Gc.markValue(it.value);
+        for (self.history.items) |*snap| snap.markRoots();
     }
 
     fn currentFrame(self: *Vm) *Frame {
@@ -242,6 +268,80 @@ pub const Vm = struct {
         }
         self.alloc.free(self.current_choices);
         self.choices_freed = true;
+    }
+
+    /// Snapshot the current paused-at-fork state into the rewind history.
+    /// No-op when `history_capacity == 0`. Called from the `.fork` opcode
+    /// after `is_waiting=true` and before `runner.onChoices` is invoked.
+    /// Drops any forward redo entries past `history_cursor` and evicts
+    /// the oldest snapshot if the ring buffer is at capacity.
+    pub fn captureFork(self: *Vm) !void {
+        if (self.history_capacity == 0) return;
+
+        // Drop forward redo entries: any new fork invalidates any future
+        // we may have rewound from.
+        while (self.history.items.len > self.history_cursor) {
+            var dropped = self.history.pop().?;
+            dropped.deinit(self.alloc);
+        }
+
+        // Evict oldest if at capacity.
+        if (self.history.items.len >= self.history_capacity) {
+            var dropped = self.history.orderedRemove(0);
+            dropped.deinit(self.alloc);
+            self.history_cursor -= 1;
+        }
+
+        // Disable GC for the clone walk so freshly created clones aren't
+        // swept before they're held by the snapshot.
+        const saved_threshold = self.gc.threshold;
+        self.gc.threshold = std.math.maxInt(usize);
+        defer self.gc.threshold = saved_threshold;
+
+        const snap = try Snapshot.capture(self);
+        try self.history.append(self.alloc, snap);
+        self.history_cursor = self.history.items.len;
+    }
+
+    /// True iff there is a previous fork snapshot to rewind to.
+    pub fn canRewind(self: *Vm) bool {
+        // We can rewind iff there is a snapshot strictly older than the
+        // currently-displayed fork. The newest snapshot in history matches
+        // the *current* paused fork, so we need at least 2 entries to step
+        // back.
+        return self.history_cursor >= 2;
+    }
+
+    /// True iff there is a forward (redo) snapshot to advance to.
+    pub fn canRedo(self: *Vm) bool {
+        return self.history_cursor < self.history.items.len;
+    }
+
+    /// Rewind to the previous fork snapshot. After this call, `run()` will
+    /// re-fire `runner.onChoices` for the rewound fork (via the
+    /// `rewind_pending` re-entry path), letting the host present the
+    /// previous fork's choices again.
+    pub fn rewind(self: *Vm) Error!void {
+        if (!self.canRewind()) return Error.InvalidChoice;
+        self.history_cursor -= 1;
+        const target = &self.history.items[self.history_cursor - 1];
+        const saved_threshold = self.gc.threshold;
+        self.gc.threshold = std.math.maxInt(usize);
+        defer self.gc.threshold = saved_threshold;
+        target.restore(self) catch return Error.RuntimeError;
+        self.rewind_pending = true;
+    }
+
+    /// Re-do a previously-rewound fork.
+    pub fn redo(self: *Vm) Error!void {
+        if (!self.canRedo()) return Error.InvalidChoice;
+        self.history_cursor += 1;
+        const target = &self.history.items[self.history_cursor - 1];
+        const saved_threshold = self.gc.threshold;
+        self.gc.threshold = std.math.maxInt(usize);
+        defer self.gc.threshold = saved_threshold;
+        target.restore(self) catch return Error.RuntimeError;
+        self.rewind_pending = true;
     }
 
     pub fn getGlobalsIndex(self: *Vm, name: []const u8) !usize {
@@ -423,6 +523,15 @@ pub const Vm = struct {
     }
 
     pub fn run(self: *Vm) !void {
+        // Rewind/redo re-entry: a `vm.rewind()` or `vm.redo()` call from
+        // inside the previous `runner.onChoices` invocation has restored a
+        // snapshot. Re-fire `onChoices` for the restored fork instead of
+        // advancing instructions, then return to the outer dispatch loop.
+        if (self.rewind_pending) {
+            self.rewind_pending = false;
+            self.runner.onChoices(self, self.current_choices);
+            return;
+        }
         if (!self.can_continue or self.is_waiting) return;
         while (self.ip < self.currentFrame().instructions().len) : (self.ip = self.currentFrame().ip) {
             const instruction = self.takeByte();
@@ -988,7 +1097,13 @@ pub const Vm = struct {
                             const frame = try Frame.create(value.obj, self.stack.count - arg_count);
                             if (self.frames.count >= frame_size) return self.fail("Stack overflow: too many nested function calls (max {d})", .{frame_size});
                             self.frames.push(frame);
+                            const locals_start = frame.bp + arg_count;
                             self.stack.resize(frame.bp + f.locals_count);
+                            // Clear newly-reserved local slots (above the
+                            // arguments) so neither GC root marking nor
+                            // snapshot capture observes stale Values left
+                            // over from previous frame usage of these slots.
+                            @memset(self.stack.backing[locals_start..(frame.bp + f.locals_count)], Void);
                         },
                         .@"extern" => |e| {
                             if (e.context_ptr) |ptr| {
@@ -1044,6 +1159,7 @@ pub const Vm = struct {
                     }
 
                     self.is_waiting = true;
+                    try self.captureFork();
                     self.runner.onChoices(self, self.current_choices);
                     return;
                 },
