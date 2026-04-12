@@ -32,11 +32,18 @@ topi loc validate story.topi
 
 ## Export
 
-Once all lines are stamped, export a CSV file for translators:
+Export a CSV file for each `.topi` file that contains dialogue or choices.
+Each file gets its own CSV — the CSV must live next to its `.topi` file
+as a sibling with a `.csv` suffix:
 
 ```bash
 topi loc export story.topi -l en -o story.topi.csv
+topi loc export shared.topi -l en -o shared.topi.csv
 ```
+
+Each CSV contains only the dialogue and choices from that specific file — no
+content from `include`d files. This means translators never see duplicate
+lines, even when multiple entry files include the same shared content.
 
 The CSV contains one row per localizable line:
 
@@ -58,12 +65,26 @@ topi loc export story.topi -l en -o story.topi.csv  # merges with existing CSV
 
 ## Generate
 
-Compile the translated CSV into binary `.topil` files for runtime:
+Generate takes a `.topi` file (not a CSV), walks its `include` graph,
+finds the sibling `.csv` for each included file, validates UUIDs, and
+merges everything into one `.topil` per language:
 
 ```bash
-topi loc generate story.topi.csv --folder locales/           # all languages
-topi loc generate story.topi.csv --folder locales/ -k fr_FR  # single language
+topi loc generate story.topi --folder locales/           # all languages
+topi loc generate story.topi --folder locales/ -k fr_FR  # single language
 ```
+
+The generated `.topil` file contains translations from all included files,
+matching the footprint of the compiled `.topib`. At generate time, the tool
+validates that every `@ID` in the source has a corresponding CSV entry and
+warns about mismatches:
+
+- **Missing UUIDs** — an `@ID` exists in the source but not in any CSV.
+  Re-export the affected file.
+- **Extra UUIDs** — a CSV row has an `@ID` that no longer exists in the source.
+  These are stale entries from removed dialogue; re-export to clean them up.
+- **Missing CSV files** — an included file has localizable content but no
+  sibling `.csv`. Run `topi loc export` on it.
 
 ## Run
 
@@ -75,6 +96,35 @@ topi run story.topi --locale-key-file locales/story.fr_FR.topil
 
 For game engine integration, use `vm.setLocale(path)` or `vm.setLocaleFromBuffer(key, buffer)`
 to load translations at runtime.
+
+## File Organization
+
+Each `.topi` file with dialogue or choices should have a sibling `.topi.csv`
+file containing its translations. The generate step finds these CSVs by
+convention — it looks for `{filename}.csv` next to each `.topi` file in the
+include graph.
+
+**If you move a `.topi` file, its `.csv` must move with it.** The sibling
+relationship is how `generate` discovers translations. Similarly, if you store
+`.topil` files alongside your source, move those too.
+
+Files that contain only code (functions, variables, classes) and no dialogue
+or choices don't need CSVs — they are silently skipped during generation.
+
+Example project layout:
+
+```
+game/
+  story.topi              # entry file
+  story.topi.csv          # translations for story.topi
+  shared/
+    greetings.topi        # included by story.topi
+    greetings.topi.csv    # translations for greetings.topi
+    utils.topi            # utility functions, no dialogue — no CSV needed
+  locales/
+    story.en.topil        # generated: merged from all CSVs
+    story.fr_FR.topil     # generated: merged from all CSVs
+```
 
 ## Writing for Localization
 

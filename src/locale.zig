@@ -205,6 +205,21 @@ pub const Locale = struct {
         }
     };
 
+    const CollectContext = struct {
+        map: *std.AutoHashMap(UUID.ID, void),
+
+        pub const Error = error{OutOfMemory};
+
+        fn onLeaf(ctx: CollectContext, stmt: Statement) @This().Error!void {
+            const id: UUID.ID = switch (stmt.type) {
+                .choice => |c| if (c.id_token != null and !UUID.isEmpty(c.id)) c.id else return,
+                .dialogue => |d| if (d.id_token != null and !UUID.isEmpty(d.id)) d.id else return,
+                else => return,
+            };
+            try ctx.map.put(id, {});
+        }
+    };
+
     const ExportContext = struct {
         writer: *std.Io.Writer,
 
@@ -489,6 +504,182 @@ pub const Locale = struct {
                 try generate(allocator, content, col_idx,  writer);
             }
         }
+    }
+
+    pub const GenerateError = error{
+        MissingCsvFiles,
+        MismatchedLanguageColumns,
+    };
+
+    pub const GenerateResult = struct {
+        allocator: std.mem.Allocator,
+        missing_uuids: std.ArrayList(UUID.ID),
+        extra_uuids: std.ArrayList(UUID.ID),
+        missing_csv_files: std.ArrayList([]const u8),
+
+        pub fn deinit(self: *GenerateResult) void {
+            self.missing_uuids.deinit(self.allocator);
+            self.extra_uuids.deinit(self.allocator);
+            for (self.missing_csv_files.items) |path| self.allocator.free(path);
+            self.missing_csv_files.deinit(self.allocator);
+        }
+
+        pub fn hasWarnings(self: *const GenerateResult) bool {
+            return self.missing_uuids.items.len > 0 or
+                self.extra_uuids.items.len > 0 or
+                self.missing_csv_files.items.len > 0;
+        }
+    };
+
+    /// Generate .topil files from a .topi module by resolving includes,
+    /// finding sibling .csv files, validating UUIDs, and merging all
+    /// CSV content into one .topil per language.
+    pub fn generateFromModule(
+        allocator: std.mem.Allocator,
+        topi_path: []const u8,
+        output_folder: []const u8,
+        filter_lang: ?[]const u8,
+        dry: bool,
+    ) !GenerateResult {
+        var result = GenerateResult{
+            .allocator = allocator,
+            .missing_uuids = .empty,
+            .extra_uuids = .empty,
+            .missing_csv_files = .empty,
+        };
+        errdefer result.deinit();
+
+        // Phase 1: Resolve the module's include graph and parse all ASTs
+        var mod = try Module.init(allocator, topi_path);
+        defer mod.deinit();
+        try mod.resolveIncludes();
+
+        // Build trees for all files
+        var it = mod.includes.iterator();
+        while (it.next()) |kvp| {
+            try kvp.value_ptr.*.buildTree();
+        }
+
+        // Phase 2: Collect all localizable UUIDs from the ASTs, tracking per-file counts
+        var expected_uuids = std.AutoHashMap(UUID.ID, void).init(allocator);
+        defer expected_uuids.deinit();
+        var file_uuid_counts = std.StringHashMap(usize).init(allocator);
+        defer file_uuid_counts.deinit();
+
+        var tree_it = mod.includes.iterator();
+        while (tree_it.next()) |kvp| {
+            const file = kvp.value_ptr.*;
+            if (file.tree) |tree| {
+                const before = expected_uuids.count();
+                try walkLocalizable(tree.root, CollectContext{ .map = &expected_uuids }, CollectContext.onLeaf);
+                const added = expected_uuids.count() - before;
+                if (added > 0) {
+                    try file_uuid_counts.put(kvp.key_ptr.*, added);
+                }
+            }
+        }
+
+        // Phase 3: Find sibling .csv files and merge their content
+        var merged_csv = std.ArrayList(u8).empty;
+        defer merged_csv.deinit(allocator);
+        var csv_uuids = std.AutoHashMap(UUID.ID, void).init(allocator);
+        defer csv_uuids.deinit();
+        var header_written = false;
+        var expected_header: ?[]const u8 = null;
+        defer if (expected_header) |eh| allocator.free(eh);
+
+        var csv_it = mod.includes.iterator();
+        while (csv_it.next()) |kvp| {
+            const file = kvp.value_ptr.*;
+            const csv_name = try std.fmt.allocPrint(allocator, "{s}.csv", .{file.path});
+            defer allocator.free(csv_name);
+
+            const csv_file = mod.dir.openFile(csv_name, .{}) catch {
+                // Only warn if this file has localizable content
+                if (file_uuid_counts.get(kvp.key_ptr.*) == null) continue;
+                try result.missing_csv_files.append(allocator, try allocator.dupe(u8, kvp.key_ptr.*));
+                continue;
+            };
+            defer csv_file.close();
+
+            const raw_content = try csv_file.readToEndAlloc(allocator, std.math.maxInt(u32));
+            defer allocator.free(raw_content);
+            const content = stripBom(raw_content);
+
+            var pos: usize = 0;
+            const header = nextCsvLine(content, &pos) orelse continue;
+
+            if (!header_written) {
+                try merged_csv.appendSlice(allocator, header);
+                try merged_csv.append(allocator, '\n');
+                expected_header = try allocator.dupe(u8, header);
+                header_written = true;
+            } else if (expected_header) |eh| {
+                if (!std.mem.eql(u8, header, eh)) {
+                    return error.MismatchedLanguageColumns;
+                }
+            }
+
+            // Append all data rows and collect CSV UUIDs
+            while (nextCsvLine(content, &pos)) |line| {
+                var cell_iter = CsvCellIterator.init(line);
+                if (cell_iter.next()) |id_cell| {
+                    if (id_cell.len >= UUID.Size) {
+                        const id = UUID.fromString(id_cell[0..UUID.Size]);
+                        if (!UUID.isEmpty(id)) {
+                            try csv_uuids.put(id, {});
+                        }
+                    }
+                }
+                try merged_csv.appendSlice(allocator, line);
+                try merged_csv.append(allocator, '\n');
+            }
+        }
+
+        // Phase 4: Validate UUIDs — compare expected (AST) vs provided (CSV)
+        var exp_it = expected_uuids.iterator();
+        while (exp_it.next()) |entry| {
+            if (!csv_uuids.contains(entry.key_ptr.*)) {
+                try result.missing_uuids.append(allocator, entry.key_ptr.*);
+            }
+        }
+
+        var csv_uuid_it = csv_uuids.iterator();
+        while (csv_uuid_it.next()) |entry| {
+            if (!expected_uuids.contains(entry.key_ptr.*)) {
+                try result.extra_uuids.append(allocator, entry.key_ptr.*);
+            }
+        }
+
+        // Phase 5: Generate .topil files from merged CSV
+        if (!header_written) return result; // No CSVs found at all
+
+        const merged_content = merged_csv.items;
+        const entry_name = std.mem.trimEnd(u8, std.fs.path.basename(topi_path), ".topi");
+
+        var mpos: usize = 0;
+        const mheader = nextCsvLine(merged_content, &mpos) orelse return result;
+
+        var m_header_iter = CsvCellIterator.init(mheader);
+        var col_idx: usize = 0;
+        while (m_header_iter.next()) |h| : (col_idx += 1) {
+            const key = std.mem.trim(u8, h, " ");
+            if (std.mem.eql(u8, key, "id") or std.mem.eql(u8, key, "speaker") or std.mem.eql(u8, key, "raw")) continue;
+            if (filter_lang) |f| if (!std.mem.eql(u8, key, f)) continue;
+
+            if (!dry) {
+                const out_name = try std.fmt.allocPrint(allocator, "{s}/{s}.{s}.topil", .{ output_folder, entry_name, key });
+                defer allocator.free(out_name);
+                const out_file = try std.fs.cwd().createFile(out_name, .{});
+                defer out_file.close();
+                var file_buf: [1024]u8 = undefined;
+                var file_writer = out_file.writer(&file_buf);
+                const writer = &file_writer.interface;
+                try generate(allocator, merged_content, col_idx, writer);
+            }
+        }
+
+        return result;
     }
 
     pub fn generate(allocator: std.mem.Allocator, raw_content: []const u8, lang_col: usize, writer: *std.Io.Writer) !void {

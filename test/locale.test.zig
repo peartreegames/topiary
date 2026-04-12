@@ -420,3 +420,254 @@ test "Localization VM Deinit Cleans Up Locale" {
 
     // deinit happens via defer — testing allocator will catch any leaks
 }
+
+const TestFile = struct { name: []const u8, content: []const u8 };
+
+fn setupModuleTestFiles(dir: std.fs.Dir, files: []const TestFile) !void {
+    for (files) |f| {
+        if (std.fs.path.dirname(f.name)) |sub_dir| {
+            try dir.makePath(sub_dir);
+        }
+        const file = try dir.createFile(f.name, .{});
+        defer file.close();
+        try file.writeAll(f.content);
+    }
+}
+
+fn cleanupModuleTestFiles(dir: std.fs.Dir, files: []const TestFile) void {
+    var i = files.len;
+    while (i > 0) {
+        i -= 1;
+        dir.deleteFile(files[i].name) catch {};
+    }
+}
+
+test "Localization Generate From Module Single File" {
+    const alloc = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const topi_content =
+        \\=== START {
+        \\    :: "Hello world."@AAAAAAAA-BBBBBBBB
+        \\    :: "Goodbye."@CCCCCCCC-DDDDDDDD
+        \\}
+    ;
+    const csv_content =
+        \\"id","speaker","raw","en","fr"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Hello world.","Hello world.","Bonjour le monde."
+        \\"CCCCCCCC-DDDDDDDD","NONE","Goodbye.","Goodbye.","Au revoir."
+        \\
+    ;
+
+    const test_files = &[_]TestFile{
+        .{ .name = "story.topi", .content = topi_content },
+        .{ .name = "story.topi.csv", .content = csv_content },
+    };
+    try setupModuleTestFiles(tmp_dir.dir, test_files);
+    defer cleanupModuleTestFiles(tmp_dir.dir, test_files);
+
+    const full_path = try tmp_dir.dir.realpathAlloc(alloc, "story.topi");
+    defer alloc.free(full_path);
+    const folder = try tmp_dir.dir.realpathAlloc(alloc, ".");
+    defer alloc.free(folder);
+
+    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false);
+    defer gen_result.deinit();
+
+    try std.testing.expect(!gen_result.hasWarnings());
+
+    // Verify generated .topil file
+    const topil_file = try tmp_dir.dir.openFile("story.fr.topil", .{});
+    defer topil_file.close();
+    const topil_data = try topil_file.readToEndAlloc(alloc, std.math.maxInt(u32));
+    const lp = try LocaleProvider.init(alloc, "fr", topil_data);
+    defer lp.deinit(alloc);
+
+    try std.testing.expectEqualSlices(u8, "Bonjour le monde.", lp.map.get(UUID.fromString("AAAAAAAA-BBBBBBBB")).?);
+    try std.testing.expectEqualSlices(u8, "Au revoir.", lp.map.get(UUID.fromString("CCCCCCCC-DDDDDDDD")).?);
+}
+
+test "Localization Generate From Module With Include" {
+    const alloc = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const main_topi =
+        \\include "./shared.topi"
+        \\=== START {
+        \\    :: "Main dialogue."@AAAAAAAA-BBBBBBBB
+        \\}
+    ;
+    const shared_topi =
+        \\=== SHARED {
+        \\    :: "Shared dialogue."@CCCCCCCC-DDDDDDDD
+        \\}
+    ;
+    const main_csv =
+        \\"id","speaker","raw","en","fr"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Main dialogue.","Main dialogue.","Dialogue principal."
+        \\
+    ;
+    const shared_csv =
+        \\"id","speaker","raw","en","fr"
+        \\"CCCCCCCC-DDDDDDDD","NONE","Shared dialogue.","Shared dialogue.","Dialogue partage."
+        \\
+    ;
+
+    const test_files = &[_]TestFile{
+        .{ .name = "main.topi", .content = main_topi },
+        .{ .name = "shared.topi", .content = shared_topi },
+        .{ .name = "main.topi.csv", .content = main_csv },
+        .{ .name = "shared.topi.csv", .content = shared_csv },
+    };
+    try setupModuleTestFiles(tmp_dir.dir, test_files);
+    defer cleanupModuleTestFiles(tmp_dir.dir, test_files);
+
+    const full_path = try tmp_dir.dir.realpathAlloc(alloc, "main.topi");
+    defer alloc.free(full_path);
+    const folder = try tmp_dir.dir.realpathAlloc(alloc, ".");
+    defer alloc.free(folder);
+
+    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false);
+    defer gen_result.deinit();
+
+    try std.testing.expect(!gen_result.hasWarnings());
+
+    // Verify .topil has entries from both files
+    const topil_file = try tmp_dir.dir.openFile("main.fr.topil", .{});
+    defer topil_file.close();
+    const topil_data = try topil_file.readToEndAlloc(alloc, std.math.maxInt(u32));
+    const lp = try LocaleProvider.init(alloc, "fr", topil_data);
+    defer lp.deinit(alloc);
+
+    try std.testing.expectEqualSlices(u8, "Dialogue principal.", lp.map.get(UUID.fromString("AAAAAAAA-BBBBBBBB")).?);
+    try std.testing.expectEqualSlices(u8, "Dialogue partage.", lp.map.get(UUID.fromString("CCCCCCCC-DDDDDDDD")).?);
+}
+
+test "Localization Generate From Module Missing CSV Warning" {
+    const alloc = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const main_topi =
+        \\include "./shared.topi"
+        \\=== START {
+        \\    :: "Main dialogue."@AAAAAAAA-BBBBBBBB
+        \\}
+    ;
+    const shared_topi =
+        \\=== SHARED {
+        \\    :: "Shared dialogue."@CCCCCCCC-DDDDDDDD
+        \\}
+    ;
+    const main_csv =
+        \\"id","speaker","raw","en","fr"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Main dialogue.","Main dialogue.","Dialogue principal."
+        \\
+    ;
+
+    // No shared.topi.csv — should produce a warning
+    const test_files = &[_]TestFile{
+        .{ .name = "main.topi", .content = main_topi },
+        .{ .name = "shared.topi", .content = shared_topi },
+        .{ .name = "main.topi.csv", .content = main_csv },
+    };
+    try setupModuleTestFiles(tmp_dir.dir, test_files);
+    defer cleanupModuleTestFiles(tmp_dir.dir, test_files);
+
+    const full_path = try tmp_dir.dir.realpathAlloc(alloc, "main.topi");
+    defer alloc.free(full_path);
+    const folder = try tmp_dir.dir.realpathAlloc(alloc, ".");
+    defer alloc.free(folder);
+
+    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false);
+    defer gen_result.deinit();
+
+    // Should warn about missing CSV for shared.topi
+    try std.testing.expectEqual(@as(usize, 1), gen_result.missing_csv_files.items.len);
+    try std.testing.expectEqualSlices(u8, "shared.topi", gen_result.missing_csv_files.items[0]);
+
+    // Should report the shared UUID as missing from CSV
+    try std.testing.expectEqual(@as(usize, 1), gen_result.missing_uuids.items.len);
+}
+
+test "Localization Generate From Module No CSV For Utility Include" {
+    const alloc = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const main_topi =
+        \\include "./utils.topi"
+        \\=== START {
+        \\    :: "Main dialogue."@AAAAAAAA-BBBBBBBB
+        \\}
+    ;
+    // Utility file with no dialogue or choices
+    const utils_topi =
+        \\const helper = 42
+    ;
+    const main_csv =
+        \\"id","speaker","raw","en","fr"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Main dialogue.","Main dialogue.","Dialogue principal."
+        \\
+    ;
+
+    const test_files = &[_]TestFile{
+        .{ .name = "main.topi", .content = main_topi },
+        .{ .name = "utils.topi", .content = utils_topi },
+        .{ .name = "main.topi.csv", .content = main_csv },
+    };
+    try setupModuleTestFiles(tmp_dir.dir, test_files);
+    defer cleanupModuleTestFiles(tmp_dir.dir, test_files);
+
+    const full_path = try tmp_dir.dir.realpathAlloc(alloc, "main.topi");
+    defer alloc.free(full_path);
+    const folder = try tmp_dir.dir.realpathAlloc(alloc, ".");
+    defer alloc.free(folder);
+
+    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false);
+    defer gen_result.deinit();
+
+    // No warnings — utils.topi has no localizable content, so missing CSV is fine
+    try std.testing.expect(!gen_result.hasWarnings());
+}
+
+test "Localization Generate From Module Stale CSV Entries" {
+    const alloc = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // Source only has one dialogue line
+    const topi_content =
+        \\=== START {
+        \\    :: "Hello world."@AAAAAAAA-BBBBBBBB
+        \\}
+    ;
+    // CSV has an extra entry that's no longer in source
+    const csv_content =
+        \\"id","speaker","raw","en","fr"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Hello world.","Hello world.","Bonjour le monde."
+        \\"XXXXXXXX-YYYYYYYY","NONE","Removed line.","Removed line.","Ligne supprimee."
+        \\
+    ;
+
+    const test_files = &[_]TestFile{
+        .{ .name = "story.topi", .content = topi_content },
+        .{ .name = "story.topi.csv", .content = csv_content },
+    };
+    try setupModuleTestFiles(tmp_dir.dir, test_files);
+    defer cleanupModuleTestFiles(tmp_dir.dir, test_files);
+
+    const full_path = try tmp_dir.dir.realpathAlloc(alloc, "story.topi");
+    defer alloc.free(full_path);
+    const folder = try tmp_dir.dir.realpathAlloc(alloc, ".");
+    defer alloc.free(folder);
+
+    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false);
+    defer gen_result.deinit();
+
+    // Should report the stale UUID
+    try std.testing.expectEqual(@as(usize, 0), gen_result.missing_uuids.items.len);
+    try std.testing.expectEqual(@as(usize, 1), gen_result.extra_uuids.items.len);
+}

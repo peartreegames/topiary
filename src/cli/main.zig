@@ -543,9 +543,9 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
             if (!args.dry) {
                 try std.fs.cwd().makePath(folder);
             }
-            Locale.generateAtPath(
+            var gen_result = Locale.generateFromModule(
                 alloc,
-                args.file.?,
+                full_path,
                 folder,
                 args.locale_key,
                 args.dry,
@@ -554,6 +554,19 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                 if (args.verbose) return err;
                 return;
             };
+            defer gen_result.deinit();
+
+            // Report warnings
+            for (gen_result.missing_csv_files.items) |path| {
+                try print("Warning: no CSV found for {s} (run `topi loc export` on it)\n", .{path});
+            }
+            if (gen_result.missing_uuids.items.len > 0) {
+                try print("Warning: {d} UUID(s) in source but not in CSV (re-export needed)\n", .{gen_result.missing_uuids.items.len});
+            }
+            if (gen_result.extra_uuids.items.len > 0) {
+                try print("Warning: {d} UUID(s) in CSV but not in source (stale entries)\n", .{gen_result.extra_uuids.items.len});
+            }
+
             if (args.dry) {
                 try print("Successfully generated localization.", .{});
             } else try print("Successfully generated localization into {s}\n", .{folder});
