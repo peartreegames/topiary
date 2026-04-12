@@ -189,12 +189,12 @@ pub export fn setExternFunc(vm_ptr: *anyopaque, name_ptr: [*:0]const u8, value_p
     const name = std.mem.sliceTo(name_ptr, 0);
     logger.log("Setting extern function \"{s}\"", .{name}, .info);
     const wrapper = vm.alloc.create(ExportFunction) catch |err| {
-        logger.log("Could not allocate ExportFunction '{s}': {t}", .{ name, err }, .err);
+        logger.log("Could not allocate ExportFunction '{s}': {s}", .{ name, @errorName(err) }, .err);
         return;
     };
     wrapper.* = ExportFunction.create(vm, @ptrCast(@alignCast(value_ptr)), @ptrCast(@alignCast(free_ptr)));
     vm.setExtern(name, arity, wrapper, ExportFunction.call, ExportFunction.destroy) catch |err| {
-        logger.log("Could not set extern fn '{s}': {t}", .{ name, err }, .err);
+        logger.log("Could not set extern fn '{s}': {s}", .{ name, @errorName(err) }, .err);
     };
 }
 

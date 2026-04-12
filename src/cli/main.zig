@@ -317,13 +317,13 @@ fn createModule(alloc: std.mem.Allocator, args: anytype) !*Module {
 
 fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
     var mod = createModule(alloc, args) catch |err| {
-        try print("Could not create module {t}\n", .{err});
+        try print("Could not create module: {s}\n", .{@errorName(err)});
         return if (args.verbose) err else {};
     };
     errdefer mod.deinit();
 
     var bytecode = mod.generateBytecode(alloc) catch |err| {
-        try print("Could not create bytecode {t}\n", .{err});
+        try print("Could not create bytecode: {s}\n", .{@errorName(err)});
         try writeErrors(mod);
         return if (args.verbose) err else {};
     };
@@ -482,13 +482,13 @@ fn fmtCommand(args: FmtArgs, alloc: std.mem.Allocator) !void {
 
 fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
     var mod = createModule(alloc, args) catch |err| {
-        try print("Could not create module {t}", .{err});
+        try print("Could not create module: {s}\n", .{@errorName(err)});
         return if (args.verbose) err else {};
     };
     errdefer mod.deinit();
 
     var bytecode = mod.generateBytecode(alloc) catch |err| {
-        try print("Could not create bytecode {t}", .{err});
+        try print("Could not create bytecode: {s}\n", .{@errorName(err)});
         try writeErrors(mod);
         return if (args.verbose) err else {};
     };

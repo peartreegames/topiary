@@ -48,7 +48,7 @@ pub const ExportLogger = struct {
     pub fn log(self: ExportLogger, comptime msg: []const u8, args: anytype, severity: Severity) void {
         if (@intFromEnum(severity) < @intFromEnum(self.severity)) return;
         const buf = std.fmt.allocPrint(self.allocator, msg, args) catch |err| {
-            std.log.err("Error fmt: {t}", .{err});
+            std.log.err("Error fmt: {s}", .{@errorName(err)});
             self.on_log(.{ .ptr = msg.ptr, .len = msg.len }, severity);
             return;
         };
