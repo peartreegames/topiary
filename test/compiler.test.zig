@@ -1786,3 +1786,36 @@ test "Compile Serialization" {
         try testing.expect(constant.eql(deserialized.constants[i]));
     }
 }
+
+test "Compile Serialization: class with collection fields" {
+    const input =
+        \\ class Thing {
+        \\     tags = Set{},
+        \\     items = List{"a", "b"},
+        \\     data = Map{"key": 42}
+        \\ }
+        \\ var t = new Thing{}
+    ;
+
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = try compileSource(input, mod);
+    defer bytecode.free(allocator);
+
+    var file = try std.fs.cwd().createFile("tmp_class_coll.topi.byte", .{ .read = true });
+    defer std.fs.cwd().deleteFile("tmp_class_coll.topi.byte") catch {};
+    defer file.close();
+    var buf: [1024]u8 = undefined;
+    var file_writer = file.writer(&buf);
+    _ = try bytecode.serialize(allocator, &file_writer.interface);
+
+    try file.seekTo(0);
+    var file_reader = file.reader(&buf);
+    const reader = &file_reader.interface;
+    var deserialized = try Bytecode.deserialize(allocator, reader);
+    defer deserialized.free(allocator);
+    try testing.expectEqualSlices(u8, bytecode.instructions, deserialized.instructions);
+    for (bytecode.constants, 0..) |constant, i| {
+        try testing.expect(constant.eql(deserialized.constants[i]));
+    }
+}

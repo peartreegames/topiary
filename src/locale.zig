@@ -235,12 +235,12 @@ pub const Locale = struct {
     const ExportContext = struct {
         writer: *std.Io.Writer,
 
-        pub const Error = error{WriteFailure};
+        pub const Error = error{ WriteFailure, MissingStamp };
 
         fn onLeaf(ctx: ExportContext, stmt: Statement) @This().Error!void {
             switch (stmt.type) {
                 .choice => |c| {
-                    if (c.id_token == null or UUID.isEmpty(c.id)) return error.WriteFailure;
+                    if (c.id_token == null or UUID.isEmpty(c.id)) return error.MissingStamp;
                     const str = c.content.type.string;
                     ctx.writer.print("\"{s}\",\"CHOICE\",", .{&c.id}) catch return error.WriteFailure;
                     writeCsvField(ctx.writer, str.raw) catch return error.WriteFailure;
@@ -249,7 +249,7 @@ pub const Locale = struct {
                     ctx.writer.writeAll("\n") catch return error.WriteFailure;
                 },
                 .dialogue => |d| {
-                    if (d.id_token == null or UUID.isEmpty(d.id)) return error.WriteFailure;
+                    if (d.id_token == null or UUID.isEmpty(d.id)) return error.MissingStamp;
                     const str = d.content.type.string;
                     ctx.writer.print("\"{s}\",\"{s}\",", .{ &d.id, d.speaker orelse "NONE" }) catch return error.WriteFailure;
                     writeCsvField(ctx.writer, str.raw) catch return error.WriteFailure;
@@ -266,7 +266,7 @@ pub const Locale = struct {
         writer: *std.Io.Writer,
         index: *const CsvIndex,
 
-        pub const Error = error{WriteFailure};
+        pub const Error = error{ WriteFailure, MissingStamp };
 
         fn onLeaf(ctx: MergeExportContext, stmt: Statement) @This().Error!void {
             const has_valid_source_id = switch (stmt.type) {
@@ -274,7 +274,7 @@ pub const Locale = struct {
                 .dialogue => |d| d.id_token != null and !UUID.isEmpty(d.id),
                 else => unreachable,
             };
-            if (!has_valid_source_id) return error.WriteFailure;
+            if (!has_valid_source_id) return error.MissingStamp;
 
             const id: UUID.ID = switch (stmt.type) {
                 .choice => |c| c.id,
@@ -527,7 +527,7 @@ pub const Locale = struct {
                 var file_buf: [1024]u8 = undefined;
                 var file_writer = out_file.writer(&file_buf);
                 const writer = &file_writer.interface;
-                try generate(allocator, content, col_idx,  writer);
+                try generate(allocator, content, col_idx, writer, null);
             }
         }
     }
@@ -542,18 +542,21 @@ pub const Locale = struct {
         missing_uuids: std.ArrayList(UUID.ID),
         extra_uuids: std.ArrayList(UUID.ID),
         missing_csv_files: std.ArrayList([]const u8),
+        blank_translations: std.ArrayList(UUID.ID),
 
         pub fn deinit(self: *GenerateResult) void {
             self.missing_uuids.deinit(self.allocator);
             self.extra_uuids.deinit(self.allocator);
             for (self.missing_csv_files.items) |path| self.allocator.free(path);
             self.missing_csv_files.deinit(self.allocator);
+            self.blank_translations.deinit(self.allocator);
         }
 
         pub fn hasWarnings(self: *const GenerateResult) bool {
             return self.missing_uuids.items.len > 0 or
                 self.extra_uuids.items.len > 0 or
-                self.missing_csv_files.items.len > 0;
+                self.missing_csv_files.items.len > 0 or
+                self.blank_translations.items.len > 0;
         }
     };
 
@@ -566,24 +569,32 @@ pub const Locale = struct {
         output_folder: []const u8,
         filter_lang: ?[]const u8,
         dry: bool,
+        error_writer: ?*std.Io.Writer,
     ) !GenerateResult {
         var result = GenerateResult{
             .allocator = allocator,
             .missing_uuids = .empty,
             .extra_uuids = .empty,
             .missing_csv_files = .empty,
+            .blank_translations = .empty,
         };
         errdefer result.deinit();
 
         // Phase 1: Resolve the module's include graph and parse all ASTs
         var mod = try Module.init(allocator, topi_path);
         defer mod.deinit();
-        try mod.resolveIncludes();
+        mod.resolveIncludes() catch |err| {
+            if (error_writer) |w| mod.writeErrors(w) catch {};
+            return err;
+        };
 
         // Build trees for all files
         var it = mod.includes.iterator();
         while (it.next()) |kvp| {
-            try kvp.value_ptr.*.buildTree();
+            kvp.value_ptr.*.buildTree() catch |err| {
+                if (error_writer) |w| mod.writeErrors(w) catch {};
+                return err;
+            };
         }
 
         // Phase 2: Collect all localizable UUIDs from the ASTs, tracking per-file counts
@@ -642,6 +653,7 @@ pub const Locale = struct {
                 header_written = true;
             } else if (expected_header) |eh| {
                 if (!std.mem.eql(u8, header, eh)) {
+                    if (error_writer) |w| w.print("Error: CSV header mismatch in {s}\n", .{csv_name}) catch {};
                     return error.MismatchedLanguageColumns;
                 }
             }
@@ -701,14 +713,14 @@ pub const Locale = struct {
                 var file_buf: [1024]u8 = undefined;
                 var file_writer = out_file.writer(&file_buf);
                 const writer = &file_writer.interface;
-                try generate(allocator, merged_content, col_idx, writer);
+                try generate(allocator, merged_content, col_idx, writer, &result.blank_translations);
             }
         }
 
         return result;
     }
 
-    pub fn generate(allocator: std.mem.Allocator, raw_content: []const u8, lang_col: usize, writer: *std.Io.Writer) !void {
+    pub fn generate(allocator: std.mem.Allocator, raw_content: []const u8, lang_col: usize, writer: *std.Io.Writer, blank_translations: ?*std.ArrayList(UUID.ID)) !void {
         const content = stripBom(raw_content);
         var pos: usize = 0;
         _ = nextCsvLine(content, &pos); // skip header
@@ -737,6 +749,12 @@ pub const Locale = struct {
             }
 
             if (id_str == null or target_val == null) continue;
+
+            if (target_val.?.len == 0) {
+                if (blank_translations) |bt| {
+                    try bt.append(allocator, UUID.fromString(id_str.?));
+                }
+            }
 
             const offset: u32 = @intCast(strings.items.len);
             // Unescape CSV double-quotes ("" → ")

@@ -705,16 +705,22 @@ pub const Vm = struct {
                     const index = self.takeInt(C.LOCAL);
                     const frame = self.currentFrame();
                     var value = try self.pop();
-                    const current = self.stack.items[frame.bp + index];
+                    const slot = frame.bp + index;
+                    if (slot >= self.stack.count)
+                        return self.fail("Internal error: local variable index {d} out of range (stack size {d}, base {d})", .{ index, self.stack.count, frame.bp });
+                    const current = self.stack.items[slot];
                     if (current == .enum_value and value == .enum_value and current.enum_value.base == value.enum_value.base and current.enum_value.base.data.@"enum".is_seq) {
                         if (current.enum_value.index > value.enum_value.index) value = current;
                     }
-                    self.stack.items[frame.bp + index] = value;
+                    self.stack.items[slot] = value;
                 },
                 .get_local => {
                     const index = self.takeInt(C.LOCAL);
                     const frame = self.currentFrame();
-                    const value = self.stack.items[frame.bp + index];
+                    const slot = frame.bp + index;
+                    if (slot >= self.stack.count)
+                        return self.fail("Internal error: local variable index {d} out of range (stack size {d}, base {d})", .{ index, self.stack.count, frame.bp });
+                    const value = self.stack.items[slot];
                     try self.push(value);
                 },
                 .set_property => {

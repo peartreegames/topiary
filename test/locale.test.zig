@@ -166,7 +166,7 @@ test "Localization CSV with BOM" {
 
     // Prepend UTF-8 BOM to valid CSV
     const bom_csv = "\xEF\xBB\xBF" ++ csv_output;
-    try Locale.generate(alloc, bom_csv, 3, writer);
+    try Locale.generate(alloc, bom_csv, 3, writer, null);
     const written = try allocating.toOwnedSlice();
 
     const lp = try LocaleProvider.init(alloc, "en", written);
@@ -187,7 +187,7 @@ test "Localization CSV with Embedded Newlines" {
         \\
     ++ "\"C5I6VN71-IP0HPJHE\",\"Stranger\",\"Line one.\nLine two.\",\"Line one.\nLine two.\"\n";
 
-    try Locale.generate(alloc, csv_with_newlines, 3, writer);
+    try Locale.generate(alloc, csv_with_newlines, 3, writer, null);
     const written = try allocating.toOwnedSlice();
 
     const lp = try LocaleProvider.init(alloc, "en", written);
@@ -206,7 +206,7 @@ test "Localization Generate and Provider" {
     const ids = &[_][]const u8{ "8R955KPX-2WI5R816", "C5I6VN71-IP0HPJHE", "JTCCIIS7-NHTNWTBL", "8T8YW3LX-RNGWJE68", "8LIQ3QJV-5U3AJJKV", "YPTY00G5-1WX98ONH", "AEPZ4SNT-UFN9U9YW", "S6MF4G1X-34IOPNOJ", "KPTQNK2P-69OMTGXF", };
     const texts = &[_][]const u8{ "A person approaches.", "Hey there.", "Greet them.", "Oh, uh, nice to meet you. My name is Drew.", "Sorry, I thought you were someone I knew.", "I'd love to stay and chat, but this is just a short demo.", "Say nothing.", "The person acts as though they were addressing someone else.", "They walk away... Counting down from {0}", };
 
-    try Locale.generate(alloc, csv_output, 3, writer);
+    try Locale.generate(alloc, csv_output, 3, writer, null);
     const written = try allocating.toOwnedSlice();
 
     const lp = try LocaleProvider.init(alloc, "en", written);
@@ -361,7 +361,7 @@ test "Localization Header Only CSV" {
         \\
     ;
 
-    try Locale.generate(alloc, header_only_csv, 3, writer);
+    try Locale.generate(alloc, header_only_csv, 3, writer, null);
     const written = try allocating.toOwnedSlice();
 
     const lp = try LocaleProvider.init(alloc, "en", written);
@@ -400,7 +400,7 @@ test "Localization VM Deinit Cleans Up Locale" {
     var allocating = std.Io.Writer.Allocating.init(alloc);
     const writer = &allocating.writer;
     defer allocating.deinit();
-    try Locale.generate(alloc, csv_output, 3, writer);
+    try Locale.generate(alloc, csv_output, 3, writer, null);
     const topil_data = try allocating.toOwnedSlice();
     defer alloc.free(topil_data);
 
@@ -472,7 +472,7 @@ test "Localization Generate From Module Single File" {
     const folder = try tmp_dir.dir.realpathAlloc(alloc, ".");
     defer alloc.free(folder);
 
-    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false);
+    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false, null);
     defer gen_result.deinit();
 
     try std.testing.expect(!gen_result.hasWarnings());
@@ -529,7 +529,7 @@ test "Localization Generate From Module With Include" {
     const folder = try tmp_dir.dir.realpathAlloc(alloc, ".");
     defer alloc.free(folder);
 
-    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false);
+    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false, null);
     defer gen_result.deinit();
 
     try std.testing.expect(!gen_result.hasWarnings());
@@ -581,7 +581,7 @@ test "Localization Generate From Module Missing CSV Warning" {
     const folder = try tmp_dir.dir.realpathAlloc(alloc, ".");
     defer alloc.free(folder);
 
-    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false);
+    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false, null);
     defer gen_result.deinit();
 
     // Should warn about missing CSV for shared.topi
@@ -626,7 +626,7 @@ test "Localization Generate From Module No CSV For Utility Include" {
     const folder = try tmp_dir.dir.realpathAlloc(alloc, ".");
     defer alloc.free(folder);
 
-    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false);
+    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false, null);
     defer gen_result.deinit();
 
     // No warnings — utils.topi has no localizable content, so missing CSV is fine
@@ -664,7 +664,7 @@ test "Localization Generate From Module Stale CSV Entries" {
     const folder = try tmp_dir.dir.realpathAlloc(alloc, ".");
     defer alloc.free(folder);
 
-    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false);
+    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false, null);
     defer gen_result.deinit();
 
     // Should report the stale UUID

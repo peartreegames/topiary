@@ -365,6 +365,27 @@ pub const Value = union(Type) {
                             try writer.writeAll(value);
                         }
                     },
+                    .list => |l| {
+                        try writer.writeInt(u16, @as(u16, @intCast(l.items.len)), .little);
+                        for (l.items) |item| {
+                            try item.serialize(writer);
+                        }
+                    },
+                    .set => |s| {
+                        const count = s.count();
+                        try writer.writeInt(u16, @as(u16, @intCast(count)), .little);
+                        for (s.keys()) |key| {
+                            try key.serialize(writer);
+                        }
+                    },
+                    .map => |m| {
+                        const count = m.count();
+                        try writer.writeInt(u16, @as(u16, @intCast(count)), .little);
+                        for (m.keys(), m.values()) |key, val| {
+                            try key.serialize(writer);
+                            try val.serialize(writer);
+                        }
+                    },
                     else => return error.InvalidConstant,
                 }
             },
@@ -541,6 +562,39 @@ pub const Value = union(Type) {
                             const value_name_buf = try reader.readAlloc(allocator, value_name_len);
                             obj.data.@"enum".values[i] = value_name_buf;
                         }
+                        return .{ .obj = obj };
+                    },
+                    .list => {
+                        const count = try reader.takeInt(u16, .little);
+                        var list = try std.ArrayList(Value).initCapacity(allocator, count);
+                        for (0..count) |_| {
+                            try list.append(allocator, try Value.deserializeDepth(reader, allocator, depth + 1));
+                        }
+                        const obj = try allocator.create(Value.Obj);
+                        obj.* = .{ .id = id, .data = .{ .list = list } };
+                        return .{ .obj = obj };
+                    },
+                    .set => {
+                        const count = try reader.takeInt(u16, .little);
+                        var set = Obj.SetType.empty;
+                        for (0..count) |_| {
+                            const key = try Value.deserializeDepth(reader, allocator, depth + 1);
+                            try set.put(allocator, key, {});
+                        }
+                        const obj = try allocator.create(Value.Obj);
+                        obj.* = .{ .id = id, .data = .{ .set = set } };
+                        return .{ .obj = obj };
+                    },
+                    .map => {
+                        const count = try reader.takeInt(u16, .little);
+                        var map = Obj.MapType.empty;
+                        for (0..count) |_| {
+                            const key = try Value.deserializeDepth(reader, allocator, depth + 1);
+                            const val = try Value.deserializeDepth(reader, allocator, depth + 1);
+                            try map.put(allocator, key, val);
+                        }
+                        const obj = try allocator.create(Value.Obj);
+                        obj.* = .{ .id = id, .data = .{ .map = map } };
                         return .{ .obj = obj };
                     },
                     else => return error.InvalidConstant,

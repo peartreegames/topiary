@@ -320,12 +320,19 @@ pub const Formatter = struct {
         try self.writeExpression(condition.*);
         try self.writeBody(then_branch);
         if (else_branch) |eb| {
+            const inline_then = isSingleLineBody(then_branch) and !self.sourceHasBraces(then_branch);
+            if (inline_then) {
+                try self.write("\n");
+                try self.writeIndent();
+            } else {
+                try self.write(" ");
+            }
             if (eb.len == 1 and eb[0].type == .@"if") {
                 const inner = eb[0].type.@"if";
-                try self.write(" else ");
+                try self.write("else ");
                 try self.writeIf(inner.condition, inner.then_branch, inner.else_branch);
             } else {
-                try self.write(" else");
+                try self.write("else");
                 try self.writeBody(eb);
             }
         }

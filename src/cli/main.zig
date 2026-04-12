@@ -538,7 +538,7 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
 
 fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
     const full_path = std.fs.cwd().realpathAlloc(alloc, args.file.?) catch |err| {
-        try print("Could not find file at {s}", .{args.file.?});
+        try print("Could not find file at {s}\n", .{args.file.?});
         return if (args.verbose) err else {};
     };
     switch (args.command) {
@@ -547,14 +547,18 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
             if (!args.dry) {
                 try std.fs.cwd().makePath(folder);
             }
+            var buffer: [128]u8 = undefined;
+            var w = std.fs.File.stdout().writer(&buffer);
+            const stdout = &w.interface;
             var gen_result = Locale.generateFromModule(
                 alloc,
                 full_path,
                 folder,
                 args.locale_key,
                 args.dry,
+                stdout,
             ) catch |err| {
-                try print("Error bundling localization: {}\n", .{err});
+                try print("Error bundling localization: {s}\n", .{@errorName(err)});
                 if (args.verbose) return err;
                 return;
             };
@@ -570,18 +574,37 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
             if (gen_result.extra_uuids.items.len > 0) {
                 try print("Warning: {d} UUID(s) in CSV but not in source (stale entries)\n", .{gen_result.extra_uuids.items.len});
             }
+            if (gen_result.blank_translations.items.len > 0) {
+                try print("Warning: {d} blank translation(s) in CSV\n", .{gen_result.blank_translations.items.len});
+            }
 
             if (args.dry) {
                 try print("Successfully generated localization.", .{});
             } else try print("Successfully generated localization into {s}\n", .{folder});
         },
         .@"export" => {
+            var mod = Module.init(alloc, full_path) catch |err| {
+                try print("Could not create module: {s}\n", .{@errorName(err)});
+                return if (args.verbose) err else {};
+            };
+            defer mod.deinit();
+            mod.entry.loadSource() catch |err| {
+                try print("Could not load source: {s}\n", .{@errorName(err)});
+                return if (args.verbose) err else {};
+            };
+            mod.entry.buildTree() catch |err| {
+                try writeErrors(mod);
+                return if (args.verbose) err else {};
+            };
+
             if (args.dry) {
                 var buffer: [128]u8 = undefined;
                 var writer = std.fs.File.stdout().writer(&buffer);
                 const stdout = &writer.interface;
-                Locale.exportFileAtPath(full_path, stdout, alloc, args.lang) catch |err| {
-                    if (args.verbose) return err;
+                Locale.exportFile(mod.entry, stdout, args.lang) catch |err| {
+                    if (err == error.MissingStamp) {
+                        try print("Export failed: dialogue(s) missing @UUID stamps. Run `topi fmt --stamp-only {s}` first.\n", .{args.file.?});
+                    } else if (args.verbose) return err;
                     return;
                 };
             } else {
@@ -608,14 +631,38 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                 var buffer: [1028]u8 = undefined;
                 var file_writer = file.writer(&buffer);
                 const writer = &file_writer.interface;
-                Locale.exportFileAtPathWithMerge(full_path, writer, alloc, args.lang, existing_csv) catch |err| {
-                    if (args.verbose) return err;
-                    return;
-                };
+                if (existing_csv) |csv| {
+                    Locale.exportFileWithMerge(mod.entry, writer, args.lang, csv, alloc) catch |err| {
+                        if (err == error.MissingStamp) {
+                            try print("Export failed: dialogue(s) missing @UUID stamps. Run `topi fmt --stamp-only {s}` first.\n", .{args.file.?});
+                        } else if (args.verbose) return err;
+                        return;
+                    };
+                } else {
+                    Locale.exportFile(mod.entry, writer, args.lang) catch |err| {
+                        if (err == error.MissingStamp) {
+                            try print("Export failed: dialogue(s) missing @UUID stamps. Run `topi fmt --stamp-only {s}` first.\n", .{args.file.?});
+                        } else if (args.verbose) return err;
+                        return;
+                    };
+                }
             }
         },
         .validate => {
-            const missing = Locale.checkFileAtPath(full_path, alloc) catch |err| {
+            var mod = Module.init(alloc, full_path) catch |err| {
+                try print("Could not create module: {s}\n", .{@errorName(err)});
+                return if (args.verbose) err else {};
+            };
+            defer mod.deinit();
+            mod.entry.loadSource() catch |err| {
+                try print("Could not load source: {s}\n", .{@errorName(err)});
+                return if (args.verbose) err else {};
+            };
+            mod.entry.buildTree() catch |err| {
+                try writeErrors(mod);
+                return if (args.verbose) err else {};
+            };
+            const missing = Locale.checkFile(mod.entry) catch |err| {
                 if (args.verbose) return err;
                 return;
             };
