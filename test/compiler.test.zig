@@ -1391,6 +1391,255 @@ test "Nested Boughs After Fork Do Not Warn" {
     }
 }
 
+test "Unreachable Code After Exhaustive If/Else" {
+    const inputs = .{
+        // Simple if/else where both branches return.
+        .{
+            .src =
+            \\ fn check |x| {
+            \\   if x > 0 {
+            \\     return 1
+            \\   } else {
+            \\     return 0
+            \\   }
+            \\   var y = 5
+            \\ }
+            \\ === START { :: "hi" }
+            ,
+            .keyword = "if",
+        },
+        // if/else where both branches divert.
+        .{
+            .src =
+            \\ === A { :: "a" }
+            \\ === B { :: "b" }
+            \\ === START {
+            \\   if true {
+            \\     => A
+            \\   } else {
+            \\     => B
+            \\   }
+            \\   :: "unreachable line"
+            \\ }
+            ,
+            .keyword = "if",
+        },
+        // Nested if/else: outer counts as exit only because both inner branches exit too.
+        .{
+            .src =
+            \\ fn nested |x, y| {
+            \\   if x > 0 {
+            \\     return 1
+            \\   } else {
+            \\     if y > 0 {
+            \\       return 2
+            \\     } else {
+            \\       return 3
+            \\     }
+            \\   }
+            \\   var z = 5
+            \\ }
+            \\ === START { :: "hi" }
+            ,
+            .keyword = "if",
+        },
+        // Then-branch exits via fin instead of return.
+        .{
+            .src =
+            \\ === START {
+            \\   if true {
+            \\     fin
+            \\   } else {
+            \\     fin
+            \\   }
+            \\   :: "unreachable"
+            \\ }
+            ,
+            .keyword = "if",
+        },
+    };
+    inline for (inputs) |case| {
+        var mod = try Module.initEmpty(allocator);
+        defer mod.deinit();
+        var bytecode = compileSource(case.src, mod) catch |err| {
+            for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+            return err;
+        };
+        defer bytecode.free(allocator);
+        var has_warning = false;
+        for (mod.errors.list.items) |e| {
+            if (e.severity == .warn and
+                std.mem.indexOf(u8, e.fmt, "Unreachable") != null and
+                std.mem.indexOf(u8, e.fmt, case.keyword) != null) has_warning = true;
+        }
+        try testing.expect(has_warning);
+    }
+}
+
+test "If Without Else Does Not Warn" {
+    // No else branch — the if can fall through, so following code is reachable.
+    const input =
+        \\ fn check |x| {
+        \\   if x > 0 {
+        \\     return 1
+        \\   }
+        \\   return 0
+        \\ }
+        \\ === START { :: "hi" }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = compileSource(input, mod) catch |err| {
+        for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+        return err;
+    };
+    defer bytecode.free(allocator);
+    for (mod.errors.list.items) |e| {
+        if (e.severity == .warn) {
+            try testing.expect(std.mem.indexOf(u8, e.fmt, "Unreachable") == null);
+        }
+    }
+}
+
+test "If With Non-Exiting Else Does Not Warn" {
+    // Then branch exits but else falls through — code after the if is reachable.
+    const input =
+        \\ fn check |x| {
+        \\   if x > 0 {
+        \\     return 1
+        \\   } else {
+        \\     var y = 5
+        \\   }
+        \\   return 0
+        \\ }
+        \\ === START { :: "hi" }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = compileSource(input, mod) catch |err| {
+        for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+        return err;
+    };
+    defer bytecode.free(allocator);
+    for (mod.errors.list.items) |e| {
+        if (e.severity == .warn) {
+            try testing.expect(std.mem.indexOf(u8, e.fmt, "Unreachable") == null);
+        }
+    }
+}
+
+test "Unreachable Code After Exhaustive Switch With Else" {
+    const input =
+        \\ fn classify |x| {
+        \\   switch x {
+        \\     0: return 0,
+        \\     1: return 1,
+        \\     else: return -1
+        \\   }
+        \\   var y = 5
+        \\ }
+        \\ === START { :: "hi" }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = compileSource(input, mod) catch |err| {
+        for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+        return err;
+    };
+    defer bytecode.free(allocator);
+    var has_warning = false;
+    for (mod.errors.list.items) |e| {
+        if (e.severity == .warn and
+            std.mem.indexOf(u8, e.fmt, "Unreachable") != null and
+            std.mem.indexOf(u8, e.fmt, "switch") != null) has_warning = true;
+    }
+    try testing.expect(has_warning);
+}
+
+test "Switch Without Explicit Else Does Not Warn" {
+    // No explicit else: an unmatched value falls through, so following code is reachable.
+    const input =
+        \\ fn classify |x| {
+        \\   switch x {
+        \\     0: return 0,
+        \\     1: return 1
+        \\   }
+        \\   return -1
+        \\ }
+        \\ === START { :: "hi" }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = compileSource(input, mod) catch |err| {
+        for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+        return err;
+    };
+    defer bytecode.free(allocator);
+    for (mod.errors.list.items) |e| {
+        if (e.severity == .warn) {
+            try testing.expect(std.mem.indexOf(u8, e.fmt, "Unreachable") == null);
+        }
+    }
+}
+
+test "Switch With Non-Exiting Else Does Not Warn" {
+    // Else prong falls through, so following code is reachable.
+    const input =
+        \\ fn classify |x| {
+        \\   switch x {
+        \\     0: return 0,
+        \\     1: return 1,
+        \\     else: { var y = 5 }
+        \\   }
+        \\   return -1
+        \\ }
+        \\ === START { :: "hi" }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = compileSource(input, mod) catch |err| {
+        for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+        return err;
+    };
+    defer bytecode.free(allocator);
+    for (mod.errors.list.items) |e| {
+        if (e.severity == .warn) {
+            try testing.expect(std.mem.indexOf(u8, e.fmt, "Unreachable") == null);
+        }
+    }
+}
+
+test "Choice With Exhaustive If/Else Does Not Warn About Silent End" {
+    // Side-effect of the new analysis: a choice body whose final statement is
+    // an exhaustive if/else where every branch diverts no longer trips the
+    // "choice has no divert or 'fin'" warning.
+    const input =
+        \\ === A { :: "a" }
+        \\ === B { :: "b" }
+        \\ === START {
+        \\   fork {
+        \\     ~ "Pick" {
+        \\       if true {
+        \\         => A
+        \\       } else {
+        \\         => B
+        \\       }
+        \\     }
+        \\   }
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = compileSource(input, mod) catch |err| {
+        for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+        return err;
+    };
+    defer bytecode.free(allocator);
+    for (mod.errors.list.items) |e| {
+        try testing.expect(std.mem.indexOf(u8, e.fmt, "end silently") == null);
+    }
+}
+
 test "Compile Enums Error" {
     const tests = .{
         \\ enum TimeOfDay {

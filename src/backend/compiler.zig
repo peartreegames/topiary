@@ -960,7 +960,7 @@ pub const Compiler = struct {
                     for (f.body) |body_stmt| {
                         if (body_stmt.type == .choice) {
                             const choice = body_stmt.type.choice;
-                            if (!blockHasExit(choice.body)) {
+                            if (!blockExits(choice.body)) {
                                 try self.warnWithHelp(
                                     "choice has no divert or 'fin' — execution will end silently after this choice",
                                     body_stmt.token,
@@ -1381,7 +1381,7 @@ pub const Compiler = struct {
     pub fn compileBlock(self: *Compiler, stmts: []const Statement) Error!void {
         var exited_at: ?usize = null;
         for (stmts, 0..) |stmt, i| {
-            if (exited_at == null and isUnconditionalExit(stmt)) {
+            if (exited_at == null and statementExits(stmt)) {
                 exited_at = i;
             }
             try self.compileStatement(stmt);
@@ -1391,12 +1391,18 @@ pub const Compiler = struct {
             // declarations are independent entry points, not sequential code.
             for (stmts[i + 1 ..]) |next| {
                 if (next.type != .bough) {
+                    const exit_stmt = stmts[i];
+                    const note: ?[]const u8 = switch (exit_stmt.type) {
+                        .@"if" => try self.alloc.dupe(u8, "all branches of this 'if' exit"),
+                        .@"switch" => try self.alloc.dupe(u8, "all prongs of this 'switch' exit"),
+                        else => null,
+                    };
                     try self.warnWithHelp(
                         "Unreachable code after '{s}'",
                         next.token,
-                        .{exitKeyword(stmts[i])},
+                        .{exitKeyword(exit_stmt)},
                         null,
-                        null,
+                        note,
                     );
                     break;
                 }
@@ -1404,13 +1410,27 @@ pub const Compiler = struct {
         }
     }
 
-    fn isUnconditionalExit(stmt: Statement) bool {
+    fn statementExits(stmt: Statement) bool {
         return switch (stmt.type) {
             .return_expression, .return_void, .fin => true,
             .fork => |f| !f.is_backup,
             .divert => |d| !d.is_backup,
+            .@"if" => |i| i.else_branch != null and
+                blockExits(i.then_branch) and
+                blockExits(i.else_branch.?),
+            .@"switch" => |s| switchAlwaysExits(s.prongs),
             else => false,
         };
+    }
+
+    fn switchAlwaysExits(prongs: []const Statement) bool {
+        var has_explicit_else = false;
+        for (prongs) |prong_stmt| {
+            const prong = prong_stmt.type.switch_prong;
+            if (prong.values == null) has_explicit_else = true;
+            if (!blockExits(prong.body)) return false;
+        }
+        return has_explicit_else;
     }
 
     fn exitKeyword(stmt: Statement) []const u8 {
@@ -1419,13 +1439,15 @@ pub const Compiler = struct {
             .fin => "fin",
             .divert => "divert",
             .fork => "fork",
+            .@"if" => "if",
+            .@"switch" => "switch",
             else => "",
         };
     }
 
-    fn blockHasExit(body: []const Statement) bool {
+    fn blockExits(body: []const Statement) bool {
         for (body) |stmt| {
-            if (isUnconditionalExit(stmt)) return true;
+            if (statementExits(stmt)) return true;
         }
         return false;
     }
