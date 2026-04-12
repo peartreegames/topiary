@@ -222,6 +222,15 @@ pub const Parser = struct {
         const start = self.current_token;
         self.next();
 
+        if (!self.currentIs(.string)) {
+            return self.failSpan(
+                "'include' must be followed by a file path string",
+                start,
+                self.current_token,
+                .{},
+            );
+        }
+
         const path_token = self.current_token;
         const path = try self.getStringValue();
 

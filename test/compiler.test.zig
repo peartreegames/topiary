@@ -1240,6 +1240,78 @@ test "Circular Include Error" {
     try testing.expect(has_cycle);
 }
 
+test "Malformed Include Error" {
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    const arena_alloc = mod.arena.allocator();
+    const file = try arena_alloc.create(File);
+    file.* = .{
+        .path = "test.topi",
+        .name = "test.topi",
+        .dir_name = ".",
+        .source = "include foo\n=== START { :: \"hello\" }",
+        .module = mod,
+    };
+    mod.entry = file;
+    try mod.includes.putNoClobber(file.path, file);
+
+    const res = mod.generateBytecode(allocator);
+    if (res) |*bc| {
+        var b = bc.*;
+        b.free(allocator);
+    } else |_| {}
+
+    var has_malformed = false;
+    for (mod.errors.list.items) |e| {
+        if (std.mem.indexOf(u8, e.fmt, "'include' must be followed by a file path string") != null)
+            has_malformed = true;
+    }
+    try testing.expect(has_malformed);
+}
+
+test "Missing Include File Error" {
+    // Create a temp directory with an entry file that includes a non-existent file.
+    const tmp_dir = "/tmp/topiary_test_missing_include";
+    std.fs.cwd().deleteTree(tmp_dir) catch {};
+    try std.fs.cwd().makePath(tmp_dir);
+    defer std.fs.cwd().deleteTree(tmp_dir) catch {};
+
+    // Write entry file
+    {
+        var f = try std.fs.cwd().createFile(tmp_dir ++ "/entry.topi", .{});
+        defer f.close();
+        try f.writeAll("include \"missing.topi\"\n=== START { :: \"hello\" }");
+    }
+    // Write a similarly-named file for did-you-mean
+    {
+        var f = try std.fs.cwd().createFile(tmp_dir ++ "/mising.topi", .{});
+        defer f.close();
+        try f.writeAll("// placeholder");
+    }
+
+    var mod = try Module.init(allocator, tmp_dir ++ "/entry.topi");
+    defer mod.deinit();
+
+    const res = mod.generateBytecode(allocator);
+    if (res) |*bc| {
+        var b = bc.*;
+        b.free(allocator);
+    } else |_| {}
+
+    var has_not_found = false;
+    var has_suggestion = false;
+    for (mod.errors.list.items) |e| {
+        if (std.mem.indexOf(u8, e.fmt, "not found") != null)
+            has_not_found = true;
+        if (e.suggestion) |s| {
+            if (std.mem.indexOf(u8, s, "did you mean") != null)
+                has_suggestion = true;
+        }
+    }
+    try testing.expect(has_not_found);
+    try testing.expect(has_suggestion);
+}
+
 test "Unreachable Code Warning - Backup Divert Does Not Fire Warning" {
     const input =
         \\ === OTHER {

@@ -10,6 +10,7 @@ const backend = @import("backend/index.zig");
 const Bytecode = backend.Bytecode;
 const Compiler = backend.Compiler;
 const CompilerErrors = backend.CompilerErrors;
+const suggest = backend.suggest;
 
 const fs = std.fs;
 
@@ -123,6 +124,7 @@ pub const Module = struct {
     /// the offending include directive.
     pub fn resolveIncludes(self: *Module) !void {
         const alloc = self.arena.allocator();
+        try self.entry.loadSource();
         var chain: std.ArrayList([]const u8) = .empty;
         defer chain.deinit(alloc);
         var visited = std.StringHashMap(void).init(alloc);
@@ -137,7 +139,6 @@ pub const Module = struct {
         visited: *std.StringHashMap(void),
     ) !void {
         if (visited.contains(file.path)) return;
-        try file.loadSource();
 
         const alloc = self.arena.allocator();
         try chain.append(alloc, file.path);
@@ -160,6 +161,13 @@ pub const Module = struct {
                 continue;
             }
             const child = try self.addFileAtPath(resolved);
+            child.loadSource() catch |e| switch (e) {
+                error.FileNotFound => {
+                    try self.addMissingIncludeError(file, inc, resolved);
+                    continue;
+                },
+                else => return e,
+            };
             try self.resolveIncludesRec(child, chain, visited);
         }
         try visited.put(file.path, {});
@@ -207,6 +215,68 @@ pub const Module = struct {
         );
     }
 
+    fn addMissingIncludeError(
+        self: *Module,
+        parent_file: *File,
+        inc: IncludeDirective,
+        resolved_path: []const u8,
+    ) !void {
+        const suggestion = try self.suggestIncludeFile(inc.path, resolved_path);
+
+        const note = try self.allocator.dupe(
+            u8,
+            "include paths are resolved relative to the file containing the directive",
+        );
+        try self.errors.addWithHelp(
+            parent_file.path,
+            "Include file '{s}' not found",
+            inc.token,
+            .err,
+            .{std.fs.path.basename(resolved_path)},
+            suggestion,
+            note,
+        );
+    }
+
+    /// List sibling .topi files in the directory of the missing include
+    /// and return a did-you-mean suggestion if one is close enough.
+    fn suggestIncludeFile(self: *Module, raw_path: []const u8, resolved_path: []const u8) !?[]const u8 {
+        const alloc = self.arena.allocator();
+        const basename = std.fs.path.basename(resolved_path);
+        const dirname = std.fs.path.dirname(resolved_path);
+
+        var dir = if (dirname) |dn|
+            self.dir.openDir(dn, .{ .iterate = true }) catch return null
+        else
+            self.dir.openDir(".", .{ .iterate = true }) catch return null;
+        defer dir.close();
+
+        var names: std.ArrayList([]const u8) = .empty;
+        defer {
+            for (names.items) |n| alloc.free(n);
+            names.deinit(alloc);
+        }
+
+        var iter = dir.iterate();
+        while (iter.next() catch return null) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.name, ".topi")) continue;
+            try names.append(alloc, try alloc.dupe(u8, entry.name));
+        }
+
+        const match = try suggest.closest(self.allocator, basename, names.items) orelse return null;
+        defer self.allocator.free(match);
+
+        // Reconstruct the suggestion using the user's original directory prefix
+        const raw_dir = std.fs.path.dirname(raw_path);
+        if (raw_dir) |rd| {
+            if (rd.len > 0) {
+                return try std.fmt.allocPrint(self.allocator, "did you mean '{s}/{s}'?", .{ rd, match });
+            }
+        }
+        return try std.fmt.allocPrint(self.allocator, "did you mean '{s}'?", .{match});
+    }
+
     /// Lightweight lexer scan that finds all include "path" patterns
     /// without doing a full parse. Returns the raw path text alongside
     /// the include directive's token so diagnostics can point at the line.
@@ -226,6 +296,15 @@ pub const Module = struct {
                         .path = source[next_tok.start..next_tok.end],
                         .token = tok,
                     });
+                } else {
+                    try self.errors.addSpan(
+                        file.path,
+                        "'include' must be followed by a file path string",
+                        tok,
+                        next_tok,
+                        .err,
+                        .{},
+                    );
                 }
             }
         }
@@ -316,7 +395,11 @@ pub const File = struct {
 
     pub fn buildTree(self: *File) !void {
         if (self.tree != null) return;
-        const source = self.source orelse return error.ParserError;
+        const source = self.source orelse {
+            // Missing file — already reported during include resolution.
+            self.tree = Tree{ .root = &.{} };
+            return;
+        };
         var lexer = Lexer.init(source, 0);
         const alloc = self.module.arena.allocator();
         const file_index = self.module.includes.getIndex(self.path) orelse 0;
