@@ -205,7 +205,6 @@ pub const Bytecode = struct {
             switch (op) {
                 .jump,
                 .jump_if_false,
-                .backup,
                 .decl_global,
                 .set_global,
                 .get_global,
@@ -214,6 +213,13 @@ pub const Bytecode = struct {
                     const dest = std.mem.readVarInt(C.GLOBAL, instructions[i..(i + 4)], .little);
                     try writer.print("{d: >8}", .{dest});
                     i += 4;
+                },
+                .backup => {
+                    const dest = std.mem.readVarInt(C.GLOBAL, instructions[i..(i + 4)], .little);
+                    i += 4;
+                    const is_fork = instructions[i] == 1;
+                    i += 1;
+                    try writer.print("{d: >8} {s}", .{ dest, if (is_fork) "fork" else "divert" });
                 },
                 .divert => {
                     const dest = std.mem.readVarInt(C.JUMP, instructions[i..(i + 4)], .little);

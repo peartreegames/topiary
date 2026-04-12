@@ -70,7 +70,7 @@ pub const Snapshot = struct {
     ip: usize,
 
     // Jump-control stacks (slices of integers)
-    jump_backups: []C.JUMP,
+    jump_backups: []Vm.Backup,
     jump_requests: []C.JUMP,
     anchor_stack: []C.CONSTANT,
 
@@ -165,7 +165,7 @@ pub const Snapshot = struct {
         }
 
         // Jump-control stacks
-        const jump_backups = try vm.alloc.dupe(C.JUMP, vm.jump_backups.items);
+        const jump_backups = try vm.alloc.dupe(Vm.Backup, vm.jump_backups.items);
         errdefer vm.alloc.free(jump_backups);
         const jump_requests = try vm.alloc.dupe(C.JUMP, vm.jump_requests.items);
         errdefer vm.alloc.free(jump_requests);

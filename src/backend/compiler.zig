@@ -977,6 +977,7 @@ pub const Compiler = struct {
                 if (f.is_backup) {
                     try self.writeOp(.backup, token);
                     backup_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
+                    _ = try self.writeInt(u8, 1, token); // 1 = fork backup
                 }
                 try self.writeOp(.fork, token);
                 const end_pos = self.instructionPos();
@@ -1112,6 +1113,7 @@ pub const Compiler = struct {
                 if (d.is_backup) {
                     try self.writeOp(.backup, token);
                     const backup_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
+                    _ = try self.writeInt(u8, 0, token); // 0 = divert backup
                     try self.writeOp(.divert, token);
                     _ = try self.writeInt(C.CONSTANT, anchor_idx, token);
                     try self.replaceValue(backup_pos, C.JUMP, self.instructionPos());

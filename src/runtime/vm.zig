@@ -64,7 +64,7 @@ pub const Vm = struct {
     /// Current iterators to allow easy nesting
     iterators: Stack(Iterator),
     /// List of positions to jump back to using `^`
-    jump_backups: std.ArrayList(C.JUMP) = .empty,
+    jump_backups: std.ArrayList(Backup) = .empty,
     /// Used to ensure preceding code is executed before arriving at Bough
     jump_requests: std.ArrayList(C.JUMP) = .empty,
     anchor_stack: std.ArrayList(C.CONSTANT) = .empty,
@@ -107,6 +107,12 @@ pub const Vm = struct {
         InvalidChoice,
         Uninitialized,
     } || Compiler.Error;
+
+    pub const Backup = struct {
+        ip: C.JUMP,
+        anchor_depth: usize,
+        is_fork: bool,
+    };
 
     /// Initialize Vm
     pub fn init(allocator: std.mem.Allocator, bytecode: Bytecode, runner: anytype) !Vm {
@@ -1231,12 +1237,13 @@ pub const Vm = struct {
                 },
                 .backup => {
                     const ip = self.takeInt(C.JUMP);
+                    const is_fork_backup = self.takeInt(u8) == 1;
                     if (is_in_jump) continue;
-                    if (self.jump_backups.items.len > 0 and self.jump_backups.getLast() == ip) {
-                        _ = try self.pop();
-                        continue;
-                    }
-                    try self.jump_backups.append(self.alloc, ip);
+                    try self.jump_backups.append(self.alloc, .{
+                        .ip = ip,
+                        .anchor_depth = self.anchor_stack.items.len,
+                        .is_fork = is_fork_backup,
+                    });
                 },
                 .end => {
                     if (self.anchor_stack.items.len > 0) {
@@ -1248,7 +1255,7 @@ pub const Vm = struct {
                         continue;
                     }
                     if (self.jump_backups.pop()) |backup| {
-                        self.currentFrame().ip = backup;
+                        self.currentFrame().ip = backup.ip;
                         continue;
                     }
                     self.end();
@@ -1279,9 +1286,13 @@ pub const Vm = struct {
         while (current_idx) |idx| {
             // If this is an ancestor (not the target itself) and it's already active,
             // we stop climbing because the environment for the target is already set up.
+            // Trim any backups from scopes deeper than this ancestor.
             if (!is_target) {
-                for (self.anchor_stack.items) |active_idx| {
-                    if (active_idx == idx) return;
+                for (self.anchor_stack.items, 0..) |active_idx, i| {
+                    if (active_idx == idx) {
+                        self.trimForkBackups(i);
+                        return;
+                    }
                 }
             }
 
@@ -1291,10 +1302,13 @@ pub const Vm = struct {
             // If the target itself is already in the stack, we still want to
             // jump to its IP, but we should treat it as "leaving" and "re-entering".
             // We pop it from the anchor_stack so the visit logic treats it as a fresh arrival.
+            // Also trim any fork^ backups from scopes being exited (but keep
+            // =>^ backups, which are explicit return points that must survive).
             if (is_target) {
                 for (self.anchor_stack.items, 0..) |active_idx, i| {
                     if (active_idx == idx) {
                         self.anchor_stack.shrinkRetainingCapacity(i);
+                        self.trimForkBackups(i);
                         break;
                     }
                 }
@@ -1302,6 +1316,17 @@ pub const Vm = struct {
 
             current_idx = anchor.parent_anchor_index;
             is_target = false;
+        }
+    }
+
+    /// Remove fork^ backups that belong to scopes deeper than `depth`.
+    /// Divert backups (=>^) are kept — they are explicit return points.
+    fn trimForkBackups(self: *Vm, depth: usize) void {
+        while (self.jump_backups.items.len > 0) {
+            const last = self.jump_backups.getLast();
+            if (last.is_fork and last.anchor_depth > depth) {
+                _ = self.jump_backups.pop();
+            } else break;
         }
     }
 
