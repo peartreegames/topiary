@@ -220,6 +220,18 @@ pub const Locale = struct {
         }
     };
 
+    fn writeCsvField(writer: *std.Io.Writer, value: []const u8) error{WriteFailure}!void {
+        writer.writeByte('"') catch return error.WriteFailure;
+        for (value) |byte| {
+            if (byte == '"') {
+                writer.writeAll("\"\"") catch return error.WriteFailure;
+            } else {
+                writer.writeByte(byte) catch return error.WriteFailure;
+            }
+        }
+        writer.writeByte('"') catch return error.WriteFailure;
+    }
+
     const ExportContext = struct {
         writer: *std.Io.Writer,
 
@@ -230,12 +242,20 @@ pub const Locale = struct {
                 .choice => |c| {
                     if (c.id_token == null or UUID.isEmpty(c.id)) return error.WriteFailure;
                     const str = c.content.type.string;
-                    ctx.writer.print("\"{s}\",\"CHOICE\",\"{s}\",\"{s}\"\n", .{ &c.id, str.raw, str.value }) catch return error.WriteFailure;
+                    ctx.writer.print("\"{s}\",\"CHOICE\",", .{&c.id}) catch return error.WriteFailure;
+                    writeCsvField(ctx.writer, str.raw) catch return error.WriteFailure;
+                    ctx.writer.writeAll(",") catch return error.WriteFailure;
+                    writeCsvField(ctx.writer, str.value) catch return error.WriteFailure;
+                    ctx.writer.writeAll("\n") catch return error.WriteFailure;
                 },
                 .dialogue => |d| {
                     if (d.id_token == null or UUID.isEmpty(d.id)) return error.WriteFailure;
                     const str = d.content.type.string;
-                    ctx.writer.print("\"{s}\",\"{s}\",\"{s}\",\"{s}\"\n", .{ &d.id, d.speaker orelse "NONE", str.raw, str.value }) catch return error.WriteFailure;
+                    ctx.writer.print("\"{s}\",\"{s}\",", .{ &d.id, d.speaker orelse "NONE" }) catch return error.WriteFailure;
+                    writeCsvField(ctx.writer, str.raw) catch return error.WriteFailure;
+                    ctx.writer.writeAll(",") catch return error.WriteFailure;
+                    writeCsvField(ctx.writer, str.value) catch return error.WriteFailure;
+                    ctx.writer.writeAll("\n") catch return error.WriteFailure;
                 },
                 else => unreachable,
             }
@@ -265,11 +285,17 @@ pub const Locale = struct {
             switch (stmt.type) {
                 .choice => |c| {
                     const str = c.content.type.string;
-                    ctx.writer.print("\"{s}\",\"CHOICE\",\"{s}\",\"{s}\"", .{ &c.id, str.raw, str.value }) catch return error.WriteFailure;
+                    ctx.writer.print("\"{s}\",\"CHOICE\",", .{&c.id}) catch return error.WriteFailure;
+                    writeCsvField(ctx.writer, str.raw) catch return error.WriteFailure;
+                    ctx.writer.writeAll(",") catch return error.WriteFailure;
+                    writeCsvField(ctx.writer, str.value) catch return error.WriteFailure;
                 },
                 .dialogue => |d| {
                     const str = d.content.type.string;
-                    ctx.writer.print("\"{s}\",\"{s}\",\"{s}\",\"{s}\"", .{ &d.id, d.speaker orelse "NONE", str.raw, str.value }) catch return error.WriteFailure;
+                    ctx.writer.print("\"{s}\",\"{s}\",", .{ &d.id, d.speaker orelse "NONE" }) catch return error.WriteFailure;
+                    writeCsvField(ctx.writer, str.raw) catch return error.WriteFailure;
+                    ctx.writer.writeAll(",") catch return error.WriteFailure;
+                    writeCsvField(ctx.writer, str.value) catch return error.WriteFailure;
                 },
                 else => unreachable,
             }

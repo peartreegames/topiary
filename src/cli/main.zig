@@ -66,6 +66,7 @@ fn usage(comptime msg: []const u8) !void {
     try print("   topi loc export <file>        Export dialogue localization to csv\n", .{});
     try print("       -d, --dry                     Do not write to file on end\n", .{});
     try print("       -l, --lang <lang>             Base language column name (default: en)\n", .{});
+    try print("           --no-merge                Overwrite existing csv instead of merging\n", .{});
     try print("       -o, --output <file>           Write to file on end\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi loc generate <file>      Export dialogue csv to topil files\n", .{});
@@ -144,6 +145,7 @@ const LocalizeArgs = struct {
     locale_key: ?[]const u8 = null,
     output: ?[]const u8 = null,
     dry: bool = false,
+    no_merge: bool = false,
     verbose: bool = false,
     const LocCommand = enum {
         @"export",
@@ -165,6 +167,8 @@ const LocalizeArgs = struct {
                 self.locale_key = iter.next();
             } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--dry")) {
                 self.dry = true;
+            } else if (std.mem.eql(u8, arg, "--no-merge")) {
+                self.no_merge = true;
             } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
                 self.verbose = true;
             } else self.file = arg;
@@ -590,8 +594,8 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                     try dir.makePath(dir_name);
                 }
 
-                // Read existing CSV before truncating for merge
-                const existing_csv: ?[]const u8 = blk: {
+                // Read existing CSV before truncating for merge (unless --no-merge)
+                const existing_csv: ?[]const u8 = if (args.no_merge) null else blk: {
                     const existing = dir.openFile(args.output.?, .{}) catch break :blk null;
                     defer existing.close();
                     break :blk existing.readToEndAlloc(alloc, std.math.maxInt(u32)) catch null;

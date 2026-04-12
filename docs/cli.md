@@ -15,24 +15,31 @@ Usage:
        -b, --bough <name>            Starting bough
        -k, --locale-key-file <file>  Localization key file
        -l, --load <file>             Read save from file on start
+       -r, --rewind                  Enable rewind/redo at choice prompts (debug)
        -s, --save <file>             Write save to file on end
        -v, --verbose
    topi test <file> <count>      Run dialogue <count> times, selecting random choices
+       -b, --bough <name>            Starting bough
        -q, --quiet                   Do not output visit tree on end
        -v, --verbose
    topi fmt <file>               Format source file
        -d, --dry                     Print to stdout instead of writing
        -i, --indent <n>              Spaces per indent level (default: 4)
+       --stamp                       Also insert @UUID tokens for unstamped nodes
+       --stamp-only                  Insert @UUID tokens without reformatting
        -v, --verbose
    topi compile <file>           Compile dialogue to bytecode
        -d, --dry                     Do not write to file on end
        -o, --output <file>           Write to file on end
+       -t, --time                    Print compile phase timings
        -v, --verbose
-   topi loc validate <file>      Validate dialogue localization ids
+   topi loc validate <file>      Check for missing localization ids
        -d, --dry                     Do not write to file on end
        -v, --verbose
    topi loc export <file>        Export dialogue localization to csv
        -d, --dry                     Do not write to file on end
+       -l, --lang <lang>             Base language column name (default: en)
+           --no-merge                Overwrite existing csv instead of merging
        -o, --output <file>           Write to file on end
        -v, --verbose
    topi loc generate <file>      Export dialogue csv to topil files

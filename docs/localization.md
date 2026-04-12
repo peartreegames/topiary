@@ -70,8 +70,8 @@ finds the sibling `.csv` for each included file, validates UUIDs, and
 merges everything into one `.topil` per language:
 
 ```bash
-topi loc generate story.topi --folder locales/           # all languages
-topi loc generate story.topi --folder locales/ -k fr_FR  # single language
+topi loc generate story.topi --folder story.locales/           # all languages
+topi loc generate story.topi --folder story.locales/ -k fr_FR  # single language
 ```
 
 The generated `.topil` file contains translations from all included files,
@@ -91,7 +91,7 @@ warns about mismatches:
 Pass a `.topil` file when running:
 
 ```bash
-topi run story.topi --locale-key-file locales/story.fr_FR.topil
+topi run story.topi --locale-key-file story.locales/story.fr_FR.topil
 ```
 
 For game engine integration, use `vm.setLocale(path)` or `vm.setLocaleFromBuffer(key, buffer)`
@@ -117,13 +117,13 @@ Example project layout:
 game/
   story.topi              # entry file
   story.topi.csv          # translations for story.topi
+  story.locales/
+    story.en.topil        # generated: merged from all CSVs
+    story.fr_FR.topil     # generated: merged from all CSVs
   shared/
     greetings.topi        # included by story.topi
     greetings.topi.csv    # translations for greetings.topi
     utils.topi            # utility functions, no dialogue — no CSV needed
-  locales/
-    story.en.topil        # generated: merged from all CSVs
-    story.fr_FR.topil     # generated: merged from all CSVs
 ```
 
 ## Writing for Localization

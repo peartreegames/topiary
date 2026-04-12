@@ -4,7 +4,14 @@ Little endianness
 
 ## Header
 
-Starting Positions of each Section (u64, little endian)
+| Name     | Type   | Description                          |
+|----------|--------|--------------------------------------|
+| Magic    | u8[4]  | `"TPBC"`                             |
+| Version  | u16    | Currently `2`                        |
+| Reserved | u16    | Always `0`                           |
+| Offsets  | u64[4] | Starting positions of each section   |
+
+Section offset indices:
 
 | Name                          | Section Index |
 |-------------------------------|---------------|
@@ -28,6 +35,7 @@ Starting Positions of each Section (u64, little endian)
 | Name       | u8[Length] |
 | Index      | u32        |
 | Is Mutable | u8         |
+| UUID       | u8[17]     |
 
 ## Constants
 
@@ -219,7 +227,7 @@ Used for `Object.Type`:
 
 | Name  | Type                            |
 |-------|---------------------------------|
-| Count | u16                             |
+| Count | u32                             |
 | Info  | [Debug Item](#DebugItem)[Count] |
 
 ### DebugItem
