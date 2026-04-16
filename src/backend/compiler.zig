@@ -99,14 +99,24 @@ pub const Compiler = struct {
 
         pub fn debugInfo(self: *Chunk, allocator: std.mem.Allocator) ![]DebugInfo {
             var infos: std.ArrayList(DebugInfo) = .empty;
-            defer infos.deinit(allocator);
-            if (self.debug_markers.items.len == 0) return infos.toOwnedSlice(self.alloc);
+            // `infos.deinit` only frees the list backing — each DebugInfo
+            // owns its `file` dupe and `ranges`, so deinit them individually.
+            errdefer {
+                for (infos.items) |*di| di.deinit();
+                infos.deinit(allocator);
+            }
+            if (self.debug_markers.items.len == 0) {
+                infos.deinit(allocator);
+                return &.{};
+            }
             var file_index = self.debug_markers.items[0].file_index;
             var line = self.debug_markers.items[0].line;
             var start: u32 = 0;
-            var file_name = try allocator.dupe(u8, std.fs.path.basename(self.module.includes.keys()[file_index]));
-
-            try infos.append(allocator, DebugInfo.init(allocator, file_name));
+            const initial_name = try allocator.dupe(u8, std.fs.path.basename(self.module.includes.keys()[file_index]));
+            {
+                errdefer allocator.free(initial_name);
+                try infos.append(allocator, DebugInfo.init(allocator, initial_name));
+            }
             var info: *DebugInfo = &(infos.items[0]);
             for (self.debug_markers.items, 0..) |d, ip| {
                 const end: u32 = @intCast(ip);
@@ -122,9 +132,11 @@ pub const Compiler = struct {
                         if (!std.mem.eql(u8, name, item.file)) continue;
                         break &(infos.items[i]);
                     } else blk: {
-                        file_name = try allocator.dupe(u8, name);
-                        const new_info = DebugInfo.init(allocator, file_name);
-                        try infos.append(allocator, new_info);
+                        const new_file_name = try allocator.dupe(u8, name);
+                        {
+                            errdefer allocator.free(new_file_name);
+                            try infos.append(allocator, DebugInfo.init(allocator, new_file_name));
+                        }
                         break :blk &(infos.items[infos.items.len - 1]);
                     };
                     continue;
@@ -540,7 +552,12 @@ pub const Compiler = struct {
 
     pub fn bytecode(self: *Compiler) !Bytecode {
         if (self.scope.parent != null) return Error.OutOfScope;
-        var global_symbols = try self.alloc.alloc(Bytecode.GlobalSymbol, self.scope.symbols.count());
+        const global_symbols = try self.alloc.alloc(Bytecode.GlobalSymbol, self.scope.symbols.count());
+        var filled: usize = 0;
+        errdefer {
+            for (global_symbols[0..filled]) |gs| self.alloc.free(gs.name);
+            self.alloc.free(global_symbols);
+        }
         for (self.scope.symbols.values(), 0..) |s, i| {
             global_symbols[i] = Bytecode.GlobalSymbol{
                 .name = try self.alloc.dupe(u8, s.name),
@@ -548,6 +565,7 @@ pub const Compiler = struct {
                 .index = s.index,
                 .is_mutable = s.is_mutable,
             };
+            filled = i + 1;
         }
         return .{
             .instructions = try self.chunk.instructions.toOwnedSlice(self.alloc),
@@ -562,6 +580,7 @@ pub const Compiler = struct {
         const tree = self.module.entry.tree orelse return Error.IllegalOperation;
         for (builtins.keys()) |name| {
             const obj = try self.alloc.create(Value.Obj);
+            errdefer self.alloc.destroy(obj);
             obj.* = .{ .data = .{ .builtin = builtins.get(name).? } };
             try self.addNamedConstant(name, .{ .obj = obj });
         }
@@ -684,13 +703,16 @@ pub const Compiler = struct {
             },
             .bough => |b| {
                 const full_name = try self.getQualifiedName(b.name);
+                // On success, registerAnchor hands `full_name` to the new
+                // anchor object (freed via compiler.deinit → Obj.deinit).
+                // On error it stays with us, so we free it here.
+                var transferred = false;
+                errdefer if (!transferred) self.alloc.free(full_name);
                 self.registerAnchor(full_name, b.id, stmt.token) catch |err| switch (err) {
-                    error.SymbolAlreadyDeclared => {
-                        self.alloc.free(full_name);
-                        return self.failRedeclared(b.name, "Bough", stmt.token, b.name_token);
-                    },
+                    error.SymbolAlreadyDeclared => return self.failRedeclared(b.name, "Bough", stmt.token, b.name_token),
                     else => return err,
                 };
+                transferred = true;
                 try self.pushPathScope(b.name);
                 defer self.popPathScope();
                 for (b.body) |s| try self.prepass(s);
@@ -701,13 +723,13 @@ pub const Compiler = struct {
                 defer self.alloc.free(fork_name);
 
                 const full_name = try self.getQualifiedName(fork_name);
+                var transferred = false;
+                errdefer if (!transferred) self.alloc.free(full_name);
                 self.registerAnchor(full_name, f.id, stmt.token) catch |err| switch (err) {
-                    error.SymbolAlreadyDeclared => {
-                        self.alloc.free(full_name);
-                        return self.failRedeclared(fork_name, "Fork", stmt.token, f.end_token);
-                    },
+                    error.SymbolAlreadyDeclared => return self.failRedeclared(fork_name, "Fork", stmt.token, f.end_token),
                     else => return err,
                 };
+                transferred = true;
                 try self.pushPathScope(fork_name);
                 defer self.popPathScope();
 
@@ -716,13 +738,13 @@ pub const Compiler = struct {
             .choice => |c| {
                 const name = c.name orelse &c.id;
                 const full_name = try self.getQualifiedName(name);
+                var transferred = false;
+                errdefer if (!transferred) self.alloc.free(full_name);
                 self.registerAnchor(full_name, c.id, stmt.token) catch |err| switch (err) {
-                    error.SymbolAlreadyDeclared => {
-                        self.alloc.free(full_name);
-                        return self.failRedeclared(name, "Choice", stmt.token, null);
-                    },
+                    error.SymbolAlreadyDeclared => return self.failRedeclared(name, "Choice", stmt.token, null),
                     else => return err,
                 };
+                transferred = true;
                 try self.path_stack.append(self.alloc, name);
                 defer _ = self.path_stack.pop();
                 for (c.body) |s| try self.prepass(s);
@@ -1309,6 +1331,13 @@ pub const Compiler = struct {
                 // to a known class/enum, offer a did-you-mean for the field.
                 var suggestion: ?[]const u8 = null;
                 var note: ?[]const u8 = null;
+                // `failErrorWithHelp` takes ownership; on the fall-through
+                // error paths below, clean up ourselves.
+                var transferred = false;
+                errdefer if (!transferred) {
+                    if (suggestion) |s| self.alloc.free(s);
+                    if (note) |n| self.alloc.free(n);
+                };
                 if (idx.target.type == .identifier and idx.index.type == .identifier) {
                     const target_name = idx.target.type.identifier;
                     const field_name = idx.index.type.identifier;
@@ -1324,6 +1353,7 @@ pub const Compiler = struct {
                         suggestion = sr;
                     }
                 }
+                transferred = true;
                 return self.failErrorWithHelp(
                     "Cannot resolve this indexer at compile time",
                     token,
@@ -1568,6 +1598,10 @@ pub const Compiler = struct {
         }
 
         const anchor_obj = try self.alloc.create(Value.Obj);
+        // Raw destroy only — `full_name` is borrowed from the caller, who
+        // remains responsible for freeing it on error. Calling `obj.deinit`
+        // would free the caller's slice.
+        errdefer self.alloc.destroy(anchor_obj);
         anchor_obj.* = .{
             .id = uuid,
             .data = .{
@@ -2148,14 +2182,22 @@ pub const Compiler = struct {
 
     /// Register a named constant and optionally record the source token that
     /// declared it. Returns `error.SymbolAlreadyDeclared` if a constant with
-    /// that name already exists.
+    /// that name already exists. Atomic: either fully succeeds (value placed
+    /// in constants, key inserted everywhere) or leaves all state untouched.
     pub fn addNamedConstantTok(self: *Compiler, name: []const u8, value: Value, token: ?Token) !void {
         if (self.constants_map.contains(name)) return error.SymbolAlreadyDeclared;
-        const i = try self.addConstant(value);
+        // Reserve capacity for every write up front so post-`dupe` inserts
+        // cannot OOM. Without this, a late failure leaves the key in one
+        // container while the errdefer frees it — a double-free on teardown.
+        try self.constants.ensureUnusedCapacity(self.alloc, 1);
+        try self.constants_map.ensureUnusedCapacity(self.alloc, 1);
+        if (token != null) try self.decl_tokens.ensureUnusedCapacity(self.alloc, 1);
         const key = try self.alloc.dupe(u8, name);
         errdefer self.alloc.free(key);
-        try self.constants_map.putNoClobber(self.alloc, key, i);
-        if (token) |t| try self.decl_tokens.put(self.alloc, key, t);
+        const i: C.CONSTANT = @intCast(self.constants.items.len);
+        self.constants.appendAssumeCapacity(value);
+        self.constants_map.putAssumeCapacityNoClobber(key, i);
+        if (token) |t| self.decl_tokens.putAssumeCapacity(key, t);
     }
 
     pub fn addLiteralConstant(self: *Compiler, value: Value) !C.CONSTANT {
@@ -2169,8 +2211,11 @@ pub const Compiler = struct {
     fn addIdentifierConstant(self: *Compiler, name: []const u8, token: Token) !void {
         var i = self.constants_map.get(name);
         if (i == null) {
+            try self.constants_map.ensureUnusedCapacity(self.alloc, 1);
+            const key = try self.alloc.dupe(u8, name);
+            errdefer self.alloc.free(key);
             i = try self.addConstant(.{ .const_string = name });
-            try self.constants_map.putNoClobber(self.alloc, try self.alloc.dupe(u8, name), i.?);
+            self.constants_map.putAssumeCapacityNoClobber(key, i.?);
         }
 
         try self.writeOp(.constant, token);

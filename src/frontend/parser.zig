@@ -653,12 +653,15 @@ pub const Parser = struct {
     fn stringExpression(self: *Parser) Error!Expression {
         const t = self.current_token;
         const text = self.file.source.?[t.start..t.end];
+        const raw = try self.allocator.dupe(u8, text);
+        errdefer self.allocator.free(raw);
+        const value = try self.allocator.dupe(u8, text);
         return .{
             .token = t,
             .type = .{
                 .string = .{
-                    .raw = try self.allocator.dupe(u8, text),
-                    .value = try self.allocator.dupe(u8, text),
+                    .raw = raw,
+                    .value = value,
                     .expressions = &.{},
                 },
             },
@@ -706,14 +709,19 @@ pub const Parser = struct {
 
         // raw is the original source text between quotes — slice directly
         const raw = try self.allocator.dupe(u8, self.file.source.?[start_token.start..self.current_token.end]);
+        errdefer self.allocator.free(raw);
+
+        const value_slice = try value.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(value_slice);
+        const exprs_slice = try exprs.toOwnedSlice(self.allocator);
 
         return .{
             .token = start_token,
             .type = .{
                 .string = .{
                     .raw = raw,
-                    .value = try value.toOwnedSlice(self.allocator),
-                    .expressions = try exprs.toOwnedSlice(self.allocator),
+                    .value = value_slice,
+                    .expressions = exprs_slice,
                 },
             },
         };

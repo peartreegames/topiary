@@ -68,7 +68,10 @@ pub const Scope = struct {
 
     pub fn define(self: *Scope, name: []const u8, is_mutable: bool) !*Symbol {
         if (self.symbols.contains(name)) return error.SymbolAlreadyDeclared;
+        // Reserve capacity so the final put cannot fail after we allocate.
+        try self.symbols.ensureUnusedCapacity(self.allocator, 1);
         const symbol = try self.allocator.create(Symbol);
+        errdefer self.allocator.destroy(symbol);
         const name_copy = try self.allocator.dupe(u8, name);
         symbol.* = .{
             .name = name_copy,
@@ -77,12 +80,14 @@ pub const Scope = struct {
             .is_mutable = is_mutable,
         };
         self.count += 1;
-        try self.symbols.putNoClobber(self.allocator, name_copy, symbol);
+        self.symbols.putAssumeCapacityNoClobber(name_copy, symbol);
         return symbol;
     }
 
     pub fn defineUpvalue(self: *Scope, original: *Symbol) !*Symbol {
+        try self.symbols.ensureUnusedCapacity(self.allocator, 1);
         const symbol = try self.allocator.create(Symbol);
+        errdefer self.allocator.destroy(symbol);
         const name = try self.allocator.dupe(u8, original.name);
         symbol.* = .{
             .name = name,
@@ -91,7 +96,7 @@ pub const Scope = struct {
             .is_mutable = original.is_mutable,
             .var_type = original.var_type,
         };
-        try self.symbols.putNoClobber(self.allocator, symbol.name, symbol);
+        self.symbols.putAssumeCapacityNoClobber(symbol.name, symbol);
         return symbol;
     }
 

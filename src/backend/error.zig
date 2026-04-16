@@ -85,8 +85,9 @@ pub const CompilerErrors = struct {
     }
 
     pub fn add(self: *CompilerErrors, file_path: []const u8, comptime fmt: []const u8, token: Token, severity: CompilerErr.Severity, args: anytype) !void {
+        try self.list.ensureUnusedCapacity(self.allocator, 1);
         const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
-        try self.list.append(self.allocator, .{
+        self.list.appendAssumeCapacity(.{
             .file_path = file_path,
             .fmt = msg,
             .severity = severity,
@@ -103,8 +104,9 @@ pub const CompilerErrors = struct {
         severity: CompilerErr.Severity,
         args: anytype,
     ) !void {
+        try self.list.ensureUnusedCapacity(self.allocator, 1);
         const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
-        try self.list.append(self.allocator, .{
+        self.list.appendAssumeCapacity(.{
             .file_path = file_path,
             .fmt = msg,
             .severity = severity,
@@ -123,8 +125,16 @@ pub const CompilerErrors = struct {
         suggestion: ?[]const u8,
         note: ?[]const u8,
     ) !void {
+        // Take ownership of caller-provided suggestion/note: they are freed
+        // alongside `fmt` in `deinit`, so if the append fails we must free
+        // them here to avoid leaking.
+        errdefer {
+            if (suggestion) |s| self.allocator.free(s);
+            if (note) |n| self.allocator.free(n);
+        }
+        try self.list.ensureUnusedCapacity(self.allocator, 1);
         const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
-        try self.list.append(self.allocator, .{
+        self.list.appendAssumeCapacity(.{
             .file_path = file_path,
             .fmt = msg,
             .severity = severity,
@@ -145,8 +155,13 @@ pub const CompilerErrors = struct {
         suggestion: ?[]const u8,
         note: ?[]const u8,
     ) !void {
+        errdefer {
+            if (suggestion) |s| self.allocator.free(s);
+            if (note) |n| self.allocator.free(n);
+        }
+        try self.list.ensureUnusedCapacity(self.allocator, 1);
         const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
-        try self.list.append(self.allocator, .{
+        self.list.appendAssumeCapacity(.{
             .file_path = file_path,
             .fmt = msg,
             .severity = severity,
