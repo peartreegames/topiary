@@ -26,7 +26,9 @@ const Scope = scope.Scope;
 const Symbol = scope.Symbol;
 
 const DebugInfo = @import("debug.zig").DebugInfo;
-const CompilerErrors = @import("error.zig").CompilerErrors;
+const error_mod = @import("error.zig");
+const CompilerErrors = error_mod.CompilerErrors;
+
 const Bytecode = @import("bytecode.zig").Bytecode;
 const OpCode = @import("opcode.zig").OpCode;
 const suggest = @import("suggest.zig");
@@ -49,6 +51,10 @@ fn arrayContains(comptime T: type, haystack: []const []const T, needle: []const 
     }
     return false;
 }
+
+const string_method_names: []const []const u8 = &.{ "length", "has", "upper", "lower", "replace", "split", "substr", "trim" };
+const collection_method_names: []const []const u8 = &.{ "count", "add", "remove", "has", "clear" };
+
 pub const Compiler = struct {
     alloc: std.mem.Allocator,
     constants: std.ArrayList(Value) = .empty,
@@ -312,7 +318,7 @@ pub const Compiler = struct {
         while (current) |s| : (current = s.parent) {
             for (s.symbols.keys()) |k| try names.append(self.alloc, k);
         }
-        // Plus all top-level (unqualified) constants — classes, enums,
+        // Plus all top-level (unqualified) constants -- classes, enums,
         // functions, boughs with no path prefix.
         var it = self.constants_map.keyIterator();
         while (it.next()) |k| {
@@ -320,9 +326,7 @@ pub const Compiler = struct {
                 try names.append(self.alloc, k.*);
         }
 
-        const match = (try suggest.closest(self.alloc, name, names.items)) orelse return null;
-        defer self.alloc.free(match);
-        return try std.fmt.allocPrint(self.alloc, "did you mean '{s}'?", .{match});
+        return try self.suggestFromList(name, names.items);
     }
 
     fn suggestFromConstants(self: *Compiler, name: []const u8) !?[]const u8 {
@@ -334,9 +338,7 @@ pub const Compiler = struct {
         while (it.next()) |k| {
             try names.append(self.alloc, k.*);
         }
-        const match = (try suggest.closest(self.alloc, name, names.items)) orelse return null;
-        defer self.alloc.free(match);
-        return try std.fmt.allocPrint(self.alloc, "did you mean '{s}'?", .{match});
+        return try self.suggestFromList(name, names.items);
     }
 
     /// Look up declared function arity by short name, searching through the
@@ -380,6 +382,93 @@ pub const Compiler = struct {
         for (class_def.fields) |f| try names.append(self.alloc, f.name);
         for (class_def.methods) |m| try names.append(self.alloc, m.name);
         return try self.suggestFromList(name, names.items);
+    }
+
+    fn inferExprType(expr: Expression) scope.VarType {
+        return switch (expr.type) {
+            .instance => |i| .{ .instance = i.name },
+            .string => .string,
+            .list => .list,
+            .set => .set,
+            .map => .map,
+            .number => .number,
+            .boolean => .boolean,
+            .nil => .nil,
+            else => .unknown,
+        };
+    }
+
+    fn validateDotAccess(self: *Compiler, target: *const Expression, index: *const Expression, op_token: Token, target_token: Token, index_token: Token) !void {
+        if (op_token.token_type != .dot) return;
+        if (target.type != .identifier) return;
+        if (index.type != .identifier) return;
+        if (self.constants_map.get(target.type.identifier) != null) return;
+
+        const sym = (try self.scope.resolve(target.type.identifier)) orelse return;
+        const field = index.type.identifier;
+
+        switch (sym.var_type) {
+            .instance => |class_name| {
+                const const_idx = self.constants_map.get(class_name) orelse return;
+                const val = self.constants.items[const_idx];
+                if (val != .obj or val.obj.data != .class) return;
+                const class_def = val.obj.data.class;
+                if (class_def.getFieldIndex(field) == null and class_def.getMethodIndex(field) == null) {
+                    const sr = try self.suggestClassField(class_def, field);
+                    const hint = sr;
+
+                    return self.failSpanWithHelp(
+                        "Class '{s}' does not contain a field '{s}'",
+                        target_token, index_token,
+                        .{ class_def.name, field }, hint, null,
+                    );
+                }
+            },
+            .string => {
+                if (!arrayContains(u8, string_method_names, field)) {
+                    const sr = try self.suggestFromList(field, string_method_names);
+                    const hint = sr;
+
+                    return self.failSpanWithHelp(
+                        "Unknown method '{s}' on string",
+                        target_token, index_token,
+                        .{field}, hint, null,
+                    );
+                }
+            },
+            .list, .set, .map => {
+                if (!arrayContains(u8, collection_method_names, field)) {
+                    const type_name: []const u8 = switch (sym.var_type) {
+                        .list => "list",
+                        .set => "set",
+                        .map => "map",
+                        else => unreachable,
+                    };
+                    const sr = try self.suggestFromList(field, collection_method_names);
+                    const hint = sr;
+
+                    return self.failSpanWithHelp(
+                        "Unknown method '{s}' on {s}",
+                        target_token, index_token,
+                        .{ field, type_name }, hint, null,
+                    );
+                }
+            },
+            .number, .boolean, .nil => {
+                const type_name: []const u8 = switch (sym.var_type) {
+                    .number => "number",
+                    .boolean => "boolean",
+                    .nil => "nil",
+                    else => unreachable,
+                };
+                return self.failSpan(
+                    "Cannot access field '{s}' on a {s}",
+                    target_token, index_token,
+                    .{ field, type_name },
+                );
+            },
+            .unknown => {},
+        }
     }
 
     /// Writer-friendly name for an expression's syntactic kind. Used in
@@ -446,9 +535,7 @@ pub const Compiler = struct {
                 try names.append(self.alloc, entry.key_ptr.*);
             }
         }
-        const match = (try suggest.closest(self.alloc, path, names.items)) orelse return null;
-        defer self.alloc.free(match);
-        return try std.fmt.allocPrint(self.alloc, "did you mean '{s}'?", .{match});
+        return try self.suggestFromList(path, names.items);
     }
 
     pub fn bytecode(self: *Compiler) !Bytecode {
@@ -831,6 +918,7 @@ pub const Compiler = struct {
                 };
                 try self.compileExpression(&v.initializer);
                 try self.setSymbol(v.name, symbol, token, true);
+                symbol.var_type = inferExprType(v.initializer);
             },
             .class => |c| {
                 // `transferred` gates every errdefer below: once the class
@@ -945,7 +1033,9 @@ pub const Compiler = struct {
                     self.constants.items[idx].obj.data.anchor.ip = start_pos;
                     try self.compileVisit(idx, token);
                 } else {
-                    const hint = try self.suggestAnchor(path);
+                    const sr = try self.suggestAnchor(path);
+                    const hint = sr;
+
                     return self.failSpanWithHelp("Could not find anchor '{s}'", token, f.end_token, .{path}, hint, null);
                 }
 
@@ -962,7 +1052,7 @@ pub const Compiler = struct {
                             const choice = body_stmt.type.choice;
                             if (!blockExits(choice.body)) {
                                 try self.warnWithHelp(
-                                    "choice has no divert or 'fin' — execution will end silently after this choice",
+                                    "choice has no divert or 'fin' -- execution will end silently after this choice",
                                     body_stmt.token,
                                     .{},
                                     try self.alloc.dupe(u8, "use 'fork^' to continue after the choice, or add a divert '=>' inside the choice body"),
@@ -998,7 +1088,9 @@ pub const Compiler = struct {
 
                 const entry_ip = self.instructionPos();
                 const anchor_idx = try self.resolveConstant(full_name) orelse {
-                    const hint = try self.suggestAnchor(full_name);
+                    const sr = try self.suggestAnchor(full_name);
+                    const hint = sr;
+
                     return self.failWithHelp("Could not find anchor '{s}'", token, .{full_name}, hint, null);
                 };
                 self.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
@@ -1056,7 +1148,9 @@ pub const Compiler = struct {
 
                 const entry_ip = self.instructionPos();
                 const anchor_idx = try self.resolveConstant(full_name) orelse {
-                    const hint = try self.suggestAnchor(full_name);
+                    const sr = try self.suggestAnchor(full_name);
+                    const hint = sr;
+
                     return self.failSpanWithHelp("Could not find anchor '{s}'", token, b.name_token, .{full_name}, hint, null);
                 };
                 self.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
@@ -1107,7 +1201,9 @@ pub const Compiler = struct {
                     // and the suggestion hint.
                     const joined = try std.mem.join(self.alloc, ".", d.path);
                     defer self.alloc.free(joined);
-                    const hint = try self.suggestAnchor(joined);
+                    const sr = try self.suggestAnchor(joined);
+                    const hint = sr;
+
                     return self.failSpanWithHelp("Could not find path '{s}'", token, d.end_token, .{joined}, hint, null);
                 };
                 if (d.is_backup) {
@@ -1219,11 +1315,13 @@ pub const Compiler = struct {
                     note = try std.fmt.allocPrint(self.alloc, "could not resolve '{s}.{s}' at compile time", .{ target_name, field_name });
                     if (self.constants_map.get(target_name)) |target_idx| {
                         const target_val = self.constants.items[target_idx];
-                        if (target_val == .obj and target_val.obj.data == .class) {
-                            suggestion = try self.suggestClassField(target_val.obj.data.class, field_name);
-                        } else if (target_val == .obj and target_val.obj.data == .@"enum") {
-                            suggestion = try self.suggestFromList(field_name, target_val.obj.data.@"enum".values);
-                        }
+                        const sr = if (target_val == .obj and target_val.obj.data == .class)
+                            try self.suggestClassField(target_val.obj.data.class, field_name)
+                        else if (target_val == .obj and target_val.obj.data == .@"enum")
+                            try self.suggestFromList(field_name, target_val.obj.data.@"enum".values)
+                        else
+                            null;
+                        suggestion = sr;
                     }
                 }
                 return self.failErrorWithHelp(
@@ -1510,6 +1608,9 @@ pub const Compiler = struct {
                         .identifier => |id| {
                             try self.compileExpression(bin.right);
                             const symbol = try self.scope.resolve(id);
+                            if (symbol) |s| {
+                                s.var_type = inferExprType(bin.right.*);
+                            }
                             try self.setSymbol(id, symbol, token, false);
                             try self.loadSymbol(id, token);
                             return;
@@ -1519,6 +1620,8 @@ pub const Compiler = struct {
                                 if (self.constants_map.get(idx.target.type.identifier)) |i| {
                                     const val = self.constants.items[i];
                                     return self.failSpan("Cannot reassign field on a {s}", idx.target.token, idx.index.token, .{objKindName(val.obj.data)});
+                                } else {
+                                    try self.validateDotAccess(idx.target, idx.index, bin.left.token, idx.target.token, idx.index.token);
                                 }
                             }
                             try self.compileExpression(bin.right);
@@ -1573,6 +1676,8 @@ pub const Compiler = struct {
                                         if (val == .obj and (val.obj.data == .class or val.obj.data == .@"enum" or val.obj.data == .function)) {
                                             return self.failSpan("Cannot assign to a {s} member", idx.target.token, idx.index.token, .{objKindName(val.obj.data)});
                                         }
+                                    } else {
+                                        try self.validateDotAccess(idx.target, idx.index, bin.left.token, idx.target.token, idx.index.token);
                                     }
                                 }
                                 try self.writeOp(.dup, token);
@@ -1695,7 +1800,9 @@ pub const Compiler = struct {
                                     .@"enum" => |e| {
                                         const field = idx.index.type.identifier;
                                         if (!arrayContains(u8, e.values, field)) {
-                                            const hint = try self.suggestFromList(field, e.values);
+                                            const sr = try self.suggestFromList(field, e.values);
+                                            const hint = sr;
+                        
                                             return self.failSpanWithHelp(
                                                 "Enum '{s}' does not contain a value '{s}'",
                                                 idx.target.token,
@@ -1709,7 +1816,9 @@ pub const Compiler = struct {
                                     .class => |c| {
                                         const field = idx.index.type.identifier;
                                         if (c.getFieldIndex(field) == null and c.getMethodIndex(field) == null) {
-                                            const hint = try self.suggestClassField(c, field);
+                                            const sr = try self.suggestClassField(c, field);
+                                            const hint = sr;
+                        
                                             return self.failSpanWithHelp(
                                                 "Class '{s}' does not contain a field '{s}'",
                                                 idx.target.token,
@@ -1723,6 +1832,8 @@ pub const Compiler = struct {
                                     else => {},
                                 }
                             }
+                        } else {
+                            try self.validateDotAccess(idx.target, idx.index, token, idx.target.token, idx.index.token);
                         }
                     }
                     try self.addIdentifierConstant(idx.index.type.identifier, token);
@@ -1772,7 +1883,9 @@ pub const Compiler = struct {
                 const class_def = class_val.obj.data.class;
                 for (ins.fields, 0..) |field_expr, i| {
                     if (class_def.getFieldIndex(ins.field_names[i]) == null) {
-                        const hint = try self.suggestClassField(class_def, ins.field_names[i]);
+                        const sr = try self.suggestClassField(class_def, ins.field_names[i]);
+                        const hint = sr;
+    
                         return self.failWithHelp(
                             "Class '{s}' has no field '{s}'",
                             ins.field_name_tokens[i],
@@ -1857,7 +1970,8 @@ pub const Compiler = struct {
                 },
             }
         } else {
-            const hint = try self.suggestForSymbol(name);
+            const sr = try self.suggestForSymbol(name);
+            const hint = sr;
             try self.module.errors.addWithHelp(
                 self.current_file.path,
                 "Unknown name '{s}'",
@@ -1902,7 +2016,8 @@ pub const Compiler = struct {
             return;
         }
 
-        const hint = try self.suggestForSymbol(name);
+        const sr = try self.suggestForSymbol(name);
+        const hint = sr;
         try self.module.errors.addWithHelp(
             self.current_file.path,
             "Unknown name '{s}'",
@@ -1984,7 +2099,7 @@ pub const Compiler = struct {
     pub fn replaceJumps(instructions: []u8, old_pos: C.JUMP, new_pos: C.JUMP) !void {
         var i: usize = 0;
         const jump = @intFromEnum(OpCode.jump);
-        while (i < instructions.len) : (i += 1) {
+        while (i + 1 + @sizeOf(C.JUMP) <= instructions.len) : (i += 1) {
             if (instructions[i] == jump and std.mem.readVarInt(C.JUMP, instructions[(i + 1)..(i + 1 + @sizeOf(C.JUMP))], .little) == old_pos) {
                 var buf: [@sizeOf(C.JUMP)]u8 = undefined;
                 std.mem.writeInt(C.JUMP, buf[0..], new_pos, .little);

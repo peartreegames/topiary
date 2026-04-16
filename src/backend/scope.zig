@@ -3,12 +3,25 @@ const utils = @import("../utils/index.zig");
 const C = utils.C;
 const UUID = utils.UUID;
 
+pub const VarType = union(enum) {
+    unknown,
+    number,
+    boolean,
+    nil,
+    string,
+    list,
+    set,
+    map,
+    instance: []const u8,
+};
+
 pub const Symbol = struct {
     index: C.GLOBAL,
     name: []const u8,
     uuid: UUID.ID = UUID.Empty,
     tag: Scope.Tag,
     is_mutable: bool,
+    var_type: VarType = .unknown,
 };
 
 pub const Scope = struct {
@@ -76,6 +89,7 @@ pub const Scope = struct {
             .index = original.index,
             .tag = .upvalue,
             .is_mutable = original.is_mutable,
+            .var_type = original.var_type,
         };
         try self.symbols.putNoClobber(self.allocator, symbol.name, symbol);
         return symbol;

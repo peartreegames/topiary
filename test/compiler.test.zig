@@ -1819,3 +1819,190 @@ test "Compile Serialization: class with collection fields" {
         try testing.expect(constant.eql(deserialized.constants[i]));
     }
 }
+
+test "Instance field write error with suggestion" {
+    const input =
+        \\ class Character {
+        \\   age = 0,
+        \\   name = "",
+        \\ }
+        \\ === START {
+        \\   var john = new Character{}
+        \\   john.ages = 24
+        \\   :: "hi"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    const res = compileSource(input, mod);
+    try testing.expectError(error.CompilerError, res);
+    var has_suggestion = false;
+    for (mod.errors.list.items) |e| {
+        if (e.suggestion) |s| {
+            if (std.mem.indexOf(u8, s, "age") != null) has_suggestion = true;
+        }
+    }
+    try testing.expect(has_suggestion);
+}
+
+test "Instance field read error with suggestion" {
+    const input =
+        \\ class Character {
+        \\   age = 0,
+        \\   name = "",
+        \\ }
+        \\ === START {
+        \\   var john = new Character{}
+        \\   var x = john.ages
+        \\   :: "{x}"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    const res = compileSource(input, mod);
+    try testing.expectError(error.CompilerError, res);
+    var has_suggestion = false;
+    for (mod.errors.list.items) |e| {
+        if (e.suggestion) |s| {
+            if (std.mem.indexOf(u8, s, "age") != null) has_suggestion = true;
+        }
+    }
+    try testing.expect(has_suggestion);
+}
+
+test "Instance method error with suggestion" {
+    const input =
+        \\ class Character {
+        \\   age = 0,
+        \\   fn greet || return "hello"
+        \\ }
+        \\ === START {
+        \\   var john = new Character{}
+        \\   john.gret()
+        \\   :: "hi"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    const res = compileSource(input, mod);
+    try testing.expectError(error.CompilerError, res);
+    var has_suggestion = false;
+    for (mod.errors.list.items) |e| {
+        if (e.suggestion) |s| {
+            if (std.mem.indexOf(u8, s, "greet") != null) has_suggestion = true;
+        }
+    }
+    try testing.expect(has_suggestion);
+}
+
+test "Valid instance access compiles" {
+    const input =
+        \\ class Character {
+        \\   age = 0,
+        \\   name = "",
+        \\ }
+        \\ === START {
+        \\   var john = new Character{}
+        \\   john.age = 24
+        \\   :: "{john.name}"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = try compileSource(input, mod);
+    defer bytecode.free(allocator);
+}
+
+test "String method typo error with suggestion" {
+    const input =
+        \\ === START {
+        \\   var s = "hello"
+        \\   var x = s.lenght
+        \\   :: "{x}"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    const res = compileSource(input, mod);
+    try testing.expectError(error.CompilerError, res);
+    var has_suggestion = false;
+    for (mod.errors.list.items) |e| {
+        if (e.suggestion) |s| {
+            if (std.mem.indexOf(u8, s, "length") != null) has_suggestion = true;
+        }
+    }
+    try testing.expect(has_suggestion);
+}
+
+test "List method typo error with suggestion" {
+    const input =
+        \\ === START {
+        \\   var l = List{1, 2, 3}
+        \\   l.ad(4)
+        \\   :: "hi"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    const res = compileSource(input, mod);
+    try testing.expectError(error.CompilerError, res);
+    var has_suggestion = false;
+    for (mod.errors.list.items) |e| {
+        if (e.suggestion) |s| {
+            if (std.mem.indexOf(u8, s, "add") != null) has_suggestion = true;
+        }
+    }
+    try testing.expect(has_suggestion);
+}
+
+test "Number field access error" {
+    const input =
+        \\ === START {
+        \\   var n = 5
+        \\   var x = n.foo
+        \\   :: "{x}"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    const res = compileSource(input, mod);
+    try testing.expectError(error.CompilerError, res);
+    var has_error = false;
+    for (mod.errors.list.items) |e| {
+        if (std.mem.indexOf(u8, e.fmt, "Cannot access field") != null and
+            std.mem.indexOf(u8, e.fmt, "number") != null) has_error = true;
+    }
+    try testing.expect(has_error);
+}
+
+test "Type tracking cleared on reassignment" {
+    const input =
+        \\ class Character {
+        \\   age = 0
+        \\ }
+        \\ === START {
+        \\   var john = new Character{}
+        \\   john = 0
+        \\   :: "hi"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = try compileSource(input, mod);
+    defer bytecode.free(allocator);
+}
+
+test "Unknown type no false positive" {
+    const input =
+        \\ fn getObj || return 0
+        \\ === START {
+        \\   var x = getObj()
+        \\   var y = x.anything
+        \\   :: "{y}"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator);
+    defer mod.deinit();
+    var bytecode = try compileSource(input, mod);
+    defer bytecode.free(allocator);
+}

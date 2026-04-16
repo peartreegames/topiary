@@ -889,13 +889,6 @@ test "Runtime Class Definition" {
 test "Runtime Class Error" {
     const tests = .{
         \\ class Test {
-        \\    value = 0,
-        \\    fn one || return 1
-        \\ }
-        \\ var test = new Test{}
-        \\ test.val = 55
-        ,
-        \\ class Test {
         \\    value = 0, // zero
         \\    fn one || return self.value,
         \\ }
