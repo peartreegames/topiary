@@ -25,7 +25,6 @@ pub const Symbol = struct {
 };
 
 pub const Scope = struct {
-    allocator: std.mem.Allocator,
     parent: ?*Scope,
     tag: Tag,
 
@@ -48,7 +47,6 @@ pub const Scope = struct {
         else
             0;
         scope.* = .{
-            .allocator = allocator,
             .parent = parent,
             .symbols = .empty,
             .tag = tag,
@@ -57,22 +55,22 @@ pub const Scope = struct {
         return scope;
     }
 
-    pub fn destroy(self: *Scope) void {
+    pub fn destroy(self: *Scope, allocator: std.mem.Allocator) void {
         for (self.symbols.values()) |s| {
-            self.allocator.free(s.name);
-            self.allocator.destroy(s);
+            allocator.free(s.name);
+            allocator.destroy(s);
         }
-        self.symbols.deinit(self.allocator);
-        self.allocator.destroy(self);
+        self.symbols.deinit(allocator);
+        allocator.destroy(self);
     }
 
-    pub fn define(self: *Scope, name: []const u8, is_mutable: bool) !*Symbol {
+    pub fn define(self: *Scope, allocator: std.mem.Allocator, name: []const u8, is_mutable: bool) !*Symbol {
         if (self.symbols.contains(name)) return error.SymbolAlreadyDeclared;
         // Reserve capacity so the final put cannot fail after we allocate.
-        try self.symbols.ensureUnusedCapacity(self.allocator, 1);
-        const symbol = try self.allocator.create(Symbol);
-        errdefer self.allocator.destroy(symbol);
-        const name_copy = try self.allocator.dupe(u8, name);
+        try self.symbols.ensureUnusedCapacity(allocator, 1);
+        const symbol = try allocator.create(Symbol);
+        errdefer allocator.destroy(symbol);
+        const name_copy = try allocator.dupe(u8, name);
         symbol.* = .{
             .name = name_copy,
             .index = self.count,
@@ -84,11 +82,11 @@ pub const Scope = struct {
         return symbol;
     }
 
-    pub fn defineUpvalue(self: *Scope, original: *Symbol) !*Symbol {
-        try self.symbols.ensureUnusedCapacity(self.allocator, 1);
-        const symbol = try self.allocator.create(Symbol);
-        errdefer self.allocator.destroy(symbol);
-        const name = try self.allocator.dupe(u8, original.name);
+    pub fn defineUpvalue(self: *Scope, allocator: std.mem.Allocator, original: *Symbol) !*Symbol {
+        try self.symbols.ensureUnusedCapacity(allocator, 1);
+        const symbol = try allocator.create(Symbol);
+        errdefer allocator.destroy(symbol);
+        const name = try allocator.dupe(u8, original.name);
         symbol.* = .{
             .name = name,
             .index = original.index,
@@ -110,16 +108,16 @@ pub const Scope = struct {
         return null;
     }
 
-    pub fn resolve(self: *Scope, name: []const u8) !?*Symbol {
+    pub fn resolve(self: *Scope, allocator: std.mem.Allocator, name: []const u8) !?*Symbol {
         const symbol = self.symbols.get(name);
         if (symbol) |s| return s;
 
         if (self.parent) |p| {
-            const s = (try p.resolve(name)) orelse return null;
+            const s = (try p.resolve(allocator, name)) orelse return null;
             if (s.tag == .global) return s;
 
             if (self.tag == .function) {
-                return try self.defineUpvalue(s);
+                return try self.defineUpvalue(allocator, s);
             }
             return s;
         }

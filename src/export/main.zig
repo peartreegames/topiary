@@ -32,16 +32,22 @@ pub export fn calculateCompileSize(path_ptr: [*:0]const u8, log_ptr: *const anyo
         .allocator = alloc,
     };
 
-    const mod = createModule(std.mem.sliceTo(path_ptr, 0), logger);
-    if (mod == null) return 0;
-    defer mod.?.deinit();
+    // Compile-then-discard: arena batches all transient allocations
+    // (module, parser, compiler bookkeeping, Value.Obj constants, bytecode
+    // arrays). Only the serialized bytes escape via the writer.
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
 
-    var bytecode = createBytecode(mod.?, logger);
+    const mod = createModule(std.mem.sliceTo(path_ptr, 0), logger, aa);
+    if (mod == null) return 0;
+
+    var bytecode = createBytecode(mod.?, logger, aa);
     if (bytecode == null) return 0;
 
     var buf: [1024]u8 = undefined;
     var counter = std.Io.Writer.Discarding.init(&buf);
-    const count = bytecode.?.serialize(alloc, &counter.writer) catch |err| {
+    const count = bytecode.?.serialize(aa, &counter.writer) catch |err| {
         logger.log("Could not calculate size {s}", .{@errorName(err)}, .err);
         return 0;
     };
@@ -63,8 +69,8 @@ pub export fn compile(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, log_p
     return size;
 }
 
-fn createModule(path: []const u8, logger: ExportLogger) ?*Module {
-    var mod = Module.init(alloc, io, path) catch |err| {
+fn createModule(path: []const u8, logger: ExportLogger, allocator: std.mem.Allocator) ?*Module {
+    var mod = Module.init(allocator, io, path) catch |err| {
         logger.log("Could not allocate module: {s}", .{@errorName(err)}, .err);
         return null;
     };
@@ -88,8 +94,8 @@ fn createModule(path: []const u8, logger: ExportLogger) ?*Module {
     return mod;
 }
 
-fn createBytecode(mod: *Module, logger: ExportLogger) ?Bytecode {
-    var compiler = Compiler.init(mod.allocator, &mod.*) catch |err| {
+fn createBytecode(mod: *Module, logger: ExportLogger, allocator: std.mem.Allocator) ?Bytecode {
+    var compiler = Compiler.init(allocator, &mod.*) catch |err| {
         logger.log("Could not create compiler: {s}", .{@errorName(err)}, .err);
         return null;
     };
@@ -115,14 +121,17 @@ fn createBytecode(mod: *Module, logger: ExportLogger) ?Bytecode {
 }
 
 fn writeBytecode(path: []const u8, writer: *std.Io.Writer, logger: ExportLogger) usize {
-    const mod = createModule(path, logger);
-    if (mod == null) return 0;
-    defer mod.?.deinit();
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
 
-    var bytecode = createBytecode(mod.?, logger);
+    const mod = createModule(path, logger, aa);
+    if (mod == null) return 0;
+
+    var bytecode = createBytecode(mod.?, logger, aa);
     if (bytecode == null) return 0;
 
-    return bytecode.?.serialize(alloc, writer) catch |err| {
+    return bytecode.?.serialize(aa, writer) catch |err| {
         logger.log("Could not serialize bytecode: {s}", .{@errorName(err)}, .err);
         return 0;
     };

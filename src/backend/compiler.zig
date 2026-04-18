@@ -56,7 +56,14 @@ const string_method_names: []const []const u8 = &.{ "length", "has", "upper", "l
 const collection_method_names: []const []const u8 = &.{ "count", "add", "remove", "has", "clear" };
 
 pub const Compiler = struct {
+    // `alloc` owns data that outlives the compiler: the constants array, every
+    // Value.Obj pointer stored in it, and the chunk instruction buffers that
+    // become bytecode. The compiler must NOT use `alloc` for anything else.
     alloc: std.mem.Allocator,
+    // `arena` owns transient bookkeeping: scopes, the hash maps below, duped
+    // keys, path_stack backing. All bulk-freed by `arena.deinit()`.
+    // Call `self.tempAlloc()` to get the arena-backed allocator.
+    arena: std.heap.ArenaAllocator,
     constants: std.ArrayList(Value) = .empty,
     constants_map: std.StringHashMapUnmanaged(C.CONSTANT) = .empty,
     literal_cache: std.ArrayHashMapUnmanaged(Value, C.CONSTANT, Value.Adapter, true) = .empty,
@@ -94,6 +101,15 @@ pub const Compiler = struct {
                 .parent = parent,
                 .alloc = allocator,
             };
+            // Root chunk ends up holding most of the bytecode. Pre-size from
+            // total source bytes to avoid ArrayList doubling reallocations.
+            if (parent == null) {
+                const estimate = module.timings.source_bytes / 4;
+                if (estimate > 0) {
+                    try chunk.instructions.ensureTotalCapacity(allocator, estimate);
+                    try chunk.debug_markers.ensureTotalCapacity(allocator, estimate);
+                }
+            }
             return chunk;
         }
 
@@ -175,10 +191,15 @@ pub const Compiler = struct {
 
     pub fn init(alloc: std.mem.Allocator, module: *Module) !Compiler {
         if (module.entry.tree == null) return error.CompilerError;
+        // Root chunk lives on `alloc` — its instruction buffer becomes bytecode.
         const root_chunk = try Compiler.Chunk.init(alloc, null, module);
-        const root_scope = try Scope.create(alloc, null, .global);
+        errdefer root_chunk.deinit();
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        errdefer arena.deinit();
+        const root_scope = try Scope.create(arena.allocator(), null, .global);
         return .{
             .alloc = alloc,
+            .arena = arena,
             .chunk = root_chunk,
             .scope = root_scope,
             .root_scope = root_scope,
@@ -188,30 +209,25 @@ pub const Compiler = struct {
     }
 
     pub fn deinit(self: *Compiler) void {
+        // Chunks live on `alloc` — their instruction buffers would have been
+        // consumed by bytecode()/compileFunctionObj() via toOwnedSlice on
+        // success. On error paths the buffers are still here; chunk.deinit
+        // frees them.
         var chunk: ?*Chunk = self.chunk;
         while (chunk) |c| {
             chunk = c.parent;
             c.deinit();
         }
-        var current_scope: ?*Scope = self.scope;
-        while (current_scope) |s| {
-            current_scope = s.parent;
-            s.destroy();
-        }
+        // Constants may hold Value.Obj pointers allocated on `alloc`. On
+        // success bytecode() transferred ownership out via toOwnedSlice, so
+        // items is empty here. On error paths we still own them.
         for (self.constants.items) |item| {
             item.destroy(self.alloc);
         }
-        var iter = self.constants_map.keyIterator();
-        while (iter.next()) |name| {
-            self.alloc.free(name.*);
-        }
-        self.emitted_files.deinit(self.alloc);
-        self.constants_map.deinit(self.alloc);
-        self.literal_cache.deinit(self.alloc);
         self.constants.deinit(self.alloc);
-        self.path_stack.deinit(self.alloc);
-        self.decl_tokens.deinit(self.alloc);
-        self.fn_arities.deinit(self.alloc);
+        // Everything else — scopes, all bookkeeping hash maps, duped keys,
+        // path_stack backing — is on the arena and freed in one shot.
+        self.arena.deinit();
     }
 
     fn fail(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype) Error {
@@ -416,7 +432,7 @@ pub const Compiler = struct {
         if (index.type != .identifier) return;
         if (self.constants_map.get(target.type.identifier) != null) return;
 
-        const sym = (try self.scope.resolve(target.type.identifier)) orelse return;
+        const sym = (try self.scope.resolve(self.arena.allocator(), target.type.identifier)) orelse return;
         const field = index.type.identifier;
 
         switch (sym.var_type) {
@@ -614,7 +630,7 @@ pub const Compiler = struct {
     }
 
     fn enterScope(self: *Compiler, tag: Scope.Tag) !void {
-        self.scope = try Scope.create(self.alloc, self.scope, tag);
+        self.scope = try Scope.create(self.arena.allocator(), self.scope, tag);
     }
 
     fn exitScope(self: *Compiler) !void {
@@ -627,7 +643,7 @@ pub const Compiler = struct {
         } else {
             self.locals_count = @max(self.locals_count, self.scope.count + old_scope.count);
         }
-        old_scope.destroy();
+        old_scope.destroy(self.arena.allocator());
     }
 
     fn resolveForkName(self: *Compiler, name: ?[]const u8, id: UUID.ID) Error![]const u8 {
@@ -637,7 +653,7 @@ pub const Compiler = struct {
     }
 
     fn pushPathScope(self: *Compiler, name: []const u8) Error!void {
-        try self.path_stack.append(self.alloc, name);
+        try self.path_stack.append(self.arena.allocator(), name);
     }
 
     fn popPathScope(self: *Compiler) void {
@@ -656,7 +672,7 @@ pub const Compiler = struct {
         const file = self.module.includes.get(resolved) orelse
             return self.failSpan("Unknown include file {s}", token, end_token, .{raw_path});
         if (self.emitted_files.contains(resolved)) return null;
-        try self.emitted_files.put(self.alloc, resolved, {});
+        try self.emitted_files.put(self.arena.allocator(), resolved, {});
         const tree = file.tree orelse return Error.NotInitialized;
         return .{ .file = file, .tree = tree.root };
     }
@@ -679,7 +695,7 @@ pub const Compiler = struct {
                 };
                 // Track arity so call sites can validate argument counts.
                 if (self.constants_map.getKey(full_name)) |persistent_key| {
-                    try self.fn_arities.put(self.alloc, persistent_key, @intCast(f.parameters.len));
+                    try self.fn_arities.put(self.arena.allocator(), persistent_key, @intCast(f.parameters.len));
                 }
                 if (f.is_extern) {
                     _ = try self.addConstant(.{ .obj = try self.compileExternFunctionObj(stmt) });
@@ -745,7 +761,7 @@ pub const Compiler = struct {
                     else => return err,
                 };
                 transferred = true;
-                try self.path_stack.append(self.alloc, name);
+                try self.path_stack.append(self.arena.allocator(), name);
                 defer _ = self.path_stack.pop();
                 for (c.body) |*s| try self.prepass(s);
             },
@@ -897,7 +913,7 @@ pub const Compiler = struct {
                 const jump_end = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
 
                 try self.enterScope(.local);
-                const capture = try self.scope.define(f.capture, false);
+                const capture = try self.scope.define(self.arena.allocator(), f.capture, false);
                 try self.writeOp(.set_local, token);
                 _ = try self.writeInt(C.LOCAL, @as(C.LOCAL, @intCast(capture.index)), token);
 
@@ -935,7 +951,7 @@ pub const Compiler = struct {
                         );
                     }
                 }
-                const symbol = self.scope.define(v.name, v.is_mutable) catch {
+                const symbol = self.scope.define(self.arena.allocator(), v.name, v.is_mutable) catch {
                     return self.failSpan("'{s}' is already declared in this scope", token, v.name_token, .{v.name});
                 };
                 try self.compileExpression(&v.initializer);
@@ -1105,7 +1121,7 @@ pub const Compiler = struct {
                 const full_name = try self.getQualifiedName(name);
                 defer self.alloc.free(full_name);
 
-                try self.path_stack.append(self.alloc, name);
+                try self.path_stack.append(self.arena.allocator(), name);
                 defer _ = self.path_stack.pop();
 
                 const entry_ip = self.instructionPos();
@@ -1446,11 +1462,11 @@ pub const Compiler = struct {
         var length = f.parameters.len;
         if (f.is_method) {
             length += 1;
-            _ = try self.scope.define("self", false);
+            _ = try self.scope.define(self.arena.allocator(), "self", false);
         }
 
         for (f.parameters) |param| {
-            _ = try self.scope.define(param, true);
+            _ = try self.scope.define(self.arena.allocator(), param, true);
         }
 
         try self.compileBlock(f.body);
@@ -1587,7 +1603,7 @@ pub const Compiler = struct {
         // failure (keeps error paths clean).
         if (self.constants_map.contains(full_name)) return error.SymbolAlreadyDeclared;
 
-        const visit_sym = try self.root_scope.define(full_name, false);
+        const visit_sym = try self.root_scope.define(self.arena.allocator(), full_name, false);
         visit_sym.uuid = uuid;
 
         var parent_idx: ?C.CONSTANT = null;
@@ -1641,7 +1657,7 @@ pub const Compiler = struct {
                     switch (bin.left.type) {
                         .identifier => |id| {
                             try self.compileExpression(bin.right);
-                            const symbol = try self.scope.resolve(id);
+                            const symbol = try self.scope.resolve(self.arena.allocator(), id);
                             if (symbol) |s| {
                                 s.var_type = inferExprType(bin.right);
                             }
@@ -1698,7 +1714,7 @@ pub const Compiler = struct {
                     .assign_add, .assign_subtract, .assign_multiply, .assign_divide, .assign_modulus => {
                         switch (bin.left.type) {
                             .identifier => |id| {
-                                const symbol = try self.scope.resolve(id);
+                                const symbol = try self.scope.resolve(self.arena.allocator(), id);
                                 try self.setSymbol(id, symbol, token, false);
                                 try self.loadSymbol(id, token);
                                 return;
@@ -2020,7 +2036,7 @@ pub const Compiler = struct {
     }
 
     fn loadSymbol(self: *Compiler, name: []const u8, token: Token) !void {
-        const symbol = try self.scope.resolve(name);
+        const symbol = try self.scope.resolve(self.arena.allocator(), name);
 
         if (symbol) |s| {
             switch (s.tag) {
@@ -2187,13 +2203,12 @@ pub const Compiler = struct {
     pub fn addNamedConstantTok(self: *Compiler, name: []const u8, value: Value, token: ?Token) !void {
         if (self.constants_map.contains(name)) return error.SymbolAlreadyDeclared;
         // Reserve capacity for every write up front so post-`dupe` inserts
-        // cannot OOM. Without this, a late failure leaves the key in one
-        // container while the errdefer frees it — a double-free on teardown.
+        // cannot OOM.
+        const aa = self.arena.allocator();
         try self.constants.ensureUnusedCapacity(self.alloc, 1);
-        try self.constants_map.ensureUnusedCapacity(self.alloc, 1);
-        if (token != null) try self.decl_tokens.ensureUnusedCapacity(self.alloc, 1);
-        const key = try self.alloc.dupe(u8, name);
-        errdefer self.alloc.free(key);
+        try self.constants_map.ensureUnusedCapacity(aa, 1);
+        if (token != null) try self.decl_tokens.ensureUnusedCapacity(aa, 1);
+        const key = try aa.dupe(u8, name);
         const i: C.CONSTANT = @intCast(self.constants.items.len);
         self.constants.appendAssumeCapacity(value);
         self.constants_map.putAssumeCapacityNoClobber(key, i);
@@ -2204,16 +2219,16 @@ pub const Compiler = struct {
         if (self.literal_cache.get(value)) |idx| return idx;
 
         const i = try self.addConstant(value);
-        try self.literal_cache.put(self.alloc, value, i);
+        try self.literal_cache.put(self.arena.allocator(), value, i);
         return i;
     }
 
     fn addIdentifierConstant(self: *Compiler, name: []const u8, token: Token) !void {
         var i = self.constants_map.get(name);
         if (i == null) {
-            try self.constants_map.ensureUnusedCapacity(self.alloc, 1);
-            const key = try self.alloc.dupe(u8, name);
-            errdefer self.alloc.free(key);
+            const aa = self.arena.allocator();
+            try self.constants_map.ensureUnusedCapacity(aa, 1);
+            const key = try aa.dupe(u8, name);
             i = try self.addConstant(.{ .const_string = name });
             self.constants_map.putAssumeCapacityNoClobber(key, i.?);
         }

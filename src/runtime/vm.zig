@@ -872,6 +872,7 @@ pub const Vm = struct {
                     var count = self.takeInt(C.COLLECTION);
                     var map = Value.Obj.MapType.empty;
                     errdefer map.deinit(self.alloc);
+                    try map.ensureTotalCapacity(self.alloc, count);
                     while (count > 0) : (count -= 1) {
                         const value = try self.pop();
                         const key = try self.pop();
@@ -884,6 +885,7 @@ pub const Vm = struct {
                     var count = self.takeInt(C.COLLECTION);
                     var set = Value.Obj.SetType.empty;
                     errdefer set.deinit(self.alloc);
+                    try set.ensureTotalCapacity(self.alloc, count);
                     while (count > 0) : (count -= 1) {
                         try set.put(self.alloc, try self.pop(), {});
                     }
