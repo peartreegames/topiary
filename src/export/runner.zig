@@ -139,7 +139,7 @@ pub const ExportRunner = struct {
 
     /// String pointers in ExportLine are valid only during the on_line callback.
     /// The host must copy any strings it needs to retain.
-    pub fn onLine(runner: *Runner, vm: *Vm, dialogue: Line) void {
+    pub fn onLine(runner: *Runner, vm: *Vm, dialogue: *const Line) void {
         var self: *ExportRunner = @fieldParentPtr("runner", runner);
 
         var i: usize = 0;

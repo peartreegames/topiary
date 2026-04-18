@@ -12,22 +12,19 @@ const std = @import("std");
 const chapter_count: usize = 200;
 const boughs_per_chapter: usize = 10;
 
-pub fn main() !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+const io = std.Io.Threaded.global_single_threaded.io();
 
-    var args_iter = try std.process.argsWithAllocator(alloc);
-    defer args_iter.deinit();
+pub fn main(init: std.process.Init.Minimal) !void {
+    var args_iter = std.process.Args.Iterator.init(init.args);
     _ = args_iter.skip();
     const out_dir_path = args_iter.next() orelse {
         std.debug.print("usage: bench-gen <output-dir>\n", .{});
         return error.MissingArgument;
     };
 
-    try std.fs.cwd().makePath(out_dir_path);
-    var dir = try std.fs.cwd().openDir(out_dir_path, .{});
-    defer dir.close();
+    try std.Io.Dir.cwd().createDirPath(io, out_dir_path);
+    var dir = try std.Io.Dir.cwd().openDir(io, out_dir_path, .{});
+    defer dir.close(io);
 
     try writeEntry(dir);
     var i: usize = 1;
@@ -38,11 +35,11 @@ pub fn main() !void {
     std.debug.print("bench-gen: wrote entry.topi + {d} chapter files into {s}\n", .{ chapter_count, out_dir_path });
 }
 
-fn writeEntry(dir: std.fs.Dir) !void {
-    var file = try dir.createFile("entry.topi", .{ .truncate = true });
-    defer file.close();
+fn writeEntry(dir: std.Io.Dir) !void {
+    var file = try dir.createFile(io, "entry.topi", .{ .truncate = true });
+    defer file.close(io);
     var buf: [4096]u8 = undefined;
-    var fw = file.writer(&buf);
+    var fw = file.writer(io, &buf);
     const w = &fw.interface;
 
     try w.writeAll("// Benchmark entry file -- includes all chapters and diverts into chapter 1.\n\n");
@@ -63,14 +60,14 @@ fn writeEntry(dir: std.fs.Dir) !void {
     try w.flush();
 }
 
-fn writeChapter(dir: std.fs.Dir, n: usize) !void {
+fn writeChapter(dir: std.Io.Dir, n: usize) !void {
     var name_buf: [32]u8 = undefined;
     const name = try std.fmt.bufPrint(&name_buf, "chapter_{d:0>2}.topi", .{n});
 
-    var file = try dir.createFile(name, .{ .truncate = true });
-    defer file.close();
+    var file = try dir.createFile(io, name, .{ .truncate = true });
+    defer file.close(io);
     var buf: [4096]u8 = undefined;
-    var fw = file.writer(&buf);
+    var fw = file.writer(io, &buf);
     const w = &fw.interface;
 
     // --- Header & constants ---

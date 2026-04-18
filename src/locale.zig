@@ -121,8 +121,8 @@ pub const Locale = struct {
         return buf.toOwnedSlice(alloc);
     }
 
-    fn walkLocalizable(stmts: []const Statement, context: anytype, comptime onLeaf: fn (@TypeOf(context), Statement) @TypeOf(context).Error!void) @TypeOf(context).Error!void {
-        for (stmts) |stmt| {
+    fn walkLocalizable(stmts: []const Statement, context: anytype, comptime onLeaf: fn (@TypeOf(context), *const Statement) @TypeOf(context).Error!void) @TypeOf(context).Error!void {
+        for (stmts) |*stmt| {
             switch (stmt.type) {
                 .block => |b| try walkLocalizable(b, context, onLeaf),
                 .bough => |b| try walkLocalizable(b.body, context, onLeaf),
@@ -153,7 +153,7 @@ pub const Locale = struct {
 
         pub const Error = error{ OutOfMemory, NoSpaceLeft };
 
-        fn onLeaf(ctx: LocalizeContext, stmt: Statement) @This().Error!void {
+        fn onLeaf(ctx: LocalizeContext, stmt: *const Statement) @This().Error!void {
             const has_valid_source_id = switch (stmt.type) {
                 .choice => |c| c.id_token != null and !UUID.isEmpty(c.id),
                 .dialogue => |d| d.id_token != null and !UUID.isEmpty(d.id),
@@ -193,7 +193,7 @@ pub const Locale = struct {
 
         pub const Error = error{};
 
-        fn onLeaf(ctx: CheckContext, stmt: Statement) @This().Error!void {
+        fn onLeaf(ctx: CheckContext, stmt: *const Statement) @This().Error!void {
             const missing = switch (stmt.type) {
                 .choice => |c| c.id_token == null or UUID.isEmpty(c.id),
                 .dialogue => |d| d.id_token == null or UUID.isEmpty(d.id),
@@ -208,7 +208,7 @@ pub const Locale = struct {
 
         pub const Error = error{OutOfMemory};
 
-        fn onLeaf(ctx: CollectContext, stmt: Statement) @This().Error!void {
+        fn onLeaf(ctx: CollectContext, stmt: *const Statement) @This().Error!void {
             const id: UUID.ID = switch (stmt.type) {
                 .choice => |c| if (c.id_token != null and !UUID.isEmpty(c.id)) c.id else return,
                 .dialogue => |d| if (d.id_token != null and !UUID.isEmpty(d.id)) d.id else return,
@@ -235,7 +235,7 @@ pub const Locale = struct {
 
         pub const Error = error{ WriteFailure, MissingStamp };
 
-        fn onLeaf(ctx: ExportContext, stmt: Statement) @This().Error!void {
+        fn onLeaf(ctx: ExportContext, stmt: *const Statement) @This().Error!void {
             switch (stmt.type) {
                 .choice => |c| {
                     if (c.id_token == null or UUID.isEmpty(c.id)) return error.MissingStamp;
@@ -266,7 +266,7 @@ pub const Locale = struct {
 
         pub const Error = error{ WriteFailure, MissingStamp };
 
-        fn onLeaf(ctx: MergeExportContext, stmt: Statement) @This().Error!void {
+        fn onLeaf(ctx: MergeExportContext, stmt: *const Statement) @This().Error!void {
             const has_valid_source_id = switch (stmt.type) {
                 .choice => |c| c.id_token != null and !UUID.isEmpty(c.id),
                 .dialogue => |d| d.id_token != null and !UUID.isEmpty(d.id),

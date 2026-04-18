@@ -30,7 +30,7 @@ pub fn initTestVm(source: []const u8, mod: *Module, debug: bool) !Vm {
     errdefer bytecode.free(allocator);
     if (debug) try printBytecode(&bytecode);
     const test_runner = try TestRunner.init(allocator);
-    return Vm.init(allocator, std.testing.io, bytecode, &test_runner.runner);
+    return Vm.init(allocator, std.testing.io, &bytecode, &test_runner.runner);
 }
 
 fn printErr(vm: *Vm) void {
@@ -2441,7 +2441,7 @@ test "Runtime Includes" {
     defer bytecode.free(std.testing.allocator);
 
     var test_runner = try TestRunner.init(allocator);
-    var vm = try Vm.init(std.testing.allocator, test_io, bytecode, &test_runner.runner);
+    var vm = try Vm.init(std.testing.allocator, test_io, &bytecode, &test_runner.runner);
     defer vm.deinit();
     defer test_runner.deinit();
     vm.interpret() catch |err| {

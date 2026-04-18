@@ -72,7 +72,7 @@ pub const Expression = struct {
             else_value: *Expression,
         },
     };
-    pub fn print(self: Expression, writer: *std.Io.Writer, prefix: []const u8, depth: usize) void {
+    pub fn print(self: *const Expression, writer: *std.Io.Writer, prefix: []const u8, depth: usize) void {
         writer.print("\n", .{});
         var d: usize = 0;
         while (d < depth) : (d += 1) {
@@ -261,7 +261,7 @@ pub const Statement = struct {
         },
     };
 
-    pub fn print(self: Statement, writer: *std.Io.Writer, prefix: []const u8, depth: usize) void {
+    pub fn print(self: *const Statement, writer: *std.Io.Writer, prefix: []const u8, depth: usize) void {
         writer.print("\n", .{});
         var d: usize = 0;
         while (d < depth) : (d += 1) {

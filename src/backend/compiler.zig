@@ -396,7 +396,7 @@ pub const Compiler = struct {
         return try self.suggestFromList(name, names.items);
     }
 
-    fn inferExprType(expr: Expression) scope.VarType {
+    fn inferExprType(expr: *const Expression) scope.VarType {
         return switch (expr.type) {
             .instance => |i| .{ .instance = i.name },
             .string => .string,
@@ -486,7 +486,7 @@ pub const Compiler = struct {
     /// Writer-friendly name for an expression's syntactic kind. Used in
     /// error messages instead of leaking `@tagName` (which exposes
     /// internal AST tags like "binary" or "call").
-    fn expressionKindName(expr: Expression) []const u8 {
+    fn expressionKindName(expr: *const Expression) []const u8 {
         return switch (expr.type) {
             .number => "number literal",
             .string => "string literal",
@@ -531,7 +531,7 @@ pub const Compiler = struct {
         return self.failWithHelp(
             "Cannot assign to a {s}",
             left.token,
-            .{expressionKindName(left.*)},
+            .{expressionKindName(left)},
             null,
             try self.alloc.dupe(u8, "assignment targets must be a variable or an indexer (e.g. `list[0]` or `obj.field`)"),
         );
@@ -584,12 +584,12 @@ pub const Compiler = struct {
             obj.* = .{ .data = .{ .builtin = builtins.get(name).? } };
             try self.addNamedConstant(name, .{ .obj = obj });
         }
-        for (tree.root) |stmt| {
+        for (tree.root) |*stmt| {
             try self.prepass(stmt);
         }
         self.emitted_files.clearRetainingCapacity();
 
-        for (tree.root) |stmt| {
+        for (tree.root) |*stmt| {
             try self.compileStatement(stmt);
         }
 
@@ -661,14 +661,14 @@ pub const Compiler = struct {
         return .{ .file = file, .tree = tree.root };
     }
 
-    fn prepass(self: *Compiler, stmt: Statement) Error!void {
+    fn prepass(self: *Compiler, stmt: *const Statement) Error!void {
         switch (stmt.type) {
             .include => |i| {
                 const result = try self.resolveInclude(i.path, stmt.token, i.path_token) orelse return;
                 const tmp = self.current_file;
                 defer self.current_file = tmp;
                 self.current_file = result.file;
-                for (result.tree) |s| try self.prepass(s);
+                for (result.tree) |*s| try self.prepass(s);
             },
             .function => |f| {
                 const full_name = try self.getQualifiedName(f.name);
@@ -715,7 +715,7 @@ pub const Compiler = struct {
                 transferred = true;
                 try self.pushPathScope(b.name);
                 defer self.popPathScope();
-                for (b.body) |s| try self.prepass(s);
+                for (b.body) |*s| try self.prepass(s);
             },
             .fork => |f| {
                 const fork_name = self.resolveForkName(f.name, f.id) catch
@@ -733,7 +733,7 @@ pub const Compiler = struct {
                 try self.pushPathScope(fork_name);
                 defer self.popPathScope();
 
-                for (f.body) |s| try self.prepass(s);
+                for (f.body) |*s| try self.prepass(s);
             },
             .choice => |c| {
                 const name = c.name orelse &c.id;
@@ -747,25 +747,25 @@ pub const Compiler = struct {
                 transferred = true;
                 try self.path_stack.append(self.alloc, name);
                 defer _ = self.path_stack.pop();
-                for (c.body) |s| try self.prepass(s);
+                for (c.body) |*s| try self.prepass(s);
             },
             .@"if" => |i| {
-                for (i.then_branch) |s| try self.prepass(s);
+                for (i.then_branch) |*s| try self.prepass(s);
                 if (i.else_branch) |e| {
-                    for (e) |s| try self.prepass(s);
+                    for (e) |*s| try self.prepass(s);
                 }
             },
             .@"while" => |w| {
-                for (w.body) |s| try self.prepass(s);
+                for (w.body) |*s| try self.prepass(s);
             },
             .@"for" => |f| {
-                for (f.body) |s| try self.prepass(s);
+                for (f.body) |*s| try self.prepass(s);
             },
             else => {},
         }
     }
 
-    pub fn compileStatement(self: *Compiler, stmt: Statement) Error!void {
+    pub fn compileStatement(self: *Compiler, stmt: *const Statement) Error!void {
         const token = stmt.token;
         switch (stmt.type) {
             .include => |i| {
@@ -773,7 +773,7 @@ pub const Compiler = struct {
                 const tmp_file = self.current_file;
                 defer self.current_file = tmp_file;
                 self.current_file = result.file;
-                for (result.tree) |s| try self.compileStatement(s);
+                for (result.tree) |*s| try self.compileStatement(s);
             },
             .@"if" => |i| {
                 try self.compileExpression(i.condition);
@@ -940,7 +940,7 @@ pub const Compiler = struct {
                 };
                 try self.compileExpression(&v.initializer);
                 try self.setSymbol(v.name, symbol, token, true);
-                symbol.var_type = inferExprType(v.initializer);
+                symbol.var_type = inferExprType(&v.initializer);
             },
             .class => |c| {
                 // `transferred` gates every errdefer below: once the class
@@ -980,7 +980,7 @@ pub const Compiler = struct {
                     self.alloc.free(methods);
                 };
 
-                for (c.methods, 0..) |method_stmt, i| {
+                for (c.methods, 0..) |*method_stmt, i| {
                     const func = method_stmt.type.function;
                     const func_obj = try self.compileFunctionObj(method_stmt, method_stmt.token);
                     errdefer {
@@ -1419,14 +1419,14 @@ pub const Compiler = struct {
                 try std.fmt.allocPrint(
                     self.alloc,
                     "got a {s}; constants must be numbers, strings, bools, nil, or lists/sets/maps of literals",
-                    .{expressionKindName(expr.*)},
+                    .{expressionKindName(expr)},
                 ),
                 Error.IllegalOperation,
             ),
         }
     }
 
-    fn compileExternFunctionObj(self: *Compiler, stmt: Statement) !*Value.Obj {
+    fn compileExternFunctionObj(self: *Compiler, stmt: *const Statement) !*Value.Obj {
         const f = stmt.type.function;
         const obj = try self.alloc.create(Value.Obj);
         obj.* = .{ .data = .{ .@"extern" = .{
@@ -1436,7 +1436,7 @@ pub const Compiler = struct {
         return obj;
     }
 
-    fn compileFunctionObj(self: *Compiler, stmt: Statement, token: Token) !*Value.Obj {
+    fn compileFunctionObj(self: *Compiler, stmt: *const Statement, token: Token) !*Value.Obj {
         const saved_locals_count = self.locals_count;
         self.locals_count = 0;
         try self.enterScope(.function);
@@ -1510,7 +1510,7 @@ pub const Compiler = struct {
 
     pub fn compileBlock(self: *Compiler, stmts: []const Statement) Error!void {
         var exited_at: ?usize = null;
-        for (stmts, 0..) |stmt, i| {
+        for (stmts, 0..) |*stmt, i| {
             if (exited_at == null and statementExits(stmt)) {
                 exited_at = i;
             }
@@ -1519,9 +1519,9 @@ pub const Compiler = struct {
         if (exited_at) |i| {
             // Find the first non-bough statement after the exit — bough
             // declarations are independent entry points, not sequential code.
-            for (stmts[i + 1 ..]) |next| {
+            for (stmts[i + 1 ..]) |*next| {
                 if (next.type != .bough) {
-                    const exit_stmt = stmts[i];
+                    const exit_stmt = &stmts[i];
                     const note: ?[]const u8 = switch (exit_stmt.type) {
                         .@"if" => try self.alloc.dupe(u8, "all branches of this 'if' exit"),
                         .@"switch" => try self.alloc.dupe(u8, "all prongs of this 'switch' exit"),
@@ -1540,7 +1540,7 @@ pub const Compiler = struct {
         }
     }
 
-    fn statementExits(stmt: Statement) bool {
+    fn statementExits(stmt: *const Statement) bool {
         return switch (stmt.type) {
             .return_expression, .return_void, .fin => true,
             .fork => |f| !f.is_backup,
@@ -1563,7 +1563,7 @@ pub const Compiler = struct {
         return has_explicit_else;
     }
 
-    fn exitKeyword(stmt: Statement) []const u8 {
+    fn exitKeyword(stmt: *const Statement) []const u8 {
         return switch (stmt.type) {
             .return_expression, .return_void => "return",
             .fin => "fin",
@@ -1576,7 +1576,7 @@ pub const Compiler = struct {
     }
 
     fn blockExits(body: []const Statement) bool {
-        for (body) |stmt| {
+        for (body) |*stmt| {
             if (statementExits(stmt)) return true;
         }
         return false;
@@ -1643,7 +1643,7 @@ pub const Compiler = struct {
                             try self.compileExpression(bin.right);
                             const symbol = try self.scope.resolve(id);
                             if (symbol) |s| {
-                                s.var_type = inferExprType(bin.right.*);
+                                s.var_type = inferExprType(bin.right);
                             }
                             try self.setSymbol(id, symbol, token, false);
                             try self.loadSymbol(id, token);

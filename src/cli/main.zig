@@ -260,8 +260,8 @@ fn writeOutput(full_path: []const u8, content: []const u8, dry: bool) !void {
 }
 
 pub fn main(init: std.process.Init.Minimal) !void {
-    var da: std.heap.DebugAllocator(.{}) = .init;
-    var arena = std.heap.ArenaAllocator.init(da.allocator());
+    const alloc = std.heap.smp_allocator;
+    var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     var iter = std.process.Args.Iterator.init(init.args);
     _ = iter.skip();
@@ -338,7 +338,7 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
     defer bytecode.free(alloc);
 
     var cli_runner = CliRunner.init(args.auto);
-    var vm = Vm.init(alloc, io, bytecode, &cli_runner.runner) catch |err| {
+    var vm = Vm.init(alloc, io, &bytecode, &cli_runner.runner) catch |err| {
         try print("Could not initialize Vm\n", .{});
         return if (args.verbose) err else {};
     };
@@ -507,7 +507,7 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
     var i: usize = 0;
     while (i < args.count) : (i += 1) {
         var auto_runner = AutoTestRunner.init();
-        var vm = try Vm.init(alloc, io, bytecode, &auto_runner.runner);
+        var vm = try Vm.init(alloc, io, &bytecode, &auto_runner.runner);
         defer vm.deinit();
         try vm.start(args.bough);
         while (vm.can_continue) {

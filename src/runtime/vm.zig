@@ -116,7 +116,7 @@ pub const Vm = struct {
     };
 
     /// Initialize Vm
-    pub fn init(allocator: std.mem.Allocator, io: std.Io, bytecode: Bytecode, runner: anytype) !Vm {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, bytecode: *const Bytecode, runner: anytype) !Vm {
         const globals = try allocator.alloc(Value, bytecode.global_symbols.len);
         @memset(globals, .void);
         for (bytecode.constants) |c| {
@@ -143,7 +143,7 @@ pub const Vm = struct {
         var vm = Vm{
             .alloc = allocator,
             .io = io,
-            .bytecode = bytecode,
+            .bytecode = bytecode.*,
             .frames = try Stack(Frame).init(allocator, frame_size),
             .err = .{},
             .globals = globals,
@@ -1097,11 +1097,12 @@ pub const Vm = struct {
                     }
                     if (is_in_jump) continue;
                     self.is_waiting = true;
-                    self.runner.onLine(self, .{
+                    const line = Line{
                         .content = dialogue_str,
                         .speaker = speaker,
                         .tags = tags,
-                    });
+                    };
+                    self.runner.onLine(self, &line);
                     return;
                 },
                 .call => {

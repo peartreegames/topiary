@@ -258,7 +258,7 @@ pub export fn createVm(
         return null;
     };
     logger.log("Initializing Vm, globals: {}", .{bytecode.global_symbols.len}, .info);
-    vm.* = Vm.init(alloc, io, bytecode, &extern_runner.runner) catch {
+    vm.* = Vm.init(alloc, io, &bytecode, &extern_runner.runner) catch {
         logger.log("Could not initialize Vm", .{}, .err);
         alloc.destroy(vm);
         alloc.destroy(extern_runner);

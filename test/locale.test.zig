@@ -420,7 +420,7 @@ test "Localization VM Deinit Cleans Up Locale" {
     var bytecode = try compileSource("const x = 1", mod);
     defer bytecode.free(alloc);
     const test_runner = try TestRunner.init(alloc);
-    var vm = try Vm.init(alloc, std.testing.io, bytecode, &test_runner.runner);
+    var vm = try Vm.init(alloc, std.testing.io, &bytecode, &test_runner.runner);
     defer vm.deinit();
     defer test_runner.deinit();
 

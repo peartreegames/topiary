@@ -112,8 +112,6 @@ pub fn build(b: *std.Build) void {
 }
 
 fn getVersion(b: *std.Build) ![]const u8 {
-    var tree = try std.zig.Ast.parse(b.allocator, @embedFile("build.zig.zon"), .zon);
-    defer tree.deinit(b.allocator);
-    const version_str = tree.tokenSlice(tree.nodes.items(.main_token)[2]);
-    return b.allocator.dupe(u8, version_str[1 .. version_str.len - 1]);
+    const zon = @import("build.zig.zon");
+    return b.allocator.dupe(u8, zon.version);
 }

@@ -19,11 +19,11 @@ pub const Runner = struct {
     on_choices: OnChoices,
     on_value_changed: OnValueChanged,
 
-    pub const OnLine = *const fn (runner: *Runner, vm: *Vm, dialogue: Line) void;
+    pub const OnLine = *const fn (runner: *Runner, vm: *Vm, dialogue: *const Line) void;
     pub const OnChoices = *const fn (runner: *Runner, vm: *Vm, choices: []Choice) void;
     pub const OnValueChanged = *const fn (runner: *Runner, vm: *Vm, name: []const u8, value: Value) void;
 
-    pub fn onLine(runner: *Runner, vm: *Vm, dialogue: Line) void {
+    pub fn onLine(runner: *Runner, vm: *Vm, dialogue: *const Line) void {
         runner.on_line(runner, vm, dialogue);
     }
 

@@ -25,7 +25,7 @@ pub const CliRunner = struct {
         };
     }
 
-    pub fn onLine(runner: *Runner, vm: *Vm, dialogue: Line) void {
+    pub fn onLine(runner: *Runner, vm: *Vm, dialogue: *const Line) void {
         const self: *CliRunner = @fieldParentPtr("runner", runner);
         print(":", .{}) catch {};
         if (dialogue.speaker) |speaker| {
@@ -119,7 +119,7 @@ pub const AutoTestRunner = struct {
         };
     }
 
-    pub fn onLine(_: *Runner, vm: *Vm, _: Line) void {
+    pub fn onLine(_: *Runner, vm: *Vm, _: *const Line) void {
         vm.selectContinue();
     }
 

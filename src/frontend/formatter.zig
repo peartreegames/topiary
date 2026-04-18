@@ -30,9 +30,9 @@ pub const Formatter = struct {
             .stamp = stamp,
         };
 
-        for (tree.root, 0..) |stmt, i| {
+        for (tree.root, 0..) |*stmt, i| {
             if (i > 0) {
-                if (isTopLevelDecl(stmt) or isTopLevelDecl(tree.root[i - 1])) {
+                if (isTopLevelDecl(stmt) or isTopLevelDecl(&tree.root[i - 1])) {
                     try self.write("\n");
                 }
             }
@@ -59,7 +59,7 @@ pub const Formatter = struct {
         }
     }
 
-    fn isTopLevelDecl(stmt: Statement) bool {
+    fn isTopLevelDecl(stmt: *const Statement) bool {
         return switch (stmt.type) {
             .bough, .function, .class, .@"enum" => true,
             else => false,
@@ -68,7 +68,7 @@ pub const Formatter = struct {
 
     const Error = std.mem.Allocator.Error;
 
-    fn writeStatement(self: *Formatter, stmt: Statement) Error!void {
+    fn writeStatement(self: *Formatter, stmt: *const Statement) Error!void {
         switch (stmt.type) {
             .include => |inc| {
                 try self.writeIndent();
@@ -81,7 +81,7 @@ pub const Formatter = struct {
                 try self.write(if (v.is_mutable) "var " else "const ");
                 try self.write(v.name);
                 try self.write(" = ");
-                try self.writeExpression(v.initializer);
+                try self.writeExpression(&v.initializer);
             },
             .function => |f| {
                 try self.writeIndent();
@@ -102,7 +102,7 @@ pub const Formatter = struct {
                 try self.write(c.name);
                 try self.write(" {\n");
                 self.indent += 1;
-                for (c.field_names, c.fields, 0..) |name, field, i| {
+                for (c.field_names, c.fields, 0..) |name, *field, i| {
                     try self.writeIndent();
                     try self.write(name);
                     try self.write(" = ");
@@ -113,7 +113,7 @@ pub const Formatter = struct {
                 if (c.methods.len > 0 and c.field_names.len > 0) {
                     try self.write("\n");
                 }
-                for (c.methods, 0..) |method, i| {
+                for (c.methods, 0..) |*method, i| {
                     try self.write("\n");
                     try self.writeStatement(method);
                     if (i < c.methods.len - 1) try self.write("\n");
@@ -179,7 +179,7 @@ pub const Formatter = struct {
                     try self.write(name);
                     try self.write("\"");
                 } else {
-                    try self.writeExpression(c.content);
+                    try self.writeExpression(&c.content);
                 }
                 for (c.tags) |tag| {
                     try self.write(" #");
@@ -190,7 +190,7 @@ pub const Formatter = struct {
                     if (isSingleLineBody(c.body) and !self.sourceHasBraces(c.body)) {
                         try self.write(" ");
                         self.suppress_indent = true;
-                        try self.writeStatement(c.body[0]);
+                        try self.writeStatement(&c.body[0]);
                     } else {
                         try self.write(" {\n");
                         self.indent += 1;
@@ -208,7 +208,7 @@ pub const Formatter = struct {
                     try self.write(speaker);
                 }
                 try self.write(": ");
-                try self.writeExpression(d.content.*);
+                try self.writeExpression(d.content);
                 for (d.tags) |tag| {
                     try self.write(" #");
                     try self.write(tag.name);
@@ -226,13 +226,13 @@ pub const Formatter = struct {
             .@"while" => |w| {
                 try self.writeIndent();
                 try self.write("while ");
-                try self.writeExpression(w.condition);
+                try self.writeExpression(&w.condition);
                 try self.writeBodyBraces(w.body);
             },
             .@"for" => |f| {
                 try self.writeIndent();
                 try self.write("for ");
-                try self.writeExpression(f.iterator);
+                try self.writeExpression(&f.iterator);
                 try self.write(" |");
                 try self.write(f.capture);
                 try self.write("|");
@@ -241,10 +241,10 @@ pub const Formatter = struct {
             .@"switch" => |s| {
                 try self.writeIndent();
                 try self.write("switch ");
-                try self.writeExpression(s.capture);
+                try self.writeExpression(&s.capture);
                 try self.write(" {\n");
                 self.indent += 1;
-                for (s.prongs, 0..) |prong, i| {
+                for (s.prongs, 0..) |*prong, i| {
                     try self.writeStatement(prong);
                     if (i < s.prongs.len - 1) try self.write(",");
                     try self.write("\n");
@@ -256,7 +256,7 @@ pub const Formatter = struct {
             .switch_prong => |p| {
                 try self.writeIndent();
                 if (p.values) |vals| {
-                    for (vals, 0..) |v, i| {
+                    for (vals, 0..) |*v, i| {
                         if (i > 0) try self.write(", ");
                         try self.writeExpression(v);
                     }
@@ -266,7 +266,7 @@ pub const Formatter = struct {
                 try self.write(": ");
                 if (p.body.len == 1) {
                     self.suppress_indent = true;
-                    try self.writeStatement(p.body[0]);
+                    try self.writeStatement(&p.body[0]);
                 } else {
                     try self.write("\n");
                     self.indent += 1;
@@ -274,7 +274,7 @@ pub const Formatter = struct {
                     self.indent -= 1;
                 }
             },
-            .return_expression => |e| {
+            .return_expression => |*e| {
                 try self.writeIndent();
                 try self.write("return ");
                 try self.writeExpression(e);
@@ -308,7 +308,7 @@ pub const Formatter = struct {
                 try self.writeIndent();
                 try self.write(c);
             },
-            .expression => |e| {
+            .expression => |*e| {
                 try self.writeIndent();
                 try self.writeExpression(e);
             },
@@ -317,7 +317,7 @@ pub const Formatter = struct {
 
     fn writeIf(self: *Formatter, condition: *Expression, then_branch: []const Statement, else_branch: ?[]const Statement) Error!void {
         try self.write("if ");
-        try self.writeExpression(condition.*);
+        try self.writeExpression(condition);
         try self.writeBody(then_branch);
         if (else_branch) |eb| {
             const inline_then = isSingleLineBody(then_branch) and !self.sourceHasBraces(then_branch);
@@ -350,7 +350,7 @@ pub const Formatter = struct {
         if (allow_inline and isSingleLineBody(body) and !self.sourceHasBraces(body)) {
             try self.write(" ");
             self.suppress_indent = true;
-            try self.writeStatement(body[0]);
+            try self.writeStatement(&body[0]);
         } else {
             try self.write(" {\n");
             self.indent += 1;
@@ -394,42 +394,42 @@ pub const Formatter = struct {
     }
 
     fn writeStatements(self: *Formatter, stmts: []const Statement) Error!void {
-        for (stmts) |stmt| {
+        for (stmts) |*stmt| {
             try self.writeStatement(stmt);
             try self.write("\n");
         }
     }
 
-    fn writeExpression(self: *Formatter, expr: Expression) Error!void {
+    fn writeExpression(self: *Formatter, expr: *const Expression) Error!void {
         switch (expr.type) {
             .binary => |b| {
-                try self.writeExpression(b.left.*);
+                try self.writeExpression(b.left);
                 try self.write(" ");
                 try self.write(b.operator.toString());
                 try self.write(" ");
-                try self.writeExpression(b.right.*);
+                try self.writeExpression(b.right);
             },
             .unary => |u| {
                 try self.write(u.operator.toString());
-                try self.writeExpression(u.value.*);
+                try self.writeExpression(u.value);
             },
             .call => |c| {
-                try self.writeExpression(c.target.*);
+                try self.writeExpression(c.target);
                 try self.write("(");
-                for (c.arguments, 0..) |arg, i| {
+                for (c.arguments, 0..) |*arg, i| {
                     if (i > 0) try self.write(", ");
                     try self.writeExpression(arg);
                 }
                 try self.write(")");
             },
             .indexer => |ix| {
-                try self.writeExpression(ix.target.*);
+                try self.writeExpression(ix.target);
                 if (expr.token.token_type == .dot) {
                     try self.write(".");
-                    try self.writeExpression(ix.index.*);
+                    try self.writeExpression(ix.index);
                 } else {
                     try self.write("[");
-                    try self.writeExpression(ix.index.*);
+                    try self.writeExpression(ix.index);
                     try self.write("]");
                 }
             },
@@ -452,7 +452,7 @@ pub const Formatter = struct {
             },
             .list => |l| {
                 try self.write("List{");
-                for (l, 0..) |item, i| {
+                for (l, 0..) |*item, i| {
                     if (i > 0) try self.write(", ");
                     try self.writeExpression(item);
                 }
@@ -460,7 +460,7 @@ pub const Formatter = struct {
             },
             .set => |s| {
                 try self.write("Set{");
-                for (s, 0..) |item, i| {
+                for (s, 0..) |*item, i| {
                     if (i > 0) try self.write(", ");
                     try self.writeExpression(item);
                 }
@@ -468,22 +468,22 @@ pub const Formatter = struct {
             },
             .map => |m| {
                 try self.write("Map{");
-                for (m, 0..) |pair, i| {
+                for (m, 0..) |*pair, i| {
                     if (i > 0) try self.write(", ");
                     try self.writeExpression(pair);
                 }
                 try self.write("}");
             },
             .map_pair => |p| {
-                try self.writeExpression(p.key.*);
+                try self.writeExpression(p.key);
                 try self.write(": ");
-                try self.writeExpression(p.value.*);
+                try self.writeExpression(p.value);
             },
             .instance => |inst| {
                 try self.write("new ");
                 try self.write(inst.name);
                 try self.write("{");
-                for (inst.field_names, inst.fields, 0..) |name, field, i| {
+                for (inst.field_names, inst.fields, 0..) |name, *field, i| {
                     if (i > 0) try self.write(", ");
                     try self.write(" ");
                     try self.write(name);
@@ -494,17 +494,17 @@ pub const Formatter = struct {
                 try self.write("}");
             },
             .range => |r| {
-                try self.writeExpression(r.left.*);
+                try self.writeExpression(r.left);
                 try self.write("..");
-                try self.writeExpression(r.right.*);
+                try self.writeExpression(r.right);
             },
             .@"if" => |i| {
                 try self.write("if ");
-                try self.writeExpression(i.condition.*);
+                try self.writeExpression(i.condition);
                 try self.write(" ");
-                try self.writeExpression(i.then_value.*);
+                try self.writeExpression(i.then_value);
                 try self.write(" else ");
-                try self.writeExpression(i.else_value.*);
+                try self.writeExpression(i.else_value);
             },
             .@"extern" => {
                 try self.write("extern");

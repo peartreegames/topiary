@@ -58,7 +58,7 @@ const RewindRunner = struct {
         self.fork_history.deinit(self.alloc);
     }
 
-    fn onLine(_: *Runner, vm: *Vm, dialogue: Line) void {
+    fn onLine(_: *Runner, vm: *Vm, dialogue: *const Line) void {
         const self: *RewindRunner = @fieldParentPtr("runner", vm.runner);
         const owned = self.alloc.dupe(u8, dialogue.content) catch unreachable;
         self.output.append(self.alloc, owned) catch unreachable;
@@ -91,7 +91,7 @@ const RewindRunner = struct {
 fn initRewindVm(source: []const u8, mod: *Module, rr: *RewindRunner) !Vm {
     var bytecode = try compileSource(source, mod);
     errdefer bytecode.free(allocator);
-    var vm = try Vm.init(allocator, std.testing.io, bytecode, &rr.runner);
+    var vm = try Vm.init(allocator, std.testing.io, &bytecode, &rr.runner);
     vm.history_capacity = 16;
     return vm;
 }

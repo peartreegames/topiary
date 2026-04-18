@@ -37,8 +37,8 @@ pub const Stamp = struct {
         return buf.toOwnedSlice(alloc);
     }
 
-    fn walkStampable(stmts: []const Statement, context: anytype, comptime onLeaf: fn (@TypeOf(context), Statement) @TypeOf(context).Error!void) @TypeOf(context).Error!void {
-        for (stmts) |stmt| {
+    fn walkStampable(stmts: []const Statement, context: anytype, comptime onLeaf: fn (@TypeOf(context), *const Statement) @TypeOf(context).Error!void) @TypeOf(context).Error!void {
+        for (stmts) |*stmt| {
             switch (stmt.type) {
                 .block => |b| try walkStampable(b, context, onLeaf),
                 .bough => |b| {
@@ -75,7 +75,7 @@ pub const Stamp = struct {
 
         pub const Error = error{ OutOfMemory, NoSpaceLeft };
 
-        fn onLeaf(ctx: StampContext, stmt: Statement) @This().Error!void {
+        fn onLeaf(ctx: StampContext, stmt: *const Statement) @This().Error!void {
             switch (stmt.type) {
                 .bough => |b| {
                     if (b.id_token != null and !UUID.isEmpty(b.id)) return;

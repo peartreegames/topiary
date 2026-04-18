@@ -51,7 +51,7 @@ pub const TestRunner = struct {
         }
     }
 
-    pub fn onLine(_: *Runner, vm: *Vm, dialogue: Line) void {
+    pub fn onLine(_: *Runner, vm: *Vm, dialogue: *const Line) void {
         const test_runner: *TestRunner = @fieldParentPtr("runner", vm.runner);
         const content = test_runner.allocator.dupe(u8, dialogue.content) catch unreachable;
         test_runner.output.append(test_runner.allocator, content) catch unreachable;
