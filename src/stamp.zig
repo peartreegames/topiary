@@ -12,7 +12,7 @@ const Module = module.Module;
 
 pub const Stamp = struct {
     pub fn stampFileAtPath(full_path: []const u8, allocator: std.mem.Allocator) ![]const u8 {
-        var mod = try Module.init(allocator, full_path);
+        var mod = try Module.init(allocator, std.Io.Threaded.global_single_threaded.io(), full_path);
         defer mod.deinit();
         try mod.entry.loadSource();
         try mod.entry.buildTree();
@@ -33,7 +33,7 @@ pub const Stamp = struct {
             .last_pos = &last_pos,
         }, StampContext.onLeaf);
 
-        try buf.writer(alloc).writeAll(source[last_pos..]);
+        try buf.appendSlice(alloc, source[last_pos..]);
         return buf.toOwnedSlice(alloc);
     }
 
@@ -106,7 +106,7 @@ pub const Stamp = struct {
         }
 
         fn copyUpTo(ctx: StampContext, pos: usize) Error!void {
-            try ctx.buf.writer(ctx.alloc).writeAll(ctx.source[ctx.last_pos.*..pos]);
+            try ctx.buf.appendSlice(ctx.alloc, ctx.source[ctx.last_pos.*..pos]);
             ctx.last_pos.* = pos;
         }
 
@@ -123,7 +123,7 @@ pub const Stamp = struct {
             const new_id = UUID.new();
             var tmp: [UUID.Size + 2]u8 = undefined;
             _ = std.fmt.bufPrint(&tmp, " @{s}", .{new_id}) catch unreachable;
-            try ctx.buf.writer(ctx.alloc).writeAll(&tmp);
+            try ctx.buf.appendSlice(ctx.alloc, &tmp);
         }
     };
 };

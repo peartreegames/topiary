@@ -2104,7 +2104,7 @@ pub const Compiler = struct {
     fn writeValue(self: *Compiler, buf: []const u8, token: Token) !void {
         var chunk = self.chunk;
         try chunk.debug_markers.appendNTimes(self.alloc, .{ .file_index = @intCast(token.file_index), .line = @intCast(token.line) }, buf.len);
-        try chunk.instructions.writer(self.alloc).writeAll(buf);
+        try chunk.instructions.appendSlice(self.alloc, buf);
     }
 
     fn writeInt(self: *Compiler, comptime T: type, value: T, token: Token) !usize {

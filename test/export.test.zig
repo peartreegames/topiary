@@ -27,15 +27,17 @@ fn clearOutput() void {
 /// Helper: write source to a temp file, compile via the export API, return
 /// the bytecode buffer (caller owns).
 fn compileSource(text: []const u8) ![]u8 {
-    const file = try std.fs.cwd().createFile("tmp_export.topi", .{ .read = false });
-    defer file.close();
+    const test_io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+    const file = try cwd.createFile(test_io, "tmp_export.topi", .{});
+    defer file.close(test_io);
     var file_buf: [1024]u8 = undefined;
-    var file_writer = file.writer(&file_buf);
+    var file_writer = file.writer(test_io, &file_buf);
     const file_write = &file_writer.interface;
     try file_write.writeAll(text);
     try file_write.flush();
 
-    const dir_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const dir_path = try cwd.realPathFileAlloc(test_io, ".", allocator);
     defer allocator.free(dir_path);
     const path = try std.fs.path.resolve(allocator, &.{ dir_path, "tmp_export.topi" ++ "\x00" });
     defer allocator.free(path);
@@ -133,7 +135,7 @@ test "Export Create and Destroy Vm" {
 
     const buf = try compileSource(text);
     defer allocator.free(buf);
-    defer std.fs.cwd().deleteFile("tmp_export.topi") catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, "tmp_export.topi") catch {};
 
     const vm_ptr = main.createVm(
         buf.ptr,
@@ -196,7 +198,7 @@ test "Export State Save and Load" {
 
     const buf = try compileSource(text);
     defer allocator.free(buf);
-    defer std.fs.cwd().deleteFile("tmp_export.topi") catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, "tmp_export.topi") catch {};
 
     // Create first VM, run to completion
     const vm1_ptr = main.createVm(
@@ -304,7 +306,7 @@ test "Export Subscribe and Unsubscribe Lifecycle" {
 
     const buf = try compileSource(text);
     defer allocator.free(buf);
-    defer std.fs.cwd().deleteFile("tmp_export.topi") catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, "tmp_export.topi") catch {};
 
     const vm_ptr = main.createVm(
         buf.ptr,
@@ -366,7 +368,7 @@ test "Export Extern Function Returning String" {
 
     const buf = try compileSource(text);
     defer allocator.free(buf);
-    defer std.fs.cwd().deleteFile("tmp_export.topi") catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, "tmp_export.topi") catch {};
 
     const vm_ptr = main.createVm(
         buf.ptr,

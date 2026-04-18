@@ -14,7 +14,7 @@ fn formatSource(source: []const u8) ![]const u8 {
 }
 
 fn formatSourceWithIndent(source: []const u8, indent_width: usize) ![]const u8 {
-    const mod = try Module.initEmpty(allocator);
+    const mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const file = try mod.arena.allocator().create(File);
     file.* = .{
@@ -31,7 +31,7 @@ fn formatSourceWithIndent(source: []const u8, indent_width: usize) ![]const u8 {
 }
 
 fn formatSourceWithStamp(source: []const u8) ![]const u8 {
-    const mod = try Module.initEmpty(allocator);
+    const mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const file = try mod.arena.allocator().create(File);
     file.* = .{

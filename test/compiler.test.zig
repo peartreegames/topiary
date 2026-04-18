@@ -33,7 +33,7 @@ pub fn compileSource(source: []const u8, mod: *Module) !Bytecode {
         .module = mod,
     };
     mod.entry = file;
-    try mod.includes.putNoClobber(file.path, file);
+    try mod.includes.putNoClobber(allocator, file.path, file);
     return mod.generateBytecode(allocator);
 }
 
@@ -60,7 +60,7 @@ test "Compile Basic" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
@@ -148,7 +148,7 @@ test "Compile Conditionals" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
@@ -235,7 +235,7 @@ test "Compile Variables" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
@@ -290,7 +290,7 @@ test "Compile Strings" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
@@ -387,7 +387,7 @@ test "Compile Lists" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
@@ -579,7 +579,7 @@ test "Compile Maps and Sets" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
@@ -668,7 +668,7 @@ test "Compile Index" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
@@ -864,7 +864,7 @@ test "Compile Functions" {
 
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
@@ -872,7 +872,7 @@ test "Compile Functions" {
             errdefer {
                 std.log.warn("Error on: {}\n {s}", .{ i, case.input });
                 var errbuf: [128]u8 = undefined;
-                var stderr_writer = std.fs.File.stderr().writer(&errbuf);
+                var stderr_writer = std.Io.File.stderr().writer(std.testing.io, &errbuf);
                 const stderr = &stderr_writer.interface;
                 bytecode.print(stderr) catch unreachable;
             }
@@ -934,7 +934,7 @@ test "Compile Builtin Functions" {
 
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
@@ -988,7 +988,7 @@ test "Compile Classes" {
 
     inline for (test_cases) |case| {
         errdefer std.log.warn("{s}", .{case.input});
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var bytecode = try compileSource(case.input, mod);
         defer bytecode.free(allocator);
@@ -1019,7 +1019,7 @@ test "Arity Mismatch Error" {
         \\ }
     };
     inline for (inputs) |input| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         const res = compileSource(input, mod);
         try testing.expectError(error.CompilerError, res);
@@ -1041,7 +1041,7 @@ test "Duplicate Bough Error" {
         \\   :: "two"
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const res = compileSource(input, mod);
     try testing.expectError(error.CompilerError, res);
@@ -1061,7 +1061,7 @@ test "Did-You-Mean Unknown Anchor" {
         \\   => KITHCEN
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const res = compileSource(input, mod);
     try testing.expectError(error.CompilerError, res);
@@ -1082,7 +1082,7 @@ test "Shadowing Warning" {
         \\   :: "hi"
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = compileSource(input, mod) catch |err| {
         std.log.warn("got err {}", .{err});
@@ -1135,7 +1135,7 @@ test "Unreachable Code Warning" {
         },
     };
     inline for (inputs) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var bytecode = compileSource(case.src, mod) catch |err| {
             for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
@@ -1155,7 +1155,7 @@ test "Static Literal Error Mentions Kind" {
     const input =
         \\ class Box { val = 0..5 }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const res = compileSource(input, mod);
     try testing.expectError(error.IllegalOperation, res);
@@ -1194,7 +1194,7 @@ test "Class field compile error does not leak prior defaults" {
         \\ }
     };
     inline for (cases) |src| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         const res = compileSource(src, mod);
         try testing.expectError(error.IllegalOperation, res);
@@ -1202,7 +1202,7 @@ test "Class field compile error does not leak prior defaults" {
 }
 
 test "Circular Include Error" {
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const arena_alloc = mod.arena.allocator();
     // Manually register two mutually-including files.
@@ -1223,8 +1223,8 @@ test "Circular Include Error" {
         .module = mod,
     };
     mod.entry = file_a;
-    try mod.includes.putNoClobber(file_a.path, file_a);
-    try mod.includes.putNoClobber(file_b.path, file_b);
+    try mod.includes.putNoClobber(allocator, file_a.path, file_a);
+    try mod.includes.putNoClobber(allocator, file_b.path, file_b);
 
     const res = mod.generateBytecode(allocator);
     // May or may not error downstream; we only care about the cycle diagnostic.
@@ -1241,7 +1241,7 @@ test "Circular Include Error" {
 }
 
 test "Malformed Include Error" {
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const arena_alloc = mod.arena.allocator();
     const file = try arena_alloc.create(File);
@@ -1253,7 +1253,7 @@ test "Malformed Include Error" {
         .module = mod,
     };
     mod.entry = file;
-    try mod.includes.putNoClobber(file.path, file);
+    try mod.includes.putNoClobber(allocator, file.path, file);
 
     const res = mod.generateBytecode(allocator);
     if (res) |*bc| {
@@ -1272,24 +1272,26 @@ test "Malformed Include Error" {
 test "Missing Include File Error" {
     // Create a temp directory with an entry file that includes a non-existent file.
     const tmp_dir = "/tmp/topiary_test_missing_include";
-    std.fs.cwd().deleteTree(tmp_dir) catch {};
-    try std.fs.cwd().makePath(tmp_dir);
-    defer std.fs.cwd().deleteTree(tmp_dir) catch {};
+    const test_io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+    cwd.deleteTree(test_io, tmp_dir) catch {};
+    try cwd.createDirPath(test_io, tmp_dir);
+    defer cwd.deleteTree(test_io, tmp_dir) catch {};
 
     // Write entry file
     {
-        var f = try std.fs.cwd().createFile(tmp_dir ++ "/entry.topi", .{});
-        defer f.close();
-        try f.writeAll("include \"missing.topi\"\n=== START { :: \"hello\" }");
+        var f = try cwd.createFile(test_io, tmp_dir ++ "/entry.topi", .{});
+        defer f.close(test_io);
+        try f.writeStreamingAll(test_io, "include \"missing.topi\"\n=== START { :: \"hello\" }");
     }
     // Write a similarly-named file for did-you-mean
     {
-        var f = try std.fs.cwd().createFile(tmp_dir ++ "/mising.topi", .{});
-        defer f.close();
-        try f.writeAll("// placeholder");
+        var f = try cwd.createFile(test_io, tmp_dir ++ "/mising.topi", .{});
+        defer f.close(test_io);
+        try f.writeStreamingAll(test_io, "// placeholder");
     }
 
-    var mod = try Module.init(allocator, tmp_dir ++ "/entry.topi");
+    var mod = try Module.init(allocator, test_io, tmp_dir ++ "/entry.topi");
     defer mod.deinit();
 
     const res = mod.generateBytecode(allocator);
@@ -1322,7 +1324,7 @@ test "Unreachable Code Warning - Backup Divert Does Not Fire Warning" {
         \\   :: "after"
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = compileSource(input, mod) catch |err| {
         for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
@@ -1347,7 +1349,7 @@ test "Fork Without Backup - Choice With No Exit Warns" {
         \\   }
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = compileSource(input, mod) catch |err| {
         for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
@@ -1373,7 +1375,7 @@ test "Fork With Backup - Choice With No Exit Does Not Warn" {
         \\   :: "continues here"
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = compileSource(input, mod) catch |err| {
         for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
@@ -1396,7 +1398,7 @@ test "Unreachable Code After Non-Backup Fork" {
         \\   :: "unreachable line"
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = compileSource(input, mod) catch |err| {
         for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
@@ -1422,7 +1424,7 @@ test "Unreachable Code After Backup Fork Does Not Warn" {
         \\   :: "reachable after fork^"
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = compileSource(input, mod) catch |err| {
         for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
@@ -1449,7 +1451,7 @@ test "Nested Boughs After Fork Do Not Warn" {
         \\   }
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = compileSource(input, mod) catch |err| {
         for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
@@ -1531,7 +1533,7 @@ test "Unreachable Code After Exhaustive If/Else" {
         },
     };
     inline for (inputs) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var bytecode = compileSource(case.src, mod) catch |err| {
             for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
@@ -1559,7 +1561,7 @@ test "If Without Else Does Not Warn" {
         \\ }
         \\ === START { :: "hi" }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = compileSource(input, mod) catch |err| {
         for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
@@ -1586,7 +1588,7 @@ test "If With Non-Exiting Else Does Not Warn" {
         \\ }
         \\ === START { :: "hi" }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = compileSource(input, mod) catch |err| {
         for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
@@ -1612,7 +1614,7 @@ test "Unreachable Code After Exhaustive Switch With Else" {
         \\ }
         \\ === START { :: "hi" }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = compileSource(input, mod) catch |err| {
         for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
@@ -1640,7 +1642,7 @@ test "Switch Without Explicit Else Does Not Warn" {
         \\ }
         \\ === START { :: "hi" }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = compileSource(input, mod) catch |err| {
         for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
@@ -1667,7 +1669,7 @@ test "Switch With Non-Exiting Else Does Not Warn" {
         \\ }
         \\ === START { :: "hi" }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = compileSource(input, mod) catch |err| {
         for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
@@ -1700,7 +1702,7 @@ test "Choice With Exhaustive If/Else Does Not Warn About Silent End" {
         \\   }
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = compileSource(input, mod) catch |err| {
         for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
@@ -1740,7 +1742,7 @@ test "Compile Enums Error" {
     };
 
     inline for (tests) |input| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         const err = compileSource(input, mod);
         try testing.expectError(error.CompilerError, err);
@@ -1762,22 +1764,26 @@ test "Compile Serialization" {
         \\ const map = Map{1:2.2, 3: 4.4}
     ;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = try compileSource(input, mod);
     defer bytecode.free(allocator);
 
     // this doesn't need to be a file, but it's nice to sometimes not delete it and inspect it
-    var file = try std.fs.cwd().createFile("tmp.topi.byte", .{ .read = true });
-    defer std.fs.cwd().deleteFile("tmp.topi.byte") catch {};
-    defer file.close();
+    const test_io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+    defer cwd.deleteFile(test_io, "tmp.topi.byte") catch {};
+    {
+        const file = try cwd.createFile(test_io, "tmp.topi.byte", .{});
+        defer file.close(test_io);
+        var buf: [1024]u8 = undefined;
+        var file_writer = file.writer(test_io, &buf);
+        _ = try bytecode.serialize(allocator, &file_writer.interface);
+    }
+    const file = try cwd.openFile(test_io, "tmp.topi.byte", .{});
+    defer file.close(test_io);
     var buf: [1024]u8 = undefined;
-    var file_writer = file.writer(&buf);
-    _ = try bytecode.serialize(allocator, &file_writer.interface);
-    std.log.info("Serialized bytecode size: {}", .{(try file.stat()).size});
-
-    try file.seekTo(0);
-    var file_reader = file.reader(&buf);
+    var file_reader = file.reader(test_io, &buf);
     const reader = &file_reader.interface;
     var deserialized = try Bytecode.deserialize(allocator, reader);
     defer deserialized.free(allocator);
@@ -1797,20 +1803,25 @@ test "Compile Serialization: class with collection fields" {
         \\ var t = new Thing{}
     ;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = try compileSource(input, mod);
     defer bytecode.free(allocator);
 
-    var file = try std.fs.cwd().createFile("tmp_class_coll.topi.byte", .{ .read = true });
-    defer std.fs.cwd().deleteFile("tmp_class_coll.topi.byte") catch {};
-    defer file.close();
+    const test_io2 = std.testing.io;
+    const cwd2 = std.Io.Dir.cwd();
+    defer cwd2.deleteFile(test_io2, "tmp_class_coll.topi.byte") catch {};
+    {
+        const file = try cwd2.createFile(test_io2, "tmp_class_coll.topi.byte", .{});
+        defer file.close(test_io2);
+        var buf: [1024]u8 = undefined;
+        var file_writer = file.writer(test_io2, &buf);
+        _ = try bytecode.serialize(allocator, &file_writer.interface);
+    }
+    const file = try cwd2.openFile(test_io2, "tmp_class_coll.topi.byte", .{});
+    defer file.close(test_io2);
     var buf: [1024]u8 = undefined;
-    var file_writer = file.writer(&buf);
-    _ = try bytecode.serialize(allocator, &file_writer.interface);
-
-    try file.seekTo(0);
-    var file_reader = file.reader(&buf);
+    var file_reader = file.reader(test_io2, &buf);
     const reader = &file_reader.interface;
     var deserialized = try Bytecode.deserialize(allocator, reader);
     defer deserialized.free(allocator);
@@ -1832,7 +1843,7 @@ test "Instance field write error with suggestion" {
         \\   :: "hi"
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const res = compileSource(input, mod);
     try testing.expectError(error.CompilerError, res);
@@ -1857,7 +1868,7 @@ test "Instance field read error with suggestion" {
         \\   :: "{x}"
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const res = compileSource(input, mod);
     try testing.expectError(error.CompilerError, res);
@@ -1882,7 +1893,7 @@ test "Instance method error with suggestion" {
         \\   :: "hi"
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const res = compileSource(input, mod);
     try testing.expectError(error.CompilerError, res);
@@ -1907,7 +1918,7 @@ test "Valid instance access compiles" {
         \\   :: "{john.name}"
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = try compileSource(input, mod);
     defer bytecode.free(allocator);
@@ -1921,7 +1932,7 @@ test "String method typo error with suggestion" {
         \\   :: "{x}"
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const res = compileSource(input, mod);
     try testing.expectError(error.CompilerError, res);
@@ -1942,7 +1953,7 @@ test "List method typo error with suggestion" {
         \\   :: "hi"
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const res = compileSource(input, mod);
     try testing.expectError(error.CompilerError, res);
@@ -1963,7 +1974,7 @@ test "Number field access error" {
         \\   :: "{x}"
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const res = compileSource(input, mod);
     try testing.expectError(error.CompilerError, res);
@@ -1986,7 +1997,7 @@ test "Type tracking cleared on reassignment" {
         \\   :: "hi"
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = try compileSource(input, mod);
     defer bytecode.free(allocator);
@@ -2001,7 +2012,7 @@ test "Unknown type no false positive" {
         \\   :: "{y}"
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var bytecode = try compileSource(input, mod);
     defer bytecode.free(allocator);

@@ -72,8 +72,8 @@ pub const Bytecode = struct {
         for (self.constants) |constant| try constant.serialize(writer);
     }
 
-    pub fn serialize(self: *Bytecode, alloc: std.mem.Allocator, writer: *std.io.Writer) !usize {
-        var allocating = std.io.Writer.Allocating.init(alloc);
+    pub fn serialize(self: *Bytecode, alloc: std.mem.Allocator, writer: *std.Io.Writer) !usize {
+        var allocating: std.Io.Writer.Allocating = .init(alloc);
         defer allocating.deinit();
         const alloc_writer = &allocating.writer;
 
@@ -178,7 +178,7 @@ pub const Bytecode = struct {
         try writer.print("\n==CONSTANTS==\n", .{});
         for (code.constants, 0..) |value, i| {
             try writer.print("{} ", .{i});
-            try value.print(writer, null);
+            try value.print(writer, std.mem.Allocator.failing, null);
             try writer.print("\n", .{});
         }
         // try writer.print("\n==DEBUG==\n", .{});

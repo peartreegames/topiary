@@ -8,6 +8,8 @@ const UUID = utils.UUID;
 const C = utils.C;
 const fmt = utils.fmt;
 
+const default_io = std.Io.Threaded.global_single_threaded.io();
+
 const module = @import("module.zig");
 const Module = module.Module;
 const File = module.File;
@@ -30,17 +32,15 @@ pub const LocaleProvider = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator, key: []const u8, buffer: []const u8) !*LocaleProvider {
-        var fbs = std.io.fixedBufferStream(buffer);
-        var reader = fbs.reader();
+        var reader = std.Io.Reader.fixed(buffer);
 
         // Validate magic and version
-        var file_magic: [4]u8 = undefined;
-        _ = try reader.readAll(&file_magic);
-        if (!std.mem.eql(u8, &file_magic, magic)) return error.InvalidLocaleFormat;
-        const file_version = try reader.readInt(u16, .little);
+        const file_magic = try reader.takeArray(4);
+        if (!std.mem.eql(u8, file_magic, magic)) return error.InvalidLocaleFormat;
+        const file_version = try reader.takeVarInt(u16, .little, 2);
         if (file_version != version) return error.UnsupportedLocaleVersion;
 
-        const count = try reader.readInt(C.CONSTANT, .little);
+        const count = try reader.takeVarInt(C.CONSTANT, .little, @sizeOf(C.CONSTANT));
         var map: std.AutoHashMapUnmanaged(UUID.ID, []const u8) = .empty;
 
         const table_size = std.math.mul(C.CONSTANT, count, IndexEntry.Size) catch return error.CorruptLocaleFile;
@@ -49,9 +49,9 @@ pub const LocaleProvider = struct {
 
         for (0..count) |_| {
             var entry: IndexEntry = undefined;
-            _ = try reader.readAll(&entry.id);
-            entry.offset = try reader.readInt(C.CONSTANT, .little);
-            entry.length = try reader.readInt(u32, .little);
+            entry.id = (try reader.takeArray(UUID.Size)).*;
+            entry.offset = try reader.takeVarInt(C.CONSTANT, .little, @sizeOf(C.CONSTANT));
+            entry.length = try reader.takeVarInt(u32, .little, 4);
 
             const start = blob_start + entry.offset;
             const end = start + entry.length;
@@ -81,7 +81,7 @@ pub const Locale = struct {
     // This could be refactored to a fmt with an option to add localization ids
     // Would need to modify so every node in the ast writes its output
     pub fn checkFileAtPath(full_path: []const u8, allocator: std.mem.Allocator) !usize {
-        var mod = try Module.init(allocator, full_path);
+        var mod = try Module.init(allocator, default_io, full_path);
         defer mod.deinit();
         try mod.entry.loadSource();
         try mod.entry.buildTree();
@@ -96,7 +96,7 @@ pub const Locale = struct {
     }
 
     pub fn validateFileAtPath(full_path: []const u8, allocator: std.mem.Allocator) ![]const u8 {
-        var mod = try Module.init(allocator, full_path);
+        var mod = try Module.init(allocator, default_io, full_path);
         defer mod.deinit();
         try mod.entry.loadSource();
         try mod.entry.buildTree();
@@ -117,7 +117,7 @@ pub const Locale = struct {
             .last_pos = &last_pos,
         }, LocalizeContext.onLeaf);
 
-        try buf.writer(alloc).writeAll(source[last_pos..]);
+        try buf.appendSlice(alloc, source[last_pos..]);
         return buf.toOwnedSlice(alloc);
     }
 
@@ -175,16 +175,14 @@ pub const Locale = struct {
             };
             if (after_quote == null) return;
 
-            const w = ctx.buf.writer(ctx.alloc);
-
             // Copy source up to: the @ char if replacing, or after closing " if inserting
             const copy_end = if (id_token) |idt| idt.start else after_quote.?;
-            try w.writeAll(ctx.source[ctx.last_pos.*..copy_end]);
+            try ctx.buf.appendSlice(ctx.alloc, ctx.source[ctx.last_pos.*..copy_end]);
 
             const new_id = UUID.new();
             var tmp: [UUID.Size + 1]u8 = undefined;
             _ = try std.fmt.bufPrint(&tmp, "@{s}", .{new_id});
-            try w.writeAll(&tmp);
+            try ctx.buf.appendSlice(ctx.alloc, &tmp);
 
             ctx.last_pos.* = if (id_token) |idt| idt.end else after_quote.?;
         }
@@ -314,7 +312,7 @@ pub const Locale = struct {
     };
 
     pub fn exportFileAtPath(full_path: []const u8, writer: *std.Io.Writer, allocator: std.mem.Allocator, base_lang: []const u8) !void {
-        var mod = try Module.init(allocator, full_path);
+        var mod = try Module.init(allocator, default_io, full_path);
         defer mod.deinit();
         try mod.entry.loadSource();
         try mod.entry.buildTree();
@@ -322,7 +320,7 @@ pub const Locale = struct {
     }
 
     pub fn exportFileAtPathWithMerge(full_path: []const u8, writer: *std.Io.Writer, allocator: std.mem.Allocator, base_lang: []const u8, existing_csv: ?[]const u8) !void {
-        var mod = try Module.init(allocator, full_path);
+        var mod = try Module.init(allocator, default_io, full_path);
         defer mod.deinit();
         try mod.entry.loadSource();
         try mod.entry.buildTree();
@@ -501,11 +499,13 @@ pub const Locale = struct {
         filter_lang: ?[]const u8,
         dry: bool,
     ) !void {
-        const file = try std.fs.cwd().openFile(csv_path, .{});
+        const file = try std.Io.Dir.cwd().openFile(default_io, csv_path, .{});
         const file_name = std.mem.trimEnd(u8, std.fs.path.basename(csv_path), ".topi.csv");
-        defer file.close();
+        defer file.close(default_io);
 
-        const raw_content = try file.readToEndAlloc(allocator, std.math.maxInt(u32));
+        var rbuf: [1024]u8 = undefined;
+        var rdr = file.reader(default_io, &rbuf);
+        const raw_content = try rdr.interface.allocRemaining(allocator, .unlimited);
         defer allocator.free(raw_content);
         const content = stripBom(raw_content);
 
@@ -522,10 +522,10 @@ pub const Locale = struct {
             if (!dry) {
                 const out_name = try std.fmt.allocPrint(allocator, "{s}/{s}.{s}.topil", .{ output_folder, file_name, key });
                 defer allocator.free(out_name);
-                const out_file = try std.fs.cwd().createFile(out_name, .{});
-                defer out_file.close();
+                const out_file = try std.Io.Dir.cwd().createFile(default_io, out_name, .{});
+                defer out_file.close(default_io);
                 var file_buf: [1024]u8 = undefined;
-                var file_writer = out_file.writer(&file_buf);
+                var file_writer = out_file.writer(default_io, &file_buf);
                 const writer = &file_writer.interface;
                 try generate(allocator, content, col_idx, writer, null);
             }
@@ -571,6 +571,18 @@ pub const Locale = struct {
         dry: bool,
         error_writer: ?*std.Io.Writer,
     ) !GenerateResult {
+        return generateFromModuleWithIo(allocator, default_io, topi_path, output_folder, filter_lang, dry, error_writer);
+    }
+
+    pub fn generateFromModuleWithIo(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        topi_path: []const u8,
+        output_folder: []const u8,
+        filter_lang: ?[]const u8,
+        dry: bool,
+        error_writer: ?*std.Io.Writer,
+    ) !GenerateResult {
         var result = GenerateResult{
             .allocator = allocator,
             .missing_uuids = .empty,
@@ -581,7 +593,7 @@ pub const Locale = struct {
         errdefer result.deinit();
 
         // Phase 1: Resolve the module's include graph and parse all ASTs
-        var mod = try Module.init(allocator, topi_path);
+        var mod = try Module.init(allocator, io, topi_path);
         defer mod.deinit();
         mod.resolveIncludes() catch |err| {
             if (error_writer) |w| mod.writeErrors(w) catch {};
@@ -631,15 +643,17 @@ pub const Locale = struct {
             const csv_name = try std.fmt.allocPrint(allocator, "{s}.csv", .{file.path});
             defer allocator.free(csv_name);
 
-            const csv_file = mod.dir.openFile(csv_name, .{}) catch {
+            const csv_file = mod.dir.openFile(mod.io, csv_name, .{}) catch {
                 // Only warn if this file has localizable content
                 if (file_uuid_counts.get(kvp.key_ptr.*) == null) continue;
                 try result.missing_csv_files.append(allocator, try allocator.dupe(u8, kvp.key_ptr.*));
                 continue;
             };
-            defer csv_file.close();
+            defer csv_file.close(mod.io);
 
-            const raw_content = try csv_file.readToEndAlloc(allocator, std.math.maxInt(u32));
+            var csv_buf: [1024]u8 = undefined;
+            var csv_rdr = csv_file.reader(mod.io, &csv_buf);
+            const raw_content = try csv_rdr.interface.allocRemaining(allocator, .unlimited);
             defer allocator.free(raw_content);
             const content = stripBom(raw_content);
 
@@ -708,10 +722,10 @@ pub const Locale = struct {
             if (!dry) {
                 const out_name = try std.fmt.allocPrint(allocator, "{s}/{s}.{s}.topil", .{ output_folder, entry_name, key });
                 defer allocator.free(out_name);
-                const out_file = try std.fs.cwd().createFile(out_name, .{});
-                defer out_file.close();
+                const out_file = try std.Io.Dir.cwd().createFile(io, out_name, .{});
+                defer out_file.close(io);
                 var file_buf: [1024]u8 = undefined;
-                var file_writer = out_file.writer(&file_buf);
+                var file_writer = out_file.writer(io, &file_buf);
                 const writer = &file_writer.interface;
                 try generate(allocator, merged_content, col_idx, writer, &result.blank_translations);
             }

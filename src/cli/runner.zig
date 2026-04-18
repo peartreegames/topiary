@@ -1,5 +1,6 @@
 const std = @import("std");
 const print = @import("main.zig").print;
+const io = @import("main.zig").io;
 
 const topi = @import("topi");
 const Vm = topi.runtime.Vm;
@@ -37,7 +38,7 @@ pub const CliRunner = struct {
             vm.selectContinue();
         } else {
             var stdin_buffer: [2]u8 = undefined;
-            var stdin_reader = std.fs.File.stdin().reader(&stdin_buffer);
+            var stdin_reader = std.Io.File.stdin().reader(io, &stdin_buffer);
             const stdin = &stdin_reader.interface;
             while (stdin.takeDelimiterExclusive('\n')) |_| {
                 vm.selectContinue();
@@ -52,7 +53,7 @@ pub const CliRunner = struct {
         var index: ?usize = null;
         while (index == null) {
             var stdin_buffer: [8]u8 = undefined;
-            var stdin_reader = std.fs.File.stdin().reader(&stdin_buffer);
+            var stdin_reader = std.Io.File.stdin().reader(io, &stdin_buffer);
             const stdin = &stdin_reader.interface;
             for (choices, 0..) |choice, i| {
                 print("[{d}] {s}\n", .{ i, choice.content }) catch {};
@@ -105,7 +106,11 @@ pub const AutoTestRunner = struct {
 
     pub fn init() AutoTestRunner {
         return .{
-            .rnd = std.Random.DefaultPrng.init(std.crypto.random.int(u64)),
+            .rnd = blk: {
+                var seed_bytes: [8]u8 = undefined;
+                io.random(&seed_bytes);
+                break :blk std.Random.DefaultPrng.init(std.mem.readInt(u64, &seed_bytes, .little));
+            },
             .runner = .{
                 .on_line = onLine,
                 .on_choices = onChoices,

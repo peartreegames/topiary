@@ -75,18 +75,28 @@ test "Localization Id Updates" {
     ;
 
     const file_name = "test_locale.topi";
-    var file = try std.fs.cwd().createFile(file_name, .{ .read = true });
-    defer std.fs.cwd().deleteFile(file_name) catch {};
-    defer file.close();
-    try file.writeAll(input);
-    const full_path = try std.fs.cwd().realpathAlloc(std.testing.allocator, file_name);
+    const test_io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+    {
+        const file = try cwd.createFile(test_io, file_name, .{});
+        defer file.close(test_io);
+        try file.writeStreamingAll(test_io, input);
+    }
+    defer cwd.deleteFile(test_io, file_name) catch {};
+    const full_path = try cwd.realPathFileAlloc(test_io, file_name, std.testing.allocator);
     defer std.testing.allocator.free(full_path);
     const validated = try Locale.validateFileAtPath(full_path, std.testing.allocator);
     defer std.testing.allocator.free(validated);
-    try file.seekTo(0);
-    try file.writeAll(validated);
-
-    try std.testing.expectEqual(606, (try file.stat()).size);
+    {
+        const file = try cwd.createFile(test_io, file_name, .{});
+        defer file.close(test_io);
+        try file.writeStreamingAll(test_io, validated);
+    }
+    {
+        const file = try cwd.openFile(test_io, file_name, .{});
+        defer file.close(test_io);
+        try std.testing.expectEqual(606, (try file.stat(test_io)).size);
+    }
 }
 
 const csv_output =
@@ -144,16 +154,16 @@ test "Localization Invalid Format" {
 test "Localization Corrupt File" {
     const alloc = std.testing.allocator;
     // Build a valid header but with an index entry whose offset+length exceeds the buffer
-    var buf = std.ArrayList(u8).empty;
-    defer buf.deinit(alloc);
-    const w = buf.writer(alloc);
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    defer output.deinit();
+    const w = &output.writer;
     try w.writeAll(LocaleProvider.magic); // magic
     try w.writeInt(u16, LocaleProvider.version, .little); // version
     try w.writeInt(C.CONSTANT, 1, .little); // count = 1
     try w.writeAll(&UUID.Empty); // id (17 bytes)
     try w.writeInt(C.CONSTANT, 0, .little); // offset = 0
     try w.writeInt(u32, 999, .little); // length = 999 (way past end)
-    const owned = try alloc.dupe(u8, buf.items);
+    const owned = try alloc.dupe(u8, output.written());
     try std.testing.expectError(error.CorruptLocaleFile, LocaleProvider.init(alloc, "en", owned));
     alloc.free(owned);
 }
@@ -326,26 +336,26 @@ test "Localization Export CSV Merge Drops Removed Entries" {
 
 test "Localization Unsupported Version" {
     const alloc = std.testing.allocator;
-    var buf = std.ArrayList(u8).empty;
-    defer buf.deinit(alloc);
-    const w = buf.writer(alloc);
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    defer output.deinit();
+    const w = &output.writer;
     try w.writeAll(LocaleProvider.magic);
     try w.writeInt(u16, 99, .little); // unsupported version
     try w.writeInt(C.CONSTANT, 0, .little); // count = 0
-    const owned = try alloc.dupe(u8, buf.items);
+    const owned = try alloc.dupe(u8, output.written());
     try std.testing.expectError(error.UnsupportedLocaleVersion, LocaleProvider.init(alloc, "en", owned));
     alloc.free(owned);
 }
 
 test "Localization Overflow Count" {
     const alloc = std.testing.allocator;
-    var buf = std.ArrayList(u8).empty;
-    defer buf.deinit(alloc);
-    const w = buf.writer(alloc);
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    defer output.deinit();
+    const w = &output.writer;
     try w.writeAll(LocaleProvider.magic);
     try w.writeInt(u16, LocaleProvider.version, .little);
     try w.writeInt(C.CONSTANT, std.math.maxInt(C.CONSTANT), .little); // huge count
-    const owned = try alloc.dupe(u8, buf.items);
+    const owned = try alloc.dupe(u8, output.written());
     try std.testing.expectError(error.CorruptLocaleFile, LocaleProvider.init(alloc, "en", owned));
     alloc.free(owned);
 }
@@ -405,12 +415,12 @@ test "Localization VM Deinit Cleans Up Locale" {
     defer alloc.free(topil_data);
 
     // Compile a minimal topi source and create a VM
-    var mod = try Module.initEmpty(alloc);
+    var mod = try Module.initEmpty(alloc, std.testing.io);
     defer mod.deinit();
     var bytecode = try compileSource("const x = 1", mod);
     defer bytecode.free(alloc);
     const test_runner = try TestRunner.init(alloc);
-    var vm = try Vm.init(alloc, bytecode, &test_runner.runner);
+    var vm = try Vm.init(alloc, std.testing.io, bytecode, &test_runner.runner);
     defer vm.deinit();
     defer test_runner.deinit();
 
@@ -423,22 +433,24 @@ test "Localization VM Deinit Cleans Up Locale" {
 
 const TestFile = struct { name: []const u8, content: []const u8 };
 
-fn setupModuleTestFiles(dir: std.fs.Dir, files: []const TestFile) !void {
+fn setupModuleTestFiles(dir: std.Io.Dir, files: []const TestFile) !void {
+    const test_io = std.testing.io;
     for (files) |f| {
         if (std.fs.path.dirname(f.name)) |sub_dir| {
-            try dir.makePath(sub_dir);
+            try dir.createDirPath(test_io, sub_dir);
         }
-        const file = try dir.createFile(f.name, .{});
-        defer file.close();
-        try file.writeAll(f.content);
+        const file = try dir.createFile(test_io, f.name, .{});
+        defer file.close(test_io);
+        try file.writeStreamingAll(test_io, f.content);
     }
 }
 
-fn cleanupModuleTestFiles(dir: std.fs.Dir, files: []const TestFile) void {
+fn cleanupModuleTestFiles(dir: std.Io.Dir, files: []const TestFile) void {
+    const test_io = std.testing.io;
     var i = files.len;
     while (i > 0) {
         i -= 1;
-        dir.deleteFile(files[i].name) catch {};
+        dir.deleteFile(test_io, files[i].name) catch {};
     }
 }
 
@@ -467,20 +479,23 @@ test "Localization Generate From Module Single File" {
     try setupModuleTestFiles(tmp_dir.dir, test_files);
     defer cleanupModuleTestFiles(tmp_dir.dir, test_files);
 
-    const full_path = try tmp_dir.dir.realpathAlloc(alloc, "story.topi");
+    const test_io = std.testing.io;
+    const full_path = try tmp_dir.dir.realPathFileAlloc(test_io, "story.topi", alloc);
     defer alloc.free(full_path);
-    const folder = try tmp_dir.dir.realpathAlloc(alloc, ".");
+    const folder = try tmp_dir.dir.realPathFileAlloc(test_io, ".", alloc);
     defer alloc.free(folder);
 
-    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false, null);
+    var gen_result = try Locale.generateFromModuleWithIo(alloc, std.testing.io, full_path, folder, null, false, null);
     defer gen_result.deinit();
 
     try std.testing.expect(!gen_result.hasWarnings());
 
     // Verify generated .topil file
-    const topil_file = try tmp_dir.dir.openFile("story.fr.topil", .{});
-    defer topil_file.close();
-    const topil_data = try topil_file.readToEndAlloc(alloc, std.math.maxInt(u32));
+    const topil_file = try tmp_dir.dir.openFile(test_io, "story.fr.topil", .{});
+    defer topil_file.close(test_io);
+    var topil_buf: [1024]u8 = undefined;
+    var topil_rdr = topil_file.reader(test_io, &topil_buf);
+    const topil_data = try topil_rdr.interface.allocRemaining(alloc, .unlimited);
     const lp = try LocaleProvider.init(alloc, "fr", topil_data);
     defer lp.deinit(alloc);
 
@@ -524,20 +539,22 @@ test "Localization Generate From Module With Include" {
     try setupModuleTestFiles(tmp_dir.dir, test_files);
     defer cleanupModuleTestFiles(tmp_dir.dir, test_files);
 
-    const full_path = try tmp_dir.dir.realpathAlloc(alloc, "main.topi");
+    const full_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.topi", alloc);
     defer alloc.free(full_path);
-    const folder = try tmp_dir.dir.realpathAlloc(alloc, ".");
+    const folder = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", alloc);
     defer alloc.free(folder);
 
-    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false, null);
+    var gen_result = try Locale.generateFromModuleWithIo(alloc, std.testing.io, full_path, folder, null, false, null);
     defer gen_result.deinit();
 
     try std.testing.expect(!gen_result.hasWarnings());
 
     // Verify .topil has entries from both files
-    const topil_file = try tmp_dir.dir.openFile("main.fr.topil", .{});
-    defer topil_file.close();
-    const topil_data = try topil_file.readToEndAlloc(alloc, std.math.maxInt(u32));
+    const topil_file = try tmp_dir.dir.openFile(std.testing.io, "main.fr.topil", .{});
+    defer topil_file.close(std.testing.io);
+    var topil_buf2: [1024]u8 = undefined;
+    var topil_rdr2 = topil_file.reader(std.testing.io, &topil_buf2);
+    const topil_data = try topil_rdr2.interface.allocRemaining(alloc, .unlimited);
     const lp = try LocaleProvider.init(alloc, "fr", topil_data);
     defer lp.deinit(alloc);
 
@@ -576,12 +593,12 @@ test "Localization Generate From Module Missing CSV Warning" {
     try setupModuleTestFiles(tmp_dir.dir, test_files);
     defer cleanupModuleTestFiles(tmp_dir.dir, test_files);
 
-    const full_path = try tmp_dir.dir.realpathAlloc(alloc, "main.topi");
+    const full_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.topi", alloc);
     defer alloc.free(full_path);
-    const folder = try tmp_dir.dir.realpathAlloc(alloc, ".");
+    const folder = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", alloc);
     defer alloc.free(folder);
 
-    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false, null);
+    var gen_result = try Locale.generateFromModuleWithIo(alloc, std.testing.io, full_path, folder, null, false, null);
     defer gen_result.deinit();
 
     // Should warn about missing CSV for shared.topi
@@ -621,12 +638,12 @@ test "Localization Generate From Module No CSV For Utility Include" {
     try setupModuleTestFiles(tmp_dir.dir, test_files);
     defer cleanupModuleTestFiles(tmp_dir.dir, test_files);
 
-    const full_path = try tmp_dir.dir.realpathAlloc(alloc, "main.topi");
+    const full_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.topi", alloc);
     defer alloc.free(full_path);
-    const folder = try tmp_dir.dir.realpathAlloc(alloc, ".");
+    const folder = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", alloc);
     defer alloc.free(folder);
 
-    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false, null);
+    var gen_result = try Locale.generateFromModuleWithIo(alloc, std.testing.io, full_path, folder, null, false, null);
     defer gen_result.deinit();
 
     // No warnings — utils.topi has no localizable content, so missing CSV is fine
@@ -659,12 +676,12 @@ test "Localization Generate From Module Stale CSV Entries" {
     try setupModuleTestFiles(tmp_dir.dir, test_files);
     defer cleanupModuleTestFiles(tmp_dir.dir, test_files);
 
-    const full_path = try tmp_dir.dir.realpathAlloc(alloc, "story.topi");
+    const full_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "story.topi", alloc);
     defer alloc.free(full_path);
-    const folder = try tmp_dir.dir.realpathAlloc(alloc, ".");
+    const folder = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", alloc);
     defer alloc.free(folder);
 
-    var gen_result = try Locale.generateFromModule(alloc, full_path, folder, null, false, null);
+    var gen_result = try Locale.generateFromModuleWithIo(alloc, std.testing.io, full_path, folder, null, false, null);
     defer gen_result.deinit();
 
     // Should report the stale UUID

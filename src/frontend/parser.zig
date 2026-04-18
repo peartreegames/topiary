@@ -682,7 +682,7 @@ pub const Parser = struct {
 
         while (true) {
             // Build placeholder {0}, {1}, etc. in value
-            try value.writer(self.allocator).print("{{{d}}}", .{expr_index});
+            try value.print(self.allocator, "{{{d}}}", .{expr_index});
             expr_index += 1;
 
             // Advance to first token of the interpolated expression

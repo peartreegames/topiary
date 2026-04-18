@@ -12,7 +12,7 @@ const Compiler = backend.Compiler;
 const CompilerErrors = backend.CompilerErrors;
 const suggest = backend.suggest;
 
-const fs = std.fs;
+const Io = std.Io;
 
 /// Group of files
 /// Manages all allocations and clears all with deinit
@@ -30,22 +30,24 @@ pub const Module = struct {
     allocator: std.mem.Allocator,
     errors: CompilerErrors,
     entry: *File,
-    dir: fs.Dir,
+    io: Io,
+    dir: Io.Dir,
     dir_path: []const u8,
-    includes: std.StringArrayHashMap(*File),
+    includes: std.array_hash_map.String(*File),
     timings: Timings = .{},
 
-    pub fn init(allocator: std.mem.Allocator, entry_path: []const u8) !*Module {
+    pub fn init(allocator: std.mem.Allocator, io: Io, entry_path: []const u8) !*Module {
         const mod = try allocator.create(Module);
         const path = std.fs.path.basename(entry_path);
         const dir_name = std.fs.path.dirname(entry_path) orelse return error.InvalidArgument;
         mod.* = .{
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
-            .dir = try std.fs.openDirAbsolute(dir_name, .{}),
+            .io = io,
+            .dir = try Io.Dir.openDirAbsolute(io, dir_name, .{}),
             .dir_path = try allocator.dupe(u8, dir_name),
             .entry = undefined,
-            .includes = std.StringArrayHashMap(*File).init(allocator),
+            .includes = std.array_hash_map.String(*File).empty,
             .errors = CompilerErrors.init(allocator),
         };
         // Can't add entry until includes is initialized
@@ -54,15 +56,16 @@ pub const Module = struct {
     }
 
     /// Used for initializing with source directly rather than a file path
-    pub fn initEmpty(allocator: std.mem.Allocator) !*Module {
+    pub fn initEmpty(allocator: std.mem.Allocator, io: Io) !*Module {
         const mod = try allocator.create(Module);
         mod.* = .{
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
+            .io = io,
             .dir = undefined,
             .dir_path = "",
             .entry = undefined,
-            .includes = std.StringArrayHashMap(*File).init(allocator),
+            .includes = std.array_hash_map.String(*File).empty,
             .errors = CompilerErrors.init(allocator),
         };
         return mod;
@@ -72,19 +75,25 @@ pub const Module = struct {
     pub fn addFileAtPath(self: *Module, path: []const u8) !*File {
         if (self.includes.get(path)) |existing| return existing;
         const file = try File.create(self, path);
-        try self.includes.putNoClobber(file.path, file);
+        try self.includes.putNoClobber(self.allocator, file.path, file);
         return file;
     }
 
+    fn nowNs(self: *Module) i96 {
+        return std.Io.Timestamp.now(self.io, .awake).nanoseconds;
+    }
+
     pub fn generateBytecode(self: *Module, allocator: std.mem.Allocator) !Bytecode {
-        var total_timer = try std.time.Timer.start();
-        var phase_timer = try std.time.Timer.start();
+        const total_start = self.nowNs();
+        var phase_start = total_start;
         // Capture whatever phases completed if we error out partway through.
-        errdefer self.timings.total_ns = total_timer.read();
+        errdefer self.timings.total_ns = @intCast(self.nowNs() - total_start);
 
         // Phase 1: Resolve all includes and load sources
         try self.resolveIncludes();
-        self.timings.resolve_includes_ns = phase_timer.lap();
+        var now = self.nowNs();
+        self.timings.resolve_includes_ns = @intCast(now - phase_start);
+        phase_start = now;
 
         // Populate file/source counts now that all sources are loaded.
         self.timings.file_count = self.includes.count();
@@ -100,7 +109,9 @@ pub const Module = struct {
         while (it.next()) |kvp| {
             try kvp.value_ptr.*.buildTree();
         }
-        self.timings.parse_ns = phase_timer.lap();
+        now = self.nowNs();
+        self.timings.parse_ns = @intCast(now - phase_start);
+        phase_start = now;
 
         // Phase 3: Compile
         var compiler = try Compiler.init(allocator, self);
@@ -110,8 +121,9 @@ pub const Module = struct {
             return e;
         };
         const result = try compiler.bytecode();
-        self.timings.compile_ns = phase_timer.lap();
-        self.timings.total_ns = total_timer.read();
+        now = self.nowNs();
+        self.timings.compile_ns = @intCast(now - phase_start);
+        self.timings.total_ns = @intCast(now - total_start);
         return result;
     }
 
@@ -246,10 +258,10 @@ pub const Module = struct {
         const dirname = std.fs.path.dirname(resolved_path);
 
         var dir = if (dirname) |dn|
-            self.dir.openDir(dn, .{ .iterate = true }) catch return null
+            self.dir.openDir(self.io, dn, .{ .iterate = true }) catch return null
         else
-            self.dir.openDir(".", .{ .iterate = true }) catch return null;
-        defer dir.close();
+            self.dir.openDir(self.io, ".", .{ .iterate = true }) catch return null;
+        defer dir.close(self.io);
 
         var names: std.ArrayList([]const u8) = .empty;
         defer {
@@ -258,7 +270,7 @@ pub const Module = struct {
         }
 
         var iter = dir.iterate();
-        while (iter.next() catch return null) |entry| {
+        while (iter.next(self.io) catch return null) |entry| {
             if (entry.kind != .file) continue;
             if (!std.mem.endsWith(u8, entry.name, ".topi")) continue;
             try names.append(alloc, try alloc.dupe(u8, entry.name));
@@ -323,7 +335,7 @@ pub const Module = struct {
             const full_path = try std.fs.path.resolve(alloc, &.{ current_file_dir, raw_path });
             defer alloc.free(full_path);
 
-            return std.fs.path.relative(alloc, self.dir_path, full_path) catch
+            return std.fs.path.relative(alloc, self.dir_path, null, self.dir_path, full_path) catch
                 try alloc.dupe(u8, full_path);
         } else {
             // initEmpty case (tests): resolve relative to dir_name directly
@@ -349,7 +361,7 @@ pub const Module = struct {
 
     pub fn deinit(self: *Module) void {
         self.errors.deinit();
-        self.includes.deinit();
+        self.includes.deinit(self.allocator);
         if (self.dir_path.len > 0) self.allocator.free(self.dir_path);
         var arena = self.arena;
         arena.deinit();
@@ -373,8 +385,8 @@ pub const File = struct {
         const file = try allocator.create(File);
         file.* = .{
             .path = try allocator.dupe(u8, path),
-            .name = fs.path.basename(path),
-            .dir_name = fs.path.dirname(path) orelse ".",
+            .name = std.fs.path.basename(path),
+            .dir_name = std.fs.path.dirname(path) orelse ".",
             .module = module,
         };
         return file;
@@ -382,13 +394,14 @@ pub const File = struct {
 
     pub fn loadSource(self: *File) !void {
         if (self.source != null) return;
-        var file = try self.module.dir.openFile(self.path, .{});
-        defer file.close();
+        const io = self.module.io;
+        var file = try self.module.dir.openFile(io, self.path, .{});
+        defer file.close(io);
 
-        const stat = try file.stat();
+        const stat = try file.stat(io);
         const file_size = stat.size;
         var buf: [1024]u8 = undefined;
-        var reader = file.reader(&buf);
+        var reader = file.reader(io, &buf);
         const read = &reader.interface;
         self.source = try read.readAlloc(self.module.arena.allocator(), file_size);
     }

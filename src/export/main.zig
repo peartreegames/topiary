@@ -21,6 +21,7 @@ const ExportLine = export_runner.ExportLine;
 const ExportChoice = export_runner.ExportChoice;
 
 var alloc = std.heap.smp_allocator;
+const io = std.Io.Threaded.global_single_threaded.io();
 
 /// Used to pre-calculate the size required
 /// for a compiled topi module
@@ -56,14 +57,14 @@ pub export fn compile(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, log_p
         .severity = @enumFromInt(log_severity),
         .allocator = alloc,
     };
-    var fixed = std.io.Writer.fixed(out_ptr[0..max]);
+    var fixed = std.Io.Writer.fixed(out_ptr[0..max]);
     const size = writeBytecode(std.mem.sliceTo(path_ptr, 0), &fixed, logger);
     logger.log("Compiled size {d} / {d}", .{ size, max }, .debug);
     return size;
 }
 
 fn createModule(path: []const u8, logger: ExportLogger) ?*Module {
-    var mod = Module.init(alloc, path) catch |err| {
+    var mod = Module.init(alloc, io, path) catch |err| {
         logger.log("Could not allocate module: {s}", .{@errorName(err)}, .err);
         return null;
     };
@@ -113,7 +114,7 @@ fn createBytecode(mod: *Module, logger: ExportLogger) ?Bytecode {
     };
 }
 
-fn writeBytecode(path: []const u8, writer: *std.io.Writer, logger: ExportLogger) usize {
+fn writeBytecode(path: []const u8, writer: *std.Io.Writer, logger: ExportLogger) usize {
     const mod = createModule(path, logger);
     if (mod == null) return 0;
     defer mod.?.deinit();
@@ -257,7 +258,7 @@ pub export fn createVm(
         return null;
     };
     logger.log("Initializing Vm, globals: {}", .{bytecode.global_symbols.len}, .info);
-    vm.* = Vm.init(alloc, bytecode, &extern_runner.runner) catch {
+    vm.* = Vm.init(alloc, io, bytecode, &extern_runner.runner) catch {
         logger.log("Could not initialize Vm", .{}, .err);
         alloc.destroy(vm);
         alloc.destroy(extern_runner);
@@ -288,14 +289,14 @@ pub export fn calculateStateSize(vm_ptr: *anyopaque) usize {
 pub export fn saveStateFile(vm_ptr: *anyopaque, path_ptr: [*:0]const u8) bool {
     const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     const path = std.mem.sliceTo(path_ptr, 0);
-    var file = std.fs.createFileAbsolute(path, .{}) catch |err| {
+    var file = std.Io.Dir.createFileAbsolute(io, path, .{}) catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
         runner.logger.log("Could not create file: {s}", .{@errorName(err)}, .err);
         return false;
     };
-    defer file.close();
+    defer file.close(io);
     var buf: [1024]u8 = undefined;
-    var file_writer = file.writer(&buf);
+    var file_writer = file.writer(io, &buf);
     const writer = &file_writer.interface;
     State.serialize(vm, writer) catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
@@ -319,14 +320,14 @@ pub export fn saveState(vm_ptr: *anyopaque, out_ptr: [*:0]u8, max: usize) usize 
 pub export fn loadStateFile(vm_ptr: *anyopaque, path_ptr: [*:0]const u8) bool {
     const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     const path = std.mem.sliceTo(path_ptr, 0);
-    var file = std.fs.openFileAbsolute(path, .{}) catch |err| {
+    var file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
         runner.logger.log("Could not load file: {s}", .{@errorName(err)}, .err);
         return false;
     };
-    defer file.close();
+    defer file.close(io);
     var buf: [1024]u8 = undefined;
-    var reader = file.reader(&buf);
+    var reader = file.reader(io, &buf);
     const read = &reader.interface;
     State.deserialize(vm, read) catch |err| {
         const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
@@ -402,7 +403,7 @@ pub export fn format(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, indent
 }
 
 fn formatInternal(path: []const u8, indent_width: u8, logger: ExportLogger) ?[]const u8 {
-    var mod = Module.init(alloc, path) catch |err| {
+    var mod = Module.init(alloc, io, path) catch |err| {
         logger.log("Could not create module: {s}", .{@errorName(err)}, .err);
         return null;
     };

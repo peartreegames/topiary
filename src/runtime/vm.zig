@@ -51,6 +51,7 @@ const InterpretResult = union(enum) {
 /// Executes bytecode
 pub const Vm = struct {
     alloc: std.mem.Allocator,
+    io: std.Io,
     frames: Stack(Frame),
     err: RuntimeErr,
     gc: Gc,
@@ -115,7 +116,7 @@ pub const Vm = struct {
     };
 
     /// Initialize Vm
-    pub fn init(allocator: std.mem.Allocator, bytecode: Bytecode, runner: anytype) !Vm {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, bytecode: Bytecode, runner: anytype) !Vm {
         const globals = try allocator.alloc(Value, bytecode.global_symbols.len);
         @memset(globals, .void);
         for (bytecode.constants) |c| {
@@ -141,6 +142,7 @@ pub const Vm = struct {
         };
         var vm = Vm{
             .alloc = allocator,
+            .io = io,
             .bytecode = bytecode,
             .frames = try Stack(Frame).init(allocator, frame_size),
             .err = .{},
@@ -220,13 +222,14 @@ pub const Vm = struct {
         if (self.loc_provider) |lp| {
             if (std.mem.eql(u8, lp.key, path)) return;
         }
-        const file = try std.fs.cwd().openFile(path, .{});
-        defer file.close();
+        const file = try std.Io.Dir.cwd().openFile(self.io, path, .{});
+        defer file.close(self.io);
 
-        const size = (try file.stat()).size;
-        const buffer = try self.alloc.alloc(u8, size);
+        const size = (try file.stat(self.io)).size;
+        var buf: [1024]u8 = undefined;
+        var reader = file.reader(self.io, &buf);
+        const buffer = try reader.interface.readAlloc(self.alloc, size);
         errdefer self.alloc.free(buffer);
-        _ = try file.readAll(buffer);
         self.removeLocale();
         self.loc_provider = try LocaleProvider.init(self.alloc, path, buffer);
     }
@@ -600,7 +603,7 @@ pub const Vm = struct {
                         return self.fail("Cannot add types {s} and {s}: {f} {f}", .{ left.typeName(), right.typeName(), left, right });
                     }
                     switch (right) {
-                        .const_string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.alloc, u8, &.{ std.mem.trimRight(u8, left.const_string, &[_]u8{0}), s }) }),
+                        .const_string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.alloc, u8, &.{ std.mem.trimEnd(u8, left.const_string, &[_]u8{0}), s }) }),
                         .number => try self.push(.{ .number = right.number + left.number }),
                         .obj => |o| {
                             switch (o.data) {
@@ -805,9 +808,9 @@ pub const Vm = struct {
                     while (count > 0) : (count -= 1) {
                         args[count - 1] = try self.pop();
                     }
-                    var list = std.ArrayList(u8).empty;
-                    defer list.deinit(self.alloc);
-                    var writer = list.writer(self.alloc);
+                    var allocating_writer: std.Io.Writer.Allocating = .init(self.alloc);
+                    defer allocating_writer.deinit();
+                    const writer = &allocating_writer.writer;
                     // index
                     var i: usize = 0;
                     // start
@@ -827,10 +830,10 @@ pub const Vm = struct {
                             const val = args[arg_index];
                             switch (val) {
                                 .number => |n| {
-                                    try std.fmt.format(writer, "{d}", .{n});
+                                    try writer.print("{d}", .{n});
                                 },
                                 .timestamp => |t| {
-                                    try std.fmt.format(writer, "{d}", .{t});
+                                    try writer.print("{d}", .{t});
                                 },
                                 .bool => |b| try writer.writeAll(if (b) "true" else "false"),
                                 .enum_value => |e| {
@@ -838,11 +841,11 @@ pub const Vm = struct {
                                         return self.fail("Enum index {d} is out of bounds for '{s}'", .{ e.index, e.base.data.@"enum".name });
                                     try writer.writeAll(e.base.data.@"enum".values[e.index]);
                                 },
-                                .const_string => |cs| try writer.writeAll(std.mem.trimRight(u8, cs, &[_]u8{0})),
+                                .const_string => |cs| try writer.writeAll(std.mem.trimEnd(u8, cs, &[_]u8{0})),
                                 .obj => |o| {
                                     switch (o.data) {
                                         // remove final 0
-                                        .string => try writer.writeAll(std.mem.trimRight(u8, o.data.string, &[_]u8{0})),
+                                        .string => try writer.writeAll(std.mem.trimEnd(u8, o.data.string, &[_]u8{0})),
                                         else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), str }),
                                     }
                                 },
@@ -853,7 +856,7 @@ pub const Vm = struct {
                         }
                     }
                     try writer.writeAll(str[s..]);
-                    try self.pushAlloc(.{ .string = try list.toOwnedSlice(self.alloc) });
+                    try self.pushAlloc(.{ .string = try allocating_writer.toOwnedSlice() });
                 },
                 .list => {
                     var count = self.takeInt(C.COLLECTION);
@@ -956,7 +959,7 @@ pub const Vm = struct {
                     // Normalize const_string to obj.string so method dispatch
                     // only needs to handle one string representation
                     const target = if (raw_target == .const_string)
-                        try self.gc.create(self, .{ .string = try self.alloc.dupe(u8, std.mem.trimRight(u8, raw_target.const_string, &[_]u8{0})) })
+                        try self.gc.create(self, .{ .string = try self.alloc.dupe(u8, std.mem.trimEnd(u8, raw_target.const_string, &[_]u8{0})) })
                     else
                         raw_target;
 

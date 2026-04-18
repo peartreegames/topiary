@@ -127,15 +127,21 @@ pub const string_methods = std.StaticStringMap(Builtin).initComptime(.{
 
 pub const BuiltinFn = Builtin.Fn;
 
-fn rnd(_: *Vm, args: []Value) Value {
-    if (r == null) r = std.Random.DefaultPrng.init(std.crypto.random.int(u64));
+fn initRng(io: std.Io) void {
+    var seed_bytes: [8]u8 = undefined;
+    io.random(&seed_bytes);
+    r = std.Random.DefaultPrng.init(std.mem.readInt(u64, &seed_bytes, .little));
+}
+
+fn rnd(vm: *Vm, args: []Value) Value {
+    if (r == null) initRng(vm.io);
     const start = @as(i32, @intFromFloat(args[0].number));
     const end = @as(i32, @intFromFloat(args[1].number));
     return .{ .number = @as(f32, @floatFromInt(r.?.random().intRangeAtMost(i32, start, end))) };
 }
 
-fn rnd01(_: *Vm, args: []Value) Value {
-    if (r == null) r = std.Random.DefaultPrng.init(std.crypto.random.int(u64));
+fn rnd01(vm: *Vm, args: []Value) Value {
+    if (r == null) initRng(vm.io);
     _ = args;
     return .{ .number = r.?.random().float(f32) };
 }
@@ -150,18 +156,18 @@ fn abs(_: *Vm, args: []Value) Value {
 
 fn print(vm: *Vm, args: []Value) Value {
     var stderr_buffer: [128]u8 = undefined;
-    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    var stderr_writer = std.Io.File.stderr().writer(vm.io, &stderr_buffer);
     const stderr = &stderr_writer.interface;
-    var arr = std.AutoArrayHashMap(UUID.ID, void).init(vm.alloc);
-    defer arr.deinit();
-    args[0].print(stderr, &arr) catch unreachable;
+    var arr: std.array_hash_map.Auto(UUID.ID, void) = .empty;
+    defer arr.deinit(vm.alloc);
+    args[0].print(stderr, vm.alloc, &arr) catch unreachable;
     stderr.print("\n", .{}) catch unreachable;
     stderr.flush() catch unreachable;
     return Void;
 }
 
-fn mstime(_: *Vm, _: []Value) Value {
-    return .{ .timestamp = std.time.milliTimestamp() };
+fn mstime(vm: *Vm, _: []Value) Value {
+    return .{ .timestamp = std.Io.Timestamp.now(vm.io, .real).toMilliseconds() };
 }
 
 fn assert(_: *Vm, args: []Value) Value {
@@ -261,7 +267,7 @@ fn length_method(_: *Vm, args: []Value) Value {
 
 fn getStr(val: Value) []const u8 {
     return switch (val) {
-        .const_string => |s| std.mem.trimRight(u8, s, &[_]u8{0}),
+        .const_string => |s| std.mem.trimEnd(u8, s, &[_]u8{0}),
         .obj => |o| if (o.data == .string) o.data.string else "",
         else => "",
     };
@@ -493,7 +499,7 @@ fn sequence(vm: *Vm, args: []Value) Value {
 }
 
 fn shuffle(vm: *Vm, args: []Value) Value {
-    if (r == null) r = std.Random.DefaultPrng.init(std.crypto.random.int(u64));
+    if (r == null) initRng(vm.io);
     const items = args[0].obj.data.list.items;
     if (items.len == 0) return .{ .nil = {} };
     const key = contentHashList(items);
@@ -523,16 +529,16 @@ fn shuffle(vm: *Vm, args: []Value) Value {
     return items[actual_idx];
 }
 
-fn random(_: *Vm, args: []Value) Value {
-    if (r == null) r = std.Random.DefaultPrng.init(std.crypto.random.int(u64));
+fn random(vm: *Vm, args: []Value) Value {
+    if (r == null) initRng(vm.io);
     const items = args[0].obj.data.list.items;
     if (items.len == 0) return .{ .nil = {} };
     const idx = r.?.random().intRangeLessThan(usize, 0, items.len);
     return items[idx];
 }
 
-fn weighted(_: *Vm, args: []Value) Value {
-    if (r == null) r = std.Random.DefaultPrng.init(std.crypto.random.int(u64));
+fn weighted(vm: *Vm, args: []Value) Value {
+    if (r == null) initRng(vm.io);
     const items = args[0].obj.data.list;
     const weights = args[1].obj.data.list;
 

@@ -24,6 +24,8 @@ const runner = @import("runner.zig");
 const CliRunner = runner.CliRunner;
 const AutoTestRunner = runner.AutoTestRunner;
 
+pub const io = std.Io.Threaded.global_single_threaded.io();
+
 const Command = enum {
     run,
     compile,
@@ -92,7 +94,7 @@ const RunArgs = struct {
     verbose: bool = false,
     rewind: bool = false,
 
-    fn init(self: *RunArgs, iter: *std.process.ArgIterator) !void {
+    fn init(self: *RunArgs, iter: *std.process.Args.Iterator) !void {
         while (iter.next()) |arg| {
             if (std.mem.eql(u8, arg, "-a") or std.mem.eql(u8, arg, "--auto")) {
                 self.auto = true;
@@ -121,7 +123,7 @@ const CompileArgs = struct {
     time: bool = false,
     verbose: bool = false,
 
-    fn init(self: *CompileArgs, iter: *std.process.ArgIterator) !void {
+    fn init(self: *CompileArgs, iter: *std.process.Args.Iterator) !void {
         while (iter.next()) |arg| {
             if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
                 self.output = iter.next();
@@ -152,7 +154,7 @@ const LocalizeArgs = struct {
         validate,
         generate,
     };
-    fn init(self: *LocalizeArgs, iter: *std.process.ArgIterator) !void {
+    fn init(self: *LocalizeArgs, iter: *std.process.Args.Iterator) !void {
         const cmd = std.meta.stringToEnum(LocCommand, iter.next().?);
         if (cmd == null) return usage("Missing 'export', 'validate', or 'generate' command");
         self.command = cmd.?;
@@ -183,7 +185,7 @@ const TestArgs = struct {
     bough: ?[]const u8 = null,
     quiet: bool = false,
     verbose: bool = false,
-    fn init(self: *TestArgs, iter: *std.process.ArgIterator) !void {
+    fn init(self: *TestArgs, iter: *std.process.Args.Iterator) !void {
         while (iter.next()) |arg| {
             if (std.mem.eql(u8, arg, "-q") or std.mem.eql(u8, arg, "--quiet")) {
                 self.quiet = true;
@@ -206,7 +208,7 @@ const FmtArgs = struct {
     stamp: bool = false,
     stamp_only: bool = false,
     verbose: bool = false,
-    fn init(self: *FmtArgs, iter: *std.process.ArgIterator) !void {
+    fn init(self: *FmtArgs, iter: *std.process.Args.Iterator) !void {
         while (iter.next()) |arg| {
             if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--dry")) {
                 self.dry = true;
@@ -228,7 +230,7 @@ const FmtArgs = struct {
 
 pub fn print(comptime msg: []const u8, args: anytype) !void {
     var buffer: [128]u8 = undefined;
-    var writer = std.fs.File.stdout().writer(&buffer);
+    var writer = std.Io.File.stdout().writer(io, &buffer);
     const stdout = &writer.interface;
     stdout.print(msg, args) catch {
         std.debug.print("Could not print message", .{});
@@ -238,7 +240,7 @@ pub fn print(comptime msg: []const u8, args: anytype) !void {
 
 pub fn writeErrors(mod: *Module) !void {
     var buffer: [128]u8 = undefined;
-    var writer = std.fs.File.stdout().writer(&buffer);
+    var writer = std.Io.File.stdout().writer(io, &buffer);
     const stdout = &writer.interface;
     try mod.writeErrors(stdout);
 }
@@ -246,22 +248,22 @@ pub fn writeErrors(mod: *Module) !void {
 fn writeOutput(full_path: []const u8, content: []const u8, dry: bool) !void {
     if (dry) {
         var buffer: [128]u8 = undefined;
-        var writer = std.fs.File.stdout().writer(&buffer);
+        var writer = std.Io.File.stdout().writer(io, &buffer);
         const stdout = &writer.interface;
         try stdout.writeAll(content);
         try stdout.flush();
     } else {
-        const new_file = try std.fs.createFileAbsolute(full_path, .{});
-        defer new_file.close();
-        try new_file.writeAll(content);
+        const new_file = try std.Io.Dir.createFileAbsolute(io, full_path, .{});
+        defer new_file.close(io);
+        try new_file.writeStreamingAll(io, content);
     }
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init.Minimal) !void {
     var da: std.heap.DebugAllocator(.{}) = .init;
     var arena = std.heap.ArenaAllocator.init(da.allocator());
     defer arena.deinit();
-    var iter = try std.process.argsWithAllocator(arena.allocator());
+    var iter = std.process.Args.Iterator.init(init.args);
     _ = iter.skip();
 
     const maybe_cmd = iter.next();
@@ -312,11 +314,11 @@ pub fn main() !void {
 }
 
 fn createModule(alloc: std.mem.Allocator, args: anytype) !*Module {
-    const full_path = std.fs.cwd().realpathAlloc(alloc, args.file.?) catch |err| {
+    const full_path = std.Io.Dir.cwd().realPathFileAlloc(io, args.file.?, alloc) catch |err| {
         try print("Could not find file at {s}\n", .{args.file.?});
         return err;
     };
-    return Module.init(alloc, full_path);
+    return Module.init(alloc, io, full_path);
 }
 
 fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
@@ -336,18 +338,18 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
     defer bytecode.free(alloc);
 
     var cli_runner = CliRunner.init(args.auto);
-    var vm = Vm.init(alloc, bytecode, &cli_runner.runner) catch |err| {
+    var vm = Vm.init(alloc, io, bytecode, &cli_runner.runner) catch |err| {
         try print("Could not initialize Vm\n", .{});
         return if (args.verbose) err else {};
     };
     if (args.rewind) vm.history_capacity = 16;
 
     if (args.load) |file_path| {
-        const file = try if (std.fs.path.isAbsolute(file_path)) std.fs.openFileAbsolute(file_path, .{}) else std.fs.cwd().openFile(file_path, .{});
+        const file = try if (std.fs.path.isAbsolute(file_path)) std.Io.Dir.openFileAbsolute(io, file_path, .{}) else std.Io.Dir.cwd().openFile(io, file_path, .{});
         var buf: [128]u8 = undefined;
-        var reader = file.reader(&buf);
+        var reader = file.reader(io, &buf);
         const read = &reader.interface;
-        defer file.close();
+        defer file.close(io);
         State.deserialize(&vm, read) catch |err| {
             try print("Could not load state\n", .{});
             return if (args.verbose) err else {};
@@ -361,7 +363,7 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
     while (vm.can_continue) {
         vm.run() catch {
             var buffer: [128]u8 = undefined;
-            var writer = std.fs.File.stdout().writer(&buffer);
+            var writer = std.Io.File.stdout().writer(io, &buffer);
             const stdout = &writer.interface;
             vm.err.print(stdout);
             break;
@@ -369,15 +371,15 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
     }
 
     if (args.save) |file_path| {
-        const dir = std.fs.cwd();
+        const dir = std.Io.Dir.cwd();
         if (std.fs.path.dirname(file_path)) |dir_name| {
-            try dir.makePath(dir_name);
+            try dir.createDirPath(io, dir_name);
         }
-        var file = try dir.createFile(file_path, .{});
+        var file = try dir.createFile(io, file_path, .{});
         var buf: [128]u8 = undefined;
-        var file_writer = file.writer(&buf);
+        var file_writer = file.writer(io, &buf);
         const writer = &file_writer.interface;
-        defer file.close();
+        defer file.close(io);
         State.serialize(&vm, writer) catch |err| {
             try print("Could not save state\n", .{});
             return if (args.verbose) err else {};
@@ -407,14 +409,14 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
     }
     // --time alone (without -o) is a benchmark mode: timings already printed, nothing to write.
     if (args.output == null) return;
-    const dir = std.fs.cwd();
+    const dir = std.Io.Dir.cwd();
     if (std.fs.path.dirname(args.output.?)) |dir_name| {
-        try dir.makePath(dir_name);
+        try dir.createDirPath(io, dir_name);
     }
-    var file = try dir.createFile(args.output.?, .{});
-    defer file.close();
+    var file = try dir.createFile(io, args.output.?, .{});
+    defer file.close(io);
     var buf: [128]u8 = undefined;
-    var file_writer = file.writer(&buf);
+    var file_writer = file.writer(io, &buf);
     _ = bytecode.serialize(alloc, &file_writer.interface) catch |err| {
         try print("Could not serialize bytecode\n", .{});
         return if (args.verbose) err else {};
@@ -443,7 +445,7 @@ fn printCompileTimings(file_path: []const u8, t: Module.Timings) !void {
 }
 
 fn fmtCommand(args: FmtArgs, alloc: std.mem.Allocator) !void {
-    const full_path = std.fs.cwd().realpathAlloc(alloc, args.file.?) catch |err| {
+    const full_path = std.Io.Dir.cwd().realPathFileAlloc(io, args.file.?, alloc) catch |err| {
         try print("Could not find file at {s}\n", .{args.file.?});
         return if (args.verbose) err else {};
     };
@@ -458,7 +460,7 @@ fn fmtCommand(args: FmtArgs, alloc: std.mem.Allocator) !void {
         return;
     }
 
-    var mod = Module.init(alloc, full_path) catch |err| {
+    var mod = Module.init(alloc, io, full_path) catch |err| {
         try print("Could not create module\n", .{});
         return if (args.verbose) err else {};
     };
@@ -500,18 +502,18 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
     mod.deinit();
     defer bytecode.free(alloc);
 
-    var visit_counts = std.StringArrayHashMap(u64).init(alloc);
-    defer visit_counts.deinit();
+    var visit_counts: std.array_hash_map.String(u64) = .empty;
+    defer visit_counts.deinit(alloc);
     var i: usize = 0;
     while (i < args.count) : (i += 1) {
         var auto_runner = AutoTestRunner.init();
-        var vm = try Vm.init(alloc, bytecode, &auto_runner.runner);
+        var vm = try Vm.init(alloc, io, bytecode, &auto_runner.runner);
         defer vm.deinit();
         try vm.start(args.bough);
         while (vm.can_continue) {
             vm.run() catch {
                 var buffer: [128]u8 = undefined;
-                var writer = std.fs.File.stdout().writer(&buffer);
+                var writer = std.Io.File.stdout().writer(io, &buffer);
                 const stdout = &writer.interface;
                 vm.err.print(stdout);
                 return;
@@ -521,8 +523,8 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
         for (vm.globals, 0..) |g, idx| {
             if (g == .visit) {
                 const name = bytecode.global_symbols[idx].name;
-                const cur = try visit_counts.getOrPutValue(name, 0);
-                try visit_counts.put(name, cur.value_ptr.* + g.visit);
+                const cur = try visit_counts.getOrPutValue(alloc, name, 0);
+                try visit_counts.put(alloc, name, cur.value_ptr.* + g.visit);
             } else break;
             // all visits are first so we can break
         }
@@ -537,7 +539,7 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
 }
 
 fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
-    const full_path = std.fs.cwd().realpathAlloc(alloc, args.file.?) catch |err| {
+    const full_path = std.Io.Dir.cwd().realPathFileAlloc(io, args.file.?, alloc) catch |err| {
         try print("Could not find file at {s}\n", .{args.file.?});
         return if (args.verbose) err else {};
     };
@@ -545,10 +547,10 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
         .generate => {
             const folder = args.folder orelse ".";
             if (!args.dry) {
-                try std.fs.cwd().makePath(folder);
+                try std.Io.Dir.cwd().createDirPath(io, folder);
             }
             var buffer: [128]u8 = undefined;
-            var w = std.fs.File.stdout().writer(&buffer);
+            var w = std.Io.File.stdout().writer(io, &buffer);
             const stdout = &w.interface;
             var gen_result = Locale.generateFromModule(
                 alloc,
@@ -583,7 +585,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
             } else try print("Successfully generated localization into {s}\n", .{folder});
         },
         .@"export" => {
-            var mod = Module.init(alloc, full_path) catch |err| {
+            var mod = Module.init(alloc, io, full_path) catch |err| {
                 try print("Could not create module: {s}\n", .{@errorName(err)});
                 return if (args.verbose) err else {};
             };
@@ -599,7 +601,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
 
             if (args.dry) {
                 var buffer: [128]u8 = undefined;
-                var writer = std.fs.File.stdout().writer(&buffer);
+                var writer = std.Io.File.stdout().writer(io, &buffer);
                 const stdout = &writer.interface;
                 Locale.exportFile(mod.entry, stdout, args.lang) catch |err| {
                     if (err == error.MissingStamp) {
@@ -612,24 +614,26 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                     try print("Error: export requires -o <file> or --dry\n", .{});
                     return;
                 }
-                const dir = std.fs.cwd();
+                const dir = std.Io.Dir.cwd();
                 if (std.fs.path.dirname(args.output.?)) |dir_name| {
-                    try dir.makePath(dir_name);
+                    try dir.createDirPath(io, dir_name);
                 }
 
                 // Read existing CSV before truncating for merge (unless --no-merge)
                 const existing_csv: ?[]const u8 = if (args.no_merge) null else blk: {
-                    const existing = dir.openFile(args.output.?, .{}) catch break :blk null;
-                    defer existing.close();
-                    break :blk existing.readToEndAlloc(alloc, std.math.maxInt(u32)) catch null;
+                    const existing = dir.openFile(io, args.output.?, .{}) catch break :blk null;
+                    defer existing.close(io);
+                    var rbuf: [1024]u8 = undefined;
+                    var rdr = existing.reader(io, &rbuf);
+                    break :blk rdr.interface.allocRemaining(alloc, .unlimited) catch null;
                 };
                 defer if (existing_csv) |csv| alloc.free(csv);
 
-                const file = try dir.createFile(args.output.?, .{});
-                defer file.close();
+                const file = try dir.createFile(io, args.output.?, .{});
+                defer file.close(io);
 
                 var buffer: [1028]u8 = undefined;
-                var file_writer = file.writer(&buffer);
+                var file_writer = file.writer(io, &buffer);
                 const writer = &file_writer.interface;
                 if (existing_csv) |csv| {
                     Locale.exportFileWithMerge(mod.entry, writer, args.lang, csv, alloc) catch |err| {
@@ -649,7 +653,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
             }
         },
         .validate => {
-            var mod = Module.init(alloc, full_path) catch |err| {
+            var mod = Module.init(alloc, io, full_path) catch |err| {
                 try print("Could not create module: {s}\n", .{@errorName(err)});
                 return if (args.verbose) err else {};
             };

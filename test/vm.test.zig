@@ -20,7 +20,7 @@ const allocator = std.testing.allocator;
 
 fn printBytecode(bytecode: *Bytecode) !void {
     var buffer: [128]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
+    var writer = std.Io.File.stderr().writer(std.testing.io, &buffer);
     const stderr = &writer.interface;
     try bytecode.print(stderr);
 }
@@ -30,12 +30,12 @@ pub fn initTestVm(source: []const u8, mod: *Module, debug: bool) !Vm {
     errdefer bytecode.free(allocator);
     if (debug) try printBytecode(&bytecode);
     const test_runner = try TestRunner.init(allocator);
-    return Vm.init(allocator, bytecode, &test_runner.runner);
+    return Vm.init(allocator, std.testing.io, bytecode, &test_runner.runner);
 }
 
 fn printErr(vm: *Vm) void {
     var buffer: [128]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
+    var writer = std.Io.File.stderr().writer(std.testing.io, &buffer);
     const stderr = &writer.interface;
     vm.err.print(stderr);
 }
@@ -62,7 +62,7 @@ test "Runtime Basics" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -91,7 +91,7 @@ test "Runtime Conditionals" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -120,7 +120,7 @@ test "Runtime Variables" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -139,7 +139,7 @@ test "Runtime Constant Variables" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         const err = initTestVm(case, mod, false);
         try testing.expectError(Vm.Error.CompilerError, err);
@@ -165,7 +165,7 @@ test "Runtime Strings" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         errdefer std.log.err("Error on: {s}", .{case.input});
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
@@ -181,7 +181,7 @@ test "Runtime Strings" {
 test "Runtime String Methods" {
     // upper
     {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm("\"hello\".upper()", mod, false);
         defer vm.deinit();
@@ -191,7 +191,7 @@ test "Runtime String Methods" {
         try testing.expectEqualStrings("HELLO", vm.stack.previous().asString().?);
     }
     {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm("\"Hello World\".upper()", mod, false);
         defer vm.deinit();
@@ -203,7 +203,7 @@ test "Runtime String Methods" {
 
     // lower
     {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm("\"HELLO\".lower()", mod, false);
         defer vm.deinit();
@@ -215,7 +215,7 @@ test "Runtime String Methods" {
 
     // replace
     {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm("\"hello\".replace(\"l\", \"r\")", mod, false);
         defer vm.deinit();
@@ -225,7 +225,7 @@ test "Runtime String Methods" {
         try testing.expectEqualStrings("herro", vm.stack.previous().asString().?);
     }
     {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm("\"hello\".replace(\"x\", \"y\")", mod, false);
         defer vm.deinit();
@@ -235,7 +235,7 @@ test "Runtime String Methods" {
         try testing.expectEqualStrings("hello", vm.stack.previous().asString().?);
     }
     {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm("\"aaa\".replace(\"a\", \"bb\")", mod, false);
         defer vm.deinit();
@@ -247,7 +247,7 @@ test "Runtime String Methods" {
 
     // substr (inclusive end)
     {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm("\"hello\".substr(1, 3)", mod, false);
         defer vm.deinit();
@@ -257,7 +257,7 @@ test "Runtime String Methods" {
         try testing.expectEqualStrings("ell", vm.stack.previous().asString().?);
     }
     {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm("\"hello\".substr(0, 4)", mod, false);
         defer vm.deinit();
@@ -267,7 +267,7 @@ test "Runtime String Methods" {
         try testing.expectEqualStrings("hello", vm.stack.previous().asString().?);
     }
     {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm("\"hello\".substr(0, 0)", mod, false);
         defer vm.deinit();
@@ -279,7 +279,7 @@ test "Runtime String Methods" {
 
     // trim
     {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm("\" hello \".trim()", mod, false);
         defer vm.deinit();
@@ -291,7 +291,7 @@ test "Runtime String Methods" {
 
     // has on string literal
     {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm("\"test\".has(\"tes\")", mod, false);
         defer vm.deinit();
@@ -301,7 +301,7 @@ test "Runtime String Methods" {
         try testing.expect(vm.stack.previous().bool == true);
     }
     {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm("\"test\".has(\"foo\")", mod, false);
         defer vm.deinit();
@@ -313,7 +313,7 @@ test "Runtime String Methods" {
 
     // split
     {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm("\"a,b,c\".split(\",\")", mod, false);
         defer vm.deinit();
@@ -329,7 +329,7 @@ test "Runtime String Methods" {
 
     // length on string
     {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm("\"hello\".length()", mod, false);
         defer vm.deinit();
@@ -341,7 +341,7 @@ test "Runtime String Methods" {
 
     // var-based string
     {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(
             \\var s = "Hello World"
@@ -357,7 +357,7 @@ test "Runtime String Methods" {
 
 test "Runtime Weighted" {
     // weighted returns one of the items - just verify it doesn't crash and returns a valid item
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm("weighted(List{1, 2, 3}, List{1, 1, 1})", mod, false);
     defer vm.deinit();
@@ -383,7 +383,7 @@ test "Runtime Lists" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -407,7 +407,7 @@ test "Runtime Maps" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -436,7 +436,7 @@ test "Runtime Sets" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -499,7 +499,7 @@ test "Runtime Index" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -573,7 +573,7 @@ test "Runtime Functions" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -646,7 +646,7 @@ test "Runtime Locals" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -710,7 +710,7 @@ test "Runtime Function Arguments" {
         , .value = 50.0 },
     };
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -737,7 +737,7 @@ test "Runtime Builtin Functions" {
         },
     };
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -748,10 +748,10 @@ test "Runtime Builtin Functions" {
             return err;
         };
         var buffer: [128]u8 = undefined;
-        var writer = std.fs.File.stderr().writer(&buffer);
+        var writer = std.Io.File.stderr().writer(std.testing.io, &buffer);
         const stderr = &writer.interface;
         const value = vm.stack.previous();
-        try value.print(stderr, null);
+        try value.print(stderr, std.testing.allocator, null);
         try stderr.writeAll("\n");
         try testing.expect(value == .number);
     }
@@ -849,7 +849,7 @@ test "Runtime While and For Loops" {
         , .value = 15 },
     };
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -874,7 +874,7 @@ test "Runtime Class Definition" {
         \\ assert(Test.value == 0, "Test.value == 0")
         \\ assert(Test.one() == 1, "Test.one == 1")
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(input, mod, false);
     defer vm.deinit();
@@ -895,7 +895,7 @@ test "Runtime Class Error" {
         \\ Test.one() != Test.value
     };
     inline for (tests) |input| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(input, mod, false);
         defer vm.deinit();
@@ -933,7 +933,7 @@ test "Runtime Class Compile Error" {
         , .err = Vm.Error.CompilerError },
     };
     inline for (tests) |input| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         const err = initTestVm(input.input, mod, false);
         try testing.expectError(input.err, err);
@@ -970,7 +970,7 @@ test "Runtime Instance" {
         \\ test.value = Test.value
         \\ assert(test.value == 0, "test.value == 0")
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(input, mod, false);
     defer vm.deinit();
@@ -1018,7 +1018,7 @@ test "Runtime Enums" {
         \\ assert(quest == Quest.Complete, "Quest is not Complete")
     ;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(input, mod, false);
     defer vm.deinit();
@@ -1155,7 +1155,7 @@ test "Runtime Boughs" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -1201,7 +1201,7 @@ test "Runtime Bough Nested Starts with Backups" {
     ;
     const expected = &[_][]const u8{"Inner"};
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(input, mod, false);
     defer vm.deinit();
@@ -1237,7 +1237,7 @@ test "Runtime Bough Loops" {
         },
     };
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -1326,7 +1326,7 @@ test "Runtime Bough Functions" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -1414,7 +1414,7 @@ test "Runtime Forks" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -1527,7 +1527,7 @@ test "Runtime Visits" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -1610,7 +1610,7 @@ test "Runtime Jump Backups" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -1697,7 +1697,7 @@ test "Runtime Jump Code" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -1724,7 +1724,7 @@ test "Runtime Circular References" {
         \\ two.add(one)
         \\ :: "{one[0][0]}"
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(input, mod, false);
     defer vm.deinit();
@@ -1843,7 +1843,7 @@ test "Runtime Switch" {
         },
     };
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -1865,7 +1865,7 @@ test "Runtime Externs and Subscribers" {
     };
 
     inline for (test_cases) |case| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(case.input, mod, false);
         defer vm.deinit();
@@ -1905,7 +1905,7 @@ test "Runtime Save and Load State" {
     ;
     const alloc = testing.allocator;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(test_case, mod, false);
     defer vm.deinit();
@@ -1914,7 +1914,7 @@ test "Runtime Save and Load State" {
     try vm.interpret();
 
     // Serialize initial state after interpret
-    var data1: std.io.Writer.Allocating = .init(alloc);
+    var data1: std.Io.Writer.Allocating = .init(alloc);
     defer data1.deinit();
     try State.serialize(&vm, &data1.writer);
 
@@ -1930,7 +1930,7 @@ test "Runtime Save and Load State" {
         \\ var set = Set{"will be overwritten"}
     ;
 
-    var mod2 = try Module.initEmpty(allocator);
+    var mod2 = try Module.initEmpty(allocator, std.testing.io);
     defer mod2.deinit();
     var vm2 = try initTestVm(second_case, mod2, false);
     defer vm2.deinit();
@@ -1963,7 +1963,7 @@ test "State Visit Counter Round-Trip" {
     ;
     const alloc = testing.allocator;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(test_case, mod, false);
     defer vm.deinit();
@@ -1988,7 +1988,7 @@ test "State Visit Counter Round-Trip" {
     try State.serialize(&vm, &data.writer);
 
     // Deserialize into new VM from same script
-    var mod2 = try Module.initEmpty(allocator);
+    var mod2 = try Module.initEmpty(allocator, std.testing.io);
     defer mod2.deinit();
     var vm2 = try initTestVm(test_case, mod2, false);
     defer vm2.deinit();
@@ -2021,7 +2021,7 @@ test "State Object Sharing Preservation" {
     ;
     const alloc = testing.allocator;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(test_case, mod, false);
     defer vm.deinit();
@@ -2038,7 +2038,7 @@ test "State Object Sharing Preservation" {
     try State.serialize(&vm, &data.writer);
 
     // Deserialize into new VM
-    var mod2 = try Module.initEmpty(allocator);
+    var mod2 = try Module.initEmpty(allocator, std.testing.io);
     defer mod2.deinit();
     var vm2 = try initTestVm(test_case, mod2, false);
     defer vm2.deinit();
@@ -2062,7 +2062,7 @@ test "State Same-Script Round-Trip" {
     ;
     const alloc = testing.allocator;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(test_case, mod, false);
     defer vm.deinit();
@@ -2078,7 +2078,7 @@ test "State Same-Script Round-Trip" {
     try State.serialize(&vm, &data.writer);
 
     // Load into new VM compiled from the SAME script
-    var mod2 = try Module.initEmpty(allocator);
+    var mod2 = try Module.initEmpty(allocator, std.testing.io);
     defer mod2.deinit();
     var vm2 = try initTestVm(test_case, mod2, false);
     defer vm2.deinit();
@@ -2114,7 +2114,7 @@ test "State Cross-Module Class Resolution" {
     const alloc = testing.allocator;
 
     // Run script 1
-    var mod1 = try Module.initEmpty(allocator);
+    var mod1 = try Module.initEmpty(allocator, std.testing.io);
     defer mod1.deinit();
     var vm1 = try initTestVm(script1, mod1, false);
     defer vm1.deinit();
@@ -2128,7 +2128,7 @@ test "State Cross-Module Class Resolution" {
     try State.serialize(&vm1, &data.writer);
 
     // Load into script 2 (which defines the same class)
-    var mod2 = try Module.initEmpty(allocator);
+    var mod2 = try Module.initEmpty(allocator, std.testing.io);
     defer mod2.deinit();
     var vm2 = try initTestVm(script2, mod2, false);
     defer vm2.deinit();
@@ -2171,7 +2171,7 @@ test "State Variation Round-Trip: cycle and sequence" {
     ;
     const alloc = testing.allocator;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(script, mod, false);
     defer vm.deinit();
@@ -2188,7 +2188,7 @@ test "State Variation Round-Trip: cycle and sequence" {
     try testing.expectEqual(@as(f32, 200), vm.globals[5].number);
 
     // Serialize
-    var data: std.io.Writer.Allocating = .init(alloc);
+    var data: std.Io.Writer.Allocating = .init(alloc);
     defer data.deinit();
     try State.serialize(&vm, &data.writer);
 
@@ -2202,7 +2202,7 @@ test "State Variation Round-Trip: cycle and sequence" {
         \\ var ls = List{100, 200, 300}
         \\ var next_s = sequence(ls)
     ;
-    var mod2 = try Module.initEmpty(allocator);
+    var mod2 = try Module.initEmpty(allocator, std.testing.io);
     defer mod2.deinit();
     var vm2 = try initTestVm(script2, mod2, false);
     defer vm2.deinit();
@@ -2231,7 +2231,7 @@ test "State Variation Round-Trip: shuffle preserves order" {
     ;
     const alloc = testing.allocator;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(script, mod, false);
     defer vm.deinit();
@@ -2242,7 +2242,7 @@ test "State Variation Round-Trip: shuffle preserves order" {
     const first_result = vm.globals[1].number;
     try testing.expect(first_result == 10 or first_result == 20 or first_result == 30);
 
-    var data: std.io.Writer.Allocating = .init(alloc);
+    var data: std.Io.Writer.Allocating = .init(alloc);
     defer data.deinit();
     try State.serialize(&vm, &data.writer);
 
@@ -2250,7 +2250,7 @@ test "State Variation Round-Trip: shuffle preserves order" {
         \\ var l = List{10, 20, 30}
         \\ var next = shuffle(l)
     ;
-    var mod2 = try Module.initEmpty(allocator);
+    var mod2 = try Module.initEmpty(allocator, std.testing.io);
     defer mod2.deinit();
     var vm2 = try initTestVm(script2, mod2, false);
     defer vm2.deinit();
@@ -2281,7 +2281,7 @@ test "State Schema Evolution: removed global" {
     ;
     const alloc = testing.allocator;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(script1, mod, false);
     defer vm.deinit();
@@ -2289,11 +2289,11 @@ test "State Schema Evolution: removed global" {
     defer vm.bytecode.free(alloc);
     try vm.interpret();
 
-    var data: std.io.Writer.Allocating = .init(alloc);
+    var data: std.Io.Writer.Allocating = .init(alloc);
     defer data.deinit();
     try State.serialize(&vm, &data.writer);
 
-    var mod2 = try Module.initEmpty(allocator);
+    var mod2 = try Module.initEmpty(allocator, std.testing.io);
     defer mod2.deinit();
     var vm2 = try initTestVm(script2, mod2, false);
     defer vm2.deinit();
@@ -2322,7 +2322,7 @@ test "State Schema Evolution: added global" {
     ;
     const alloc = testing.allocator;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(script1, mod, false);
     defer vm.deinit();
@@ -2330,11 +2330,11 @@ test "State Schema Evolution: added global" {
     defer vm.bytecode.free(alloc);
     try vm.interpret();
 
-    var data: std.io.Writer.Allocating = .init(alloc);
+    var data: std.Io.Writer.Allocating = .init(alloc);
     defer data.deinit();
     try State.serialize(&vm, &data.writer);
 
-    var mod2 = try Module.initEmpty(allocator);
+    var mod2 = try Module.initEmpty(allocator, std.testing.io);
     defer mod2.deinit();
     var vm2 = try initTestVm(script2, mod2, false);
     defer vm2.deinit();
@@ -2361,7 +2361,7 @@ test "State Malformed JSON" {
     ;
     const alloc = testing.allocator;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(script, mod, false);
     defer vm.deinit();
@@ -2410,27 +2410,28 @@ test "Runtime Includes" {
         \\ var t2 = Test.Two
     ;
 
-    const cwd = std.fs.cwd();
-    const main_file = try cwd.createFile("main.topi", .{ .read = true });
-    const test1_file = try cwd.createFile("test1.topi", .{ .read = true });
-    const test2_file = try cwd.createFile("test2.topi", .{ .read = true });
-    defer cwd.deleteFile("main.topi") catch {};
-    defer cwd.deleteFile("test1.topi") catch {};
-    defer cwd.deleteFile("test2.topi") catch {};
+    const test_io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+    const main_file = try cwd.createFile(test_io, "main.topi", .{});
+    const test1_file = try cwd.createFile(test_io, "test1.topi", .{});
+    const test2_file = try cwd.createFile(test_io, "test2.topi", .{});
+    defer cwd.deleteFile(test_io, "main.topi") catch {};
+    defer cwd.deleteFile(test_io, "test1.topi") catch {};
+    defer cwd.deleteFile(test_io, "test2.topi") catch {};
 
-    try main_file.writeAll(main_contents);
-    try test1_file.writeAll(test1_contents);
-    try test2_file.writeAll(test2_contents);
-    main_file.close();
-    test1_file.close();
-    test2_file.close();
+    try main_file.writeStreamingAll(test_io, main_contents);
+    try test1_file.writeStreamingAll(test_io, test1_contents);
+    try test2_file.writeStreamingAll(test_io, test2_contents);
+    main_file.close(test_io);
+    test1_file.close(test_io);
+    test2_file.close(test_io);
 
     var buffer: [128]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
+    var writer = std.Io.File.stderr().writer(test_io, &buffer);
     const err_writer = &writer.interface;
-    const entry_path = try std.fs.cwd().realpathAlloc(std.testing.allocator, "main.topi");
+    const entry_path = try cwd.realPathFileAlloc(test_io, "main.topi", std.testing.allocator);
     defer std.testing.allocator.free(entry_path);
-    var mod = try Module.init(std.testing.allocator, entry_path);
+    var mod = try Module.init(std.testing.allocator, test_io, entry_path);
     defer mod.deinit();
 
     const bytecode = mod.generateBytecode(std.testing.allocator) catch |err| {
@@ -2440,7 +2441,7 @@ test "Runtime Includes" {
     defer bytecode.free(std.testing.allocator);
 
     var test_runner = try TestRunner.init(allocator);
-    var vm = try Vm.init(std.testing.allocator, bytecode, &test_runner.runner);
+    var vm = try Vm.init(std.testing.allocator, test_io, bytecode, &test_runner.runner);
     defer vm.deinit();
     defer test_runner.deinit();
     vm.interpret() catch |err| {
@@ -2450,7 +2451,7 @@ test "Runtime Includes" {
 }
 
 test "Runtime Error Trace with Function Name" {
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
 
     var vm = try initTestVm(
@@ -2474,7 +2475,7 @@ test "Runtime Error Trace with Function Name" {
 }
 
 test "Runtime Error Trace with Nested Function Names" {
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
 
     var vm = try initTestVm(
@@ -2500,7 +2501,7 @@ test "Runtime Error Trace with Nested Function Names" {
 }
 
 test "Runtime Error Trace without Function Name" {
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
 
     // Error at top-level scope — no function name
@@ -2517,7 +2518,7 @@ test "Runtime Error Trace without Function Name" {
 }
 
 test "Runtime Cycle" {
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(
         \\var l = List{1, 2, 3}
@@ -2543,7 +2544,7 @@ test "Runtime Cycle" {
 }
 
 test "Runtime Sequence" {
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(
         \\var l = List{1, 2, 3}
@@ -2569,7 +2570,7 @@ test "Runtime Sequence" {
 }
 
 test "Runtime Shuffle" {
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(
         \\var l = List{1, 2, 3}
@@ -2597,7 +2598,7 @@ test "Runtime Shuffle" {
 }
 
 test "Runtime Random" {
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(
         \\var l = List{1, 2, 3}
@@ -2619,7 +2620,7 @@ test "Runtime Random" {
 }
 
 test "Runtime Cycle Empty List" {
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm("cycle(List{})", mod, false);
     defer vm.deinit();
@@ -2658,7 +2659,7 @@ test "GC: iterator holds list while body allocates" {
         \\     total = total + parts.count()
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try gcStressVm(source, mod);
     defer vm.deinit();
@@ -2684,7 +2685,7 @@ test "GC: split produces many strings under collection pressure" {
         \\     joined = joined + p
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try gcStressVm(source, mod);
     defer vm.deinit();
@@ -2713,7 +2714,7 @@ test "GC: nested list construction under pressure" {
         \\     }
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try gcStressVm(source, mod);
     defer vm.deinit();
@@ -2734,7 +2735,7 @@ test "GC: state round-trip with nested containers under pressure" {
     const source =
         \\ var data = List{List{"a","b"}, List{"c","d","e"}, Map{1:List{"f"}}}
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
 
     // First VM: serialize, then tear down cleanly.
@@ -2753,7 +2754,7 @@ test "GC: state round-trip with nested containers under pressure" {
 
     // Second VM: deserialize under extreme GC pressure, then verify the
     // tree is still intact.
-    var mod2 = try Module.initEmpty(allocator);
+    var mod2 = try Module.initEmpty(allocator, std.testing.io);
     defer mod2.deinit();
     var vm2 = try initTestVm(source, mod2, false);
     defer vm2.deinit();
@@ -2792,7 +2793,7 @@ test "GC: class instance with default list field under pressure" {
         \\ }
         \\ var t = new Thing{}
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try gcStressVm(source, mod);
     defer vm.deinit();
@@ -2827,7 +2828,7 @@ test "GC: class default string containers do not leak compile-time items" {
         \\ }
         \\ var t = new Thing{}
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(source, mod, false);
     defer vm.deinit();
@@ -2867,7 +2868,7 @@ test "GC: circular instance references under pressure" {
         \\ a.other = b
         \\ b.other = a
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try gcStressVm(source, mod);
     defer vm.deinit();
@@ -2899,7 +2900,7 @@ test "GC: string method chaining under pressure" {
         \\ var s3 = "abcabc".replace("a", "x")
         \\ var s4 = "hello world".upper().replace("HELLO", "HI")
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try gcStressVm(source, mod);
     defer vm.deinit();
@@ -2931,7 +2932,7 @@ test "GC: map construction with dynamic keys under pressure" {
         \\     m[p] = p.upper()
         \\ }
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try gcStressVm(source, mod);
     defer vm.deinit();
@@ -2953,7 +2954,7 @@ test "typeOf builtin: primitives" {
         .{ .input = "var r = typeOf(\"hello\")", .expected = "string" },
     };
     inline for (test_cases) |tc| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(tc.input, mod, false);
         defer vm.deinit();
@@ -2972,7 +2973,7 @@ test "typeOf builtin: collections" {
         .{ .input = "var r = typeOf(Set{1, 2})", .expected = "set" },
     };
     inline for (test_cases) |tc| {
-        var mod = try Module.initEmpty(allocator);
+        var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         var vm = try initTestVm(tc.input, mod, false);
         defer vm.deinit();
@@ -2992,7 +2993,7 @@ test "typeOf builtin: instance returns class name" {
         \\ var p = new Player{}
         \\ var r = typeOf(p)
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(script, mod, false);
     defer vm.deinit();
@@ -3008,7 +3009,7 @@ test "typeOf builtin: function" {
         \\ fn add |x, y| return x + y
         \\ var r = typeOf(add)
     ;
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(script, mod, false);
     defer vm.deinit();
@@ -3025,7 +3026,7 @@ test "State version marker round-trip" {
     ;
     const alloc = testing.allocator;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(script, mod, false);
     defer vm.deinit();
@@ -3034,14 +3035,14 @@ test "State version marker round-trip" {
     try vm.interpret();
 
     // Serialize and verify __version is present
-    var data: std.io.Writer.Allocating = .init(alloc);
+    var data: std.Io.Writer.Allocating = .init(alloc);
     defer data.deinit();
     try State.serialize(&vm, &data.writer);
     const json = data.written();
     try testing.expect(std.mem.indexOf(u8, json, "\"__version\":2") != null);
 
     // Deserialize works fine with version marker
-    var mod2 = try Module.initEmpty(allocator);
+    var mod2 = try Module.initEmpty(allocator, std.testing.io);
     defer mod2.deinit();
     var vm2 = try initTestVm(script, mod2, false);
     defer vm2.deinit();
@@ -3059,7 +3060,7 @@ test "State version marker: future version rejected" {
     ;
     const alloc = testing.allocator;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(script, mod, false);
     defer vm.deinit();
@@ -3076,7 +3077,7 @@ test "State version marker: legacy save without version loads fine" {
     ;
     const alloc = testing.allocator;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(script, mod, false);
     defer vm.deinit();
@@ -3095,7 +3096,7 @@ test "State dangling ref returns Void" {
     ;
     const alloc = testing.allocator;
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var vm = try initTestVm(script, mod, false);
     defer vm.deinit();

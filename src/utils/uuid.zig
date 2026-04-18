@@ -10,7 +10,12 @@ pub const UUID = struct {
     const chars: []const u8 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
     pub fn new() ID {
-        if (rnd == null) rnd = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+        if (rnd == null) {
+            var seed_bytes: [8]u8 = undefined;
+            const io = std.Io.Threaded.global_single_threaded.io();
+            io.random(&seed_bytes);
+            rnd = std.Random.DefaultPrng.init(std.mem.readInt(u64, &seed_bytes, .little));
+        }
         return create(rnd.?.random().int(u64));
     }
 

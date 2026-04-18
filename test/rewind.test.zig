@@ -91,7 +91,7 @@ const RewindRunner = struct {
 fn initRewindVm(source: []const u8, mod: *Module, rr: *RewindRunner) !Vm {
     var bytecode = try compileSource(source, mod);
     errdefer bytecode.free(allocator);
-    var vm = try Vm.init(allocator, bytecode, &rr.runner);
+    var vm = try Vm.init(allocator, std.testing.io, bytecode, &rr.runner);
     vm.history_capacity = 16;
     return vm;
 }
@@ -99,7 +99,7 @@ fn initRewindVm(source: []const u8, mod: *Module, rr: *RewindRunner) !Vm {
 fn runVm(vm: *Vm) !void {
     vm.interpret() catch |err| {
         var buffer: [128]u8 = undefined;
-        var writer = std.fs.File.stderr().writer(&buffer);
+        var writer = std.Io.File.stderr().writer(std.testing.io, &buffer);
         const stderr = &writer.interface;
         vm.err.print(stderr);
         return err;
@@ -128,7 +128,7 @@ test "Rewind: basic two-fork rewind and re-pick" {
         .{ .select = 1 }, // pick B2
     };
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var rr = RewindRunner.init(allocator, &actions);
     defer rr.deinit();
@@ -172,7 +172,7 @@ test "Rewind: visit counters roll back" {
         .{ .select = 0 },
     };
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var rr = RewindRunner.init(allocator, &actions);
     defer rr.deinit();
@@ -213,7 +213,7 @@ test "Rewind: mutable list mutation rolled back" {
         .{ .select = 0 },
     };
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var rr = RewindRunner.init(allocator, &actions);
     defer rr.deinit();
@@ -249,7 +249,7 @@ test "Rewind: ring buffer evicts oldest" {
         .{ .select = 0 },
     };
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var rr = RewindRunner.init(allocator, &actions);
     defer rr.deinit();
@@ -286,7 +286,7 @@ test "Rewind: redo restores forward state" {
         .{ .select = 0 }, // pick X
     };
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var rr = RewindRunner.init(allocator, &actions);
     defer rr.deinit();
@@ -328,7 +328,7 @@ test "Rewind: new pick after rewind clears redo" {
         .{ .select = 0 }, // X
     };
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var rr = RewindRunner.init(allocator, &actions);
     defer rr.deinit();
@@ -372,7 +372,7 @@ test "Rewind: 3-fork chain rewind goes to previous, not current" {
         .{ .select = 0 }, // C1
     };
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var rr = RewindRunner.init(allocator, &actions);
     defer rr.deinit();
@@ -420,7 +420,7 @@ test "Rewind: deinit while paused at rewound fork doesn't leak" {
         // rewound fork with un-freed current_choices.
     };
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var rr = RewindRunner.init(allocator, &actions);
     defer rr.deinit();
@@ -472,7 +472,7 @@ test "Rewind: GC stress with tight threshold" {
         .{ .select = 0 },
     };
 
-    var mod = try Module.initEmpty(allocator);
+    var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     var rr = RewindRunner.init(allocator, &actions);
     defer rr.deinit();

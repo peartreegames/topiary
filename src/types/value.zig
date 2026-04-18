@@ -278,10 +278,10 @@ pub const Value = union(Type) {
             .bool => |b| try writer.writeByte(if (b) '1' else '0'),
             .number => |n| {
                 var buf: [128]u8 = undefined;
-                var fbs = std.Io.fixedBufferStream(buf[0..]);
-                try fbs.writer().print("{d:.5}", .{n});
-                try writer.writeInt(u8, @as(u8, @intCast(fbs.pos)), .little);
-                try writer.writeAll(fbs.getWritten());
+                var fixed = std.Io.Writer.fixed(buf[0..]);
+                try fixed.print("{d:.5}", .{n});
+                try writer.writeInt(u8, @as(u8, @intCast(fixed.end)), .little);
+                try writer.writeAll(buf[0..fixed.end]);
             },
             .const_string => |s| {
                 try writer.writeInt(u16, @as(u16, @intCast(s.len)), .little);
@@ -605,7 +605,7 @@ pub const Value = union(Type) {
     }
 
     pub fn format(self: Value, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        return self.print(writer, null) catch |err| {
+        return self.print(writer, std.mem.Allocator.failing, null) catch |err| {
             std.debug.print("Could not print value {t}", .{err});
             return std.Io.Writer.Error.WriteFailed;
         };
@@ -613,7 +613,7 @@ pub const Value = union(Type) {
 
     /// Prints value to writer
     /// Optional AutoArrayHashMap can be passed in to detect circular references
-    pub fn print(self: Value, writer: *std.Io.Writer, set: ?*std.AutoArrayHashMap(UUID.ID, void)) !void {
+    pub fn print(self: Value, writer: *std.Io.Writer, alloc: std.mem.Allocator, set: ?*std.array_hash_map.Auto(UUID.ID, void)) !void {
         switch (self) {
             .number => |n| try writer.print("{d:.5}", .{n}),
             .bool => |b| try writer.print("{}", .{b}),
@@ -632,7 +632,7 @@ pub const Value = union(Type) {
                             try writer.print("CIRCULAR", .{});
                             return;
                         }
-                        try a.putNoClobber(o.id, {});
+                        try a.putNoClobber(alloc, o.id, {});
                     }
                 }
                 switch (o.data) {
@@ -643,7 +643,7 @@ pub const Value = union(Type) {
                     .list => |l| {
                         try writer.print("List{{", .{});
                         for (l.items, 0..) |item, i| {
-                            try item.print(writer, set);
+                            try item.print(writer, alloc, set);
                             if (i != l.items.len - 1)
                                 try writer.print(", ", .{});
                         }
@@ -653,9 +653,9 @@ pub const Value = union(Type) {
                         try writer.print("Map{{", .{});
                         const keys = m.keys();
                         for (keys, 0..) |k, i| {
-                            try k.print(writer, set);
+                            try k.print(writer, alloc, set);
                             try writer.print(":", .{});
-                            try m.get(k).?.print(writer, set);
+                            try m.get(k).?.print(writer, alloc, set);
                             if (i != keys.len - 1)
                                 try writer.print(", ", .{});
                         }
@@ -665,7 +665,7 @@ pub const Value = union(Type) {
                         const keys = s.keys();
                         try writer.print("Set{{", .{});
                         for (keys, 0..) |k, i| {
-                            try k.print(writer, set);
+                            try k.print(writer, alloc, set);
                             if (i != keys.len - 1)
                                 try writer.print(", ", .{});
                         }
@@ -686,7 +686,7 @@ pub const Value = union(Type) {
                         try writer.print(" {{\n", .{});
                         for (i.fields, 0..) |v, idx| {
                             try writer.print("    {s}: ", .{i.base.data.class.fields[idx].name});
-                            try v.print(writer, set);
+                            try v.print(writer, alloc, set);
                             try writer.print("\n", .{});
                         }
                         try writer.print("}}", .{});

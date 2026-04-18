@@ -8,12 +8,14 @@ const Bytecode = topi.backend.Bytecode;
 //
 // Run with:
 //   zig build fuzz                 (one-shot: runs testOne with empty input)
-//   zig build fuzz --fuzz          (continuous fuzzing; Linux-only in Zig 0.15)
+//   zig build fuzz --fuzz          (continuous fuzzing; Linux-only in Zig 0.16)
 
-fn fuzzBytecode(_: void, input: []const u8) anyerror!void {
+fn fuzzBytecode(_: void, smith: *std.testing.Smith) anyerror!void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-    var reader = std.Io.Reader.fixed(input);
+    var buf: [4096]u8 = undefined;
+    const len = smith.sliceWithHash(&buf, 0);
+    var reader = std.Io.Reader.fixed(buf[0..len]);
     _ = Bytecode.deserialize(arena.allocator(), &reader) catch return;
 }
 

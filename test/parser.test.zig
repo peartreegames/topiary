@@ -12,7 +12,7 @@ const testing = std.testing;
 const allocator = testing.allocator;
 
 pub fn parseSource(source: []const u8) !*Module {
-    const mod = try Module.initEmpty(allocator);
+    const mod = try Module.initEmpty(allocator, std.testing.io);
     errdefer mod.deinit();
     const file = try mod.arena.allocator().create(File);
     file.* = .{
@@ -39,7 +39,7 @@ pub fn parseSource(source: []const u8) !*Module {
 }
 
 fn parseSourceClean(source: []const u8) !*Module {
-    const mod = try Module.initEmpty(allocator);
+    const mod = try Module.initEmpty(allocator, std.testing.io);
     errdefer mod.deinit();
     const file = try mod.arena.allocator().create(File);
     file.* = .{
@@ -58,7 +58,7 @@ fn parseSourceClean(source: []const u8) !*Module {
 }
 
 fn expectParseError(source: []const u8) !*Module {
-    const mod = try Module.initEmpty(allocator);
+    const mod = try Module.initEmpty(allocator, std.testing.io);
     errdefer mod.deinit();
     const file = try mod.arena.allocator().create(File);
     file.* = .{
@@ -228,7 +228,7 @@ test "Parse Include" {
         \\ include "./globals.topi"
         \\ one
         ;
-    const mod = try Module.initEmpty(allocator);
+    const mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const global = try mod.arena.allocator().create(File);
     global.* = .{
@@ -238,7 +238,7 @@ test "Parse Include" {
         .dir_name = ".",
         .source = "var one = 1",
     };
-    try mod.includes.put("globals.topi", global);
+    try mod.includes.put(allocator, "globals.topi", global);
 
     const file = try mod.arena.allocator().create(File);
     file.* = .{

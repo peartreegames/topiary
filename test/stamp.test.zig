@@ -302,7 +302,7 @@ test "Stamp output compiles to bytecode" {
     defer std.testing.allocator.free(stamped);
 
     // The stamped output must be valid enough to compile
-    var mod2 = try Module.initEmpty(std.testing.allocator);
+    var mod2 = try Module.initEmpty(std.testing.allocator, std.testing.io);
     defer mod2.deinit();
     var bytecode = try compileSource(stamped, mod2);
     bytecode.free(std.testing.allocator);
