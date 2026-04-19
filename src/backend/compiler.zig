@@ -38,12 +38,8 @@ const suggest = @import("suggest.zig");
 const max_jump = std.math.maxInt(C.JUMP);
 const BREAK_HOLDER: C.JUMP = max_jump - 0;
 const CONTINUE_HOLDER: C.JUMP = max_jump - 1;
-const CHOICE_HOLDER: C.JUMP = max_jump - 2;
-const FORK_HOLDER: C.JUMP = max_jump - 3;
-const DIVERT_HOLDER: C.JUMP = max_jump - 4;
-const PRONG_HOLDER: C.JUMP = max_jump - 5;
-const SWITCH_END_HOLDER: C.JUMP = max_jump - 6;
-const JUMP_HOLDER: C.JUMP = max_jump - 7;
+const SWITCH_END_HOLDER: C.JUMP = max_jump - 2;
+const JUMP_HOLDER: C.JUMP = max_jump - 3;
 
 fn arrayContains(comptime T: type, haystack: []const []const T, needle: []const T) bool {
     for (haystack) |element| {
@@ -761,22 +757,20 @@ pub const Compiler = struct {
             },
             .@"if" => |i| {
                 try self.compileExpression(i.condition);
-                try self.writeOp(.jump_if_false, token);
-                const falsePos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
+                const falseJp = try self.emitJump(.jump_if_false, token);
                 try self.compileBlock(i.then_branch);
 
-                try self.writeOp(.jump, token);
-                const jumpPos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
-                try self.replaceValue(falsePos, C.JUMP, self.instructionPos());
+                const endJp = try self.emitJump(.jump, token);
+                try self.patchJump(falseJp);
 
                 if (i.else_branch == null) {
                     try self.writeOp(.nil, token);
                     try self.writeOp(.pop, token);
-                    try self.replaceValue(jumpPos, C.JUMP, self.instructionPos());
+                    try self.patchJump(endJp);
                     return;
                 }
                 try self.compileBlock(i.else_branch.?);
-                try self.replaceValue(jumpPos, C.JUMP, self.instructionPos());
+                try self.patchJump(endJp);
             },
             .function => |f| {
                 if (self.scope.parent != null and f.is_extern)
@@ -789,8 +783,8 @@ pub const Compiler = struct {
             .@"switch" => |s| {
                 const start = self.instructionPos();
                 try self.compileExpression(&s.capture);
-                var prong_jumps = try self.alloc.alloc(usize, s.prongs.len);
-                var inferred_else_jump: ?usize = null;
+                var prong_jumps = try self.alloc.alloc(JumpPatch, s.prongs.len);
+                var inferred_else_jump: ?JumpPatch = null;
                 defer self.alloc.free(prong_jumps);
                 // compile expressions and jumps
                 var has_else = false;
@@ -803,23 +797,20 @@ pub const Compiler = struct {
                     } else {
                         has_else = true;
                     }
-                    try self.writeOp(.prong, prong_stmt.token);
-                    const prong_jump = try self.writeInt(C.JUMP, PRONG_HOLDER, prong_stmt.token);
+                    prong_jumps[i] = try self.emitJump(.prong, prong_stmt.token);
                     _ = try self.writeInt(u8, @as(u8, @intCast(if (prong.values) |p| p.len else 0)), prong_stmt.token);
-                    prong_jumps[i] = prong_jump;
                 }
                 // add an empty else if none found
                 if (!has_else) {
-                    try self.writeOp(.prong, token);
-                    const prong_jump = try self.writeInt(C.JUMP, PRONG_HOLDER, token);
+                    const prong_jp = try self.emitJump(.prong, token);
                     _ = try self.writeInt(u8, 0, token);
-                    inferred_else_jump = prong_jump;
+                    inferred_else_jump = prong_jp;
                 }
 
                 // replace jumps and compile body
                 for (s.prongs, 0..) |prong_stmt, i| {
                     const prong = prong_stmt.type.switch_prong;
-                    try self.replaceValue(prong_jumps[i], C.JUMP, self.instructionPos());
+                    try self.patchJump(prong_jumps[i]);
                     try self.enterScope(.local);
                     try self.compileBlock(prong.body);
                     try self.writeOp(.jump, prong_stmt.token);
@@ -827,8 +818,8 @@ pub const Compiler = struct {
                     try self.exitScope();
                 }
 
-                if (inferred_else_jump) |jump| {
-                    try self.replaceValue(jump, C.JUMP, self.instructionPos());
+                if (inferred_else_jump) |jp| {
+                    try self.patchJump(jp);
                     try self.enterScope(.local);
                     try self.compileBlock(&[_]Statement{});
                     try self.writeOp(.jump, token);
@@ -857,15 +848,14 @@ pub const Compiler = struct {
 
                 const start = self.instructionPos();
                 try self.compileExpression(&w.condition);
-                try self.writeOp(.jump_if_false, token);
-                const temp_start = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
+                const exitJp = try self.emitJump(.jump_if_false, token);
 
                 try self.compileBlock(w.body);
                 try self.writeOp(.jump, token);
                 _ = try self.writeInt(C.JUMP, start, token);
 
                 const end = self.instructionPos();
-                try self.replaceValue(temp_start, C.JUMP, end);
+                try self.patchJumpTo(exitJp, end);
 
                 try replaceJumps(self.chunk.instructions.items[start..], BREAK_HOLDER, end);
                 try replaceJumps(self.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
@@ -877,8 +867,7 @@ pub const Compiler = struct {
                 const start = self.instructionPos();
 
                 try self.writeOp(.iter_next, token);
-                try self.writeOp(.jump_if_false, token);
-                const jump_end = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
+                const exitJp = try self.emitJump(.jump_if_false, token);
 
                 try self.enterScope(.local);
                 const capture = try self.scope.define(self.arena.allocator(), f.capture, false);
@@ -890,7 +879,7 @@ pub const Compiler = struct {
                 _ = try self.writeInt(C.JUMP, start, token);
 
                 const end = self.instructionPos();
-                try self.replaceValue(jump_end, C.JUMP, end);
+                try self.patchJumpTo(exitJp, end);
                 try replaceJumps(self.chunk.instructions.items[start..], BREAK_HOLDER, end);
                 try replaceJumps(self.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
 
@@ -1066,17 +1055,14 @@ pub const Compiler = struct {
                     }
                 }
 
-                var backup_pos: usize = 0;
+                var backup_jp: ?JumpPatch = null;
                 if (f.is_backup) {
-                    try self.writeOp(.backup, token);
-                    backup_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
+                    backup_jp = try self.emitJump(.backup, token);
                     _ = try self.writeInt(u8, 1, token); // 1 = fork backup
                 }
                 try self.writeOp(.fork, token);
                 const end_pos = self.instructionPos();
-                if (f.is_backup) {
-                    try self.replaceValue(backup_pos, C.JUMP, end_pos);
-                }
+                if (backup_jp) |jp| try self.patchJumpTo(jp, end_pos);
             },
             .choice => |c| {
                 for (c.tags) |tag| {
@@ -1117,16 +1103,14 @@ pub const Compiler = struct {
                 _ = try self.writeInt(C.CONSTANT, index, token);
                 _ = try self.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
 
-                try self.writeOp(.choice, token);
-                const start_pos = try self.writeInt(C.JUMP, CHOICE_HOLDER, token);
+                const choiceJp = try self.emitJump(.choice, token);
                 _ = try self.writeInt(u8, if (c.is_unique) 1 else 0, token);
 
                 _ = try self.writeInt(C.CONSTANT, anchor_idx, token);
                 _ = try self.writeInt(u8, @as(u8, @intCast(c.tags.len)), token);
 
-                try self.writeOp(.jump, token);
-                const jump_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
-                try self.replaceValue(start_pos, C.JUMP, self.instructionPos());
+                const endJp = try self.emitJump(.jump, token);
+                try self.patchJump(choiceJp);
 
                 try self.enterScope(.local);
 
@@ -1134,7 +1118,7 @@ pub const Compiler = struct {
                 try self.compileBlock(c.body);
                 try self.writeOp(.end, token);
                 try self.exitScope();
-                try self.replaceValue(jump_pos, C.JUMP, self.instructionPos());
+                try self.patchJump(endJp);
             },
             .bough => |b| {
                 const full_name = try self.getQualifiedName(b.name);
@@ -1143,8 +1127,7 @@ pub const Compiler = struct {
                 try self.pushPathScope(b.name);
                 defer self.popPathScope();
 
-                try self.writeOp(.jump, token);
-                const start_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
+                const skipJp = try self.emitJump(.jump, token);
 
                 try self.enterScope(.local);
                 errdefer self.exitScope() catch {};
@@ -1164,7 +1147,7 @@ pub const Compiler = struct {
                 try self.exitScope();
 
                 const end = self.instructionPos();
-                try self.replaceValue(start_pos, C.JUMP, end);
+                try self.patchJumpTo(skipJp, end);
             },
             .dialogue => |d| {
                 for (d.tags) |tag| {
@@ -1210,12 +1193,11 @@ pub const Compiler = struct {
                     return self.fail("Could not find path '{s}'", token, .{joined}, .{ .end = d.end_token, .suggestion = hint });
                 };
                 if (d.is_backup) {
-                    try self.writeOp(.backup, token);
-                    const backup_pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
+                    const backupJp = try self.emitJump(.backup, token);
                     _ = try self.writeInt(u8, 0, token); // 0 = divert backup
                     try self.writeOp(.divert, token);
                     _ = try self.writeInt(C.CONSTANT, anchor_idx, token);
-                    try self.replaceValue(backup_pos, C.JUMP, self.instructionPos());
+                    try self.patchJump(backupJp);
                 } else {
                     try self.writeOp(.divert, token);
                     _ = try self.writeInt(C.CONSTANT, anchor_idx, token);
@@ -1869,17 +1851,14 @@ pub const Compiler = struct {
             },
             .@"if" => |i| {
                 try self.compileExpression(i.condition);
-                try self.writeOp(.jump_if_false, token);
-                // temp garbage value
-                const pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
+                const falseJp = try self.emitJump(.jump_if_false, token);
                 try self.compileExpression(i.then_value);
 
-                try self.writeOp(.jump, token);
-                const nextPos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
-                try self.replaceValue(pos, C.JUMP, self.instructionPos());
+                const endJp = try self.emitJump(.jump, token);
+                try self.patchJump(falseJp);
 
                 try self.compileExpression(i.else_value);
-                try self.replaceValue(nextPos, C.JUMP, self.instructionPos());
+                try self.patchJump(endJp);
             },
             .instance => |ins| {
                 const const_idx = self.constants_map.get(ins.name) orelse
@@ -2069,6 +2048,22 @@ pub const Compiler = struct {
         std.mem.writeInt(T, buf[0..], value, .little);
         try self.writeValue(&buf, token);
         return start;
+    }
+
+    const JumpPatch = struct { pos: usize };
+
+    fn emitJump(self: *Compiler, op: OpCode, token: Token) !JumpPatch {
+        try self.writeOp(op, token);
+        const pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
+        return .{ .pos = pos };
+    }
+
+    fn patchJump(self: *Compiler, jp: JumpPatch) !void {
+        try self.replaceValue(jp.pos, C.JUMP, self.instructionPos());
+    }
+
+    fn patchJumpTo(self: *Compiler, jp: JumpPatch, target: C.JUMP) !void {
+        try self.replaceValue(jp.pos, C.JUMP, target);
     }
 
     pub fn replaceValue(self: *Compiler, pos: usize, comptime T: type, value: T) !void {
