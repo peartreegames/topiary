@@ -1,6 +1,6 @@
 const std = @import("std");
 
-var rnd: ?std.Random.DefaultPrng = null;
+threadlocal var rnd: ?std.Random.DefaultPrng = null;
 pub const UUID = struct {
     pub const ID = [Size]u8;
     pub const Empty: ID = [_]u8{ '0', '0', '0', '0', '0', '0', '0', '0', '-', '0', '0', '0', '0', '0', '0', '0', '0' };

@@ -109,6 +109,40 @@ pub fn build(b: *std.Build) void {
 
     const bench_step = b.step("bench", "Generate fixture and run topi compile --time on it");
     bench_step.dependOn(&run_bench.step);
+
+    // --- Many-modules benchmark ---
+    // `zig build bench-gen-many` writes N independent top-level .topi files
+    // into bench/fixtures_many/. `zig build bench-many` runs that then
+    // compiles every file sequentially and in parallel, reporting wall time.
+    const bench_gen_many_exe = b.addExecutable(.{
+        .name = "bench-gen-many",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/gen_many.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    const run_bench_gen_many = b.addRunArtifact(bench_gen_many_exe);
+    run_bench_gen_many.addArg("bench/fixtures_many/");
+
+    const bench_gen_many_step = b.step("bench-gen-many", "Generate many-modules benchmark fixture");
+    bench_gen_many_step.dependOn(&run_bench_gen_many.step);
+
+    const bench_many_exe = b.addExecutable(.{
+        .name = "bench-many",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/bench_many.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    bench_many_exe.root_module.addImport("topi", topi);
+    const run_bench_many = b.addRunArtifact(bench_many_exe);
+    run_bench_many.step.dependOn(&run_bench_gen_many.step);
+    run_bench_many.addArg("bench/fixtures_many/");
+
+    const bench_many_step = b.step("bench-many", "Generate many-modules fixture and run parallel compile benchmark");
+    bench_many_step.dependOn(&run_bench_many.step);
 }
 
 fn getVersion(b: *std.Build) ![]const u8 {

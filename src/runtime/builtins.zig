@@ -31,7 +31,7 @@ pub const VariationState = union(enum) {
 
 pub const VariationMap = std.AutoHashMapUnmanaged(u32, VariationState);
 
-var r: ?std.Random.DefaultPrng = null;
+threadlocal var r: ?std.Random.DefaultPrng = null;
 
 /// Capture the current RNG state for snapshotting. Returns null if the RNG
 /// has not yet been lazily initialised.
