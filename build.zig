@@ -70,6 +70,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("test/index.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
         }),
     });
 
