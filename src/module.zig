@@ -362,7 +362,10 @@ pub const Module = struct {
     pub fn deinit(self: *Module) void {
         self.errors.deinit();
         self.includes.deinit(self.allocator);
-        if (self.dir_path.len > 0) self.allocator.free(self.dir_path);
+        if (self.dir_path.len > 0) {
+            self.dir.close(self.io);
+            self.allocator.free(self.dir_path);
+        }
         var arena = self.arena;
         arena.deinit();
         self.allocator.destroy(self);
