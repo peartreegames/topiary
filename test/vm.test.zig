@@ -1218,6 +1218,40 @@ test "Runtime Bough Nested Starts with Backups" {
     try test_runner.expectOutput(expected);
 }
 
+test "Runtime Top-level Vars Initialize Before Targeted Bough" {
+    // Regression: starting via an explicit bough path must not skip
+    // top-level initialization. Previously the first bough's skip-jump
+    // was hijacked by the queued divert, leaving vars declared after it
+    // as .void.
+    const input =
+        \\ === FIRST {
+        \\    :Speaker: "first"
+        \\ }
+        \\ var flag = true
+        \\ var greeting = "hello"
+        \\ === TARGET {
+        \\    if flag :Speaker: "{greeting}"
+        \\ }
+    ;
+    const expected = &[_][]const u8{"hello"};
+
+    var mod = try Module.initEmpty(allocator, std.testing.io);
+    defer mod.deinit();
+    var vm = try initTestVm(input, mod, false);
+    defer vm.deinit();
+    const test_runner: *TestRunner = @fieldParentPtr("runner", vm.runner);
+    defer test_runner.deinit();
+    defer vm.bytecode.free(testing.allocator);
+    try vm.start("TARGET");
+    while (vm.can_continue) {
+        vm.run() catch |err| {
+            printErr(&vm);
+            return err;
+        };
+    }
+    try test_runner.expectOutput(expected);
+}
+
 test "Runtime Bough Loops" {
     const test_cases = .{
         .{

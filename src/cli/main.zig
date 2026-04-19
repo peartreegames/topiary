@@ -511,11 +511,16 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
         defer vm.deinit();
         try vm.start(args.bough);
         while (vm.can_continue) {
-            vm.run() catch {
+            vm.run() catch |e| {
                 var buffer: [128]u8 = undefined;
                 var writer = std.Io.File.stdout().writer(io, &buffer);
                 const stdout = &writer.interface;
-                vm.err.print(stdout);
+                if (vm.err.msg == null) {
+                    stdout.print("Error: {s}\n", .{@errorName(e)}) catch {};
+                    stdout.flush() catch {};
+                } else {
+                    vm.err.print(stdout);
+                }
                 return;
             };
         }

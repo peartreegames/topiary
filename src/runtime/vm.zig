@@ -488,10 +488,11 @@ pub const Vm = struct {
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {
         self.err.msg = try std.fmt.allocPrint(self.alloc, msg, args);
 
-        var i: usize = self.frames.count - 1;
-        while (i > 0) : (i -= 1) {
+        var i: usize = self.frames.count;
+        while (i > 0) {
+            i -= 1;
             const frame = &self.frames.items[i];
-            const ip = frame.ip;
+            const ip = if (i == self.frames.count - 1) self.ip else frame.ip;
             const func_obj = frame.func;
 
             var trace_entry = RuntimeErr.Trace{
@@ -656,7 +657,11 @@ pub const Vm = struct {
                 .jump_if_false => {
                     const dest = self.takeInt(C.JUMP);
                     var condition = try self.pop();
-                    if (!try condition.isTruthy()) {
+                    const truthy = condition.isTruthy() catch return self.fail(
+                        "Cannot evaluate condition of type '{s}'",
+                        .{condition.typeName()},
+                    );
+                    if (!truthy) {
                         self.currentFrame().ip = dest;
                     }
                 },

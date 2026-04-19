@@ -569,8 +569,18 @@ pub const Compiler = struct {
         }
         self.emitted_files.clearRetainingCapacity();
 
+        // Two emission passes so non-bough top-level code (var/class/enum/
+        // function init, includes) is always emitted before any bough. A
+        // bough's skip-over-body jump is the first `.jump` the VM sees, and
+        // `Vm.start` uses that to land a `--bough` divert — anything emitted
+        // after it would be skipped on targeted runs.
         for (tree.root) |*stmt| {
-            try self.compileStatement(stmt);
+            try self.emitNonBough(stmt);
+        }
+        self.emitted_files.clearRetainingCapacity();
+
+        for (tree.root) |*stmt| {
+            try self.emitBough(stmt);
         }
 
         // Add one final end at the end of file to grab the initial jump_request
@@ -639,6 +649,34 @@ pub const Compiler = struct {
         try self.emitted_files.put(self.arena.allocator(), resolved, {});
         const tree = file.tree orelse return Error.NotInitialized;
         return .{ .file = file, .tree = tree.root };
+    }
+
+    fn emitNonBough(self: *Compiler, stmt: *const Statement) Error!void {
+        switch (stmt.type) {
+            .bough => {},
+            .include => |i| {
+                const result = try self.resolveInclude(i.path, stmt.token, i.path_token) orelse return;
+                const tmp = self.current_file;
+                defer self.current_file = tmp;
+                self.current_file = result.file;
+                for (result.tree) |*s| try self.emitNonBough(s);
+            },
+            else => try self.compileStatement(stmt),
+        }
+    }
+
+    fn emitBough(self: *Compiler, stmt: *const Statement) Error!void {
+        switch (stmt.type) {
+            .include => |i| {
+                const result = try self.resolveInclude(i.path, stmt.token, i.path_token) orelse return;
+                const tmp = self.current_file;
+                defer self.current_file = tmp;
+                self.current_file = result.file;
+                for (result.tree) |*s| try self.emitBough(s);
+            },
+            .bough => try self.compileStatement(stmt),
+            else => {},
+        }
     }
 
     fn prepass(self: *Compiler, stmt: *const Statement) Error!void {
