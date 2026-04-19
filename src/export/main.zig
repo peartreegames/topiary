@@ -32,26 +32,10 @@ pub export fn calculateCompileSize(path_ptr: [*:0]const u8, log_ptr: *const anyo
         .allocator = alloc,
     };
 
-    // Compile-then-discard: arena batches all transient allocations
-    // (module, parser, compiler bookkeeping, Value.Obj constants, bytecode
-    // arrays). Only the serialized bytes escape via the writer.
-    var arena = std.heap.ArenaAllocator.init(alloc);
-    defer arena.deinit();
-    const aa = arena.allocator();
-
-    const mod = createModule(std.mem.sliceTo(path_ptr, 0), logger, aa);
-    if (mod == null) return 0;
-
-    var bytecode = createBytecode(mod.?, logger, aa);
-    if (bytecode == null) return 0;
-
     var buf: [1024]u8 = undefined;
     var counter = std.Io.Writer.Discarding.init(&buf);
-    const count = bytecode.?.serialize(aa, &counter.writer) catch |err| {
-        logger.log("Could not calculate size {s}", .{@errorName(err)}, .err);
-        return 0;
-    };
-    logger.log("Calculated Compile size {d}", .{count}, .debug);
+    const count = writeBytecode(std.mem.sliceTo(path_ptr, 0), &counter.writer, logger);
+    if (count > 0) logger.log("Calculated Compile size {d}", .{count}, .debug);
     return count;
 }
 
@@ -120,18 +104,18 @@ fn createBytecode(mod: *Module, logger: ExportLogger, allocator: std.mem.Allocat
     };
 }
 
+// Compile-then-discard: arena batches all transient allocations
+// (module, parser, compiler bookkeeping, Value.Obj constants, bytecode
+// arrays). Only the serialized bytes escape via the writer.
 fn writeBytecode(path: []const u8, writer: *std.Io.Writer, logger: ExportLogger) usize {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const mod = createModule(path, logger, aa);
-    if (mod == null) return 0;
+    const mod = createModule(path, logger, aa) orelse return 0;
+    var bytecode = createBytecode(mod, logger, aa) orelse return 0;
 
-    var bytecode = createBytecode(mod.?, logger, aa);
-    if (bytecode == null) return 0;
-
-    return bytecode.?.serialize(aa, writer) catch |err| {
+    return bytecode.serialize(aa, writer) catch |err| {
         logger.log("Could not serialize bytecode: {s}", .{@errorName(err)}, .err);
         return 0;
     };
