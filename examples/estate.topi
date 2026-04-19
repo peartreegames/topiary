@@ -1,0 +1,727 @@
+// The Estate
+// An example showcasing NPC knowledge propagation in Topiary.
+// Three siblings. One kitchen. The truth between them.
+// --- Constants ---
+const MOTHER = "Evelyn"
+// --- Classes ---
+
+class Sibling {
+    name = "Unknown",
+    trust = 50,
+    talked = 0,
+    knows = Set{},
+
+
+    fn warm |amount| {
+        self.trust += amount
+        if self.trust > 100 self.trust = 100
+    }
+
+    fn cool |amount| {
+        self.trust -= amount
+        if self.trust < 0 self.trust = 0
+    }
+}
+
+// --- Characters ---
+// Each sibling carries a `knows` set -- things they already know.
+// Sharing something they DON'T know triggers reactions and sometimes propagation.
+var nora = new Sibling{ name = "Nora",  trust = 40 }
+var felix = new Sibling{ name = "Felix",  trust = 40 }
+var dara = new Sibling{ name = "Dara",  trust = 60 }
+// --- Player Knowledge ---
+// Built up through conversation -- the player decides what to learn and what to share.
+var known = Set{}
+// Tracks one-time propagation events so they don't repeat
+var propagated = Set{}
+// ============================================================
+// ARRIVAL
+// ============================================================
+
+=== START {
+    nora.knows.add("debt")
+    nora.knows.add("sale_offer")
+    nora.knows.add("argument")
+    felix.knows.add("felix_loan")
+    felix.knows.add("art_fund")
+    felix.knows.add("felix_return")
+    felix.knows.add("argument")
+    dara.knows.add("art_fund")
+    dara.knows.add("will_draft")
+    dara.knows.add("letter")
+    dara.knows.add("garden_clue")
+    :: "The kitchen smells of cold coffee and dust."
+    :: "{MOTHER}'s house. Empty three months now."
+    :: ""
+    :: "You set your briefcase on the table."
+    :: "Three people wait in separate corners of the room."
+    :: ""
+    :Lawyer: "Thank you all for coming. I know this isn't easy."
+    :Lawyer: "As your mother's estate lawyer, I need to sort a few things"
+    :Lawyer: "before we can proceed with probate."
+    :: ""
+    :: "Nora leans against the counter, arms folded. The eldest."
+    :: "She was here most. She carries that like a weight."
+    :: ""
+    :: "Felix sits at the far end of the table, coat still on."
+    :: "He flew in this morning. Twelve years away."
+    :: ""
+    :: "Dara perches on the windowsill, watching the garden."
+    :: "The youngest. Still lives in town."
+    :: ""
+    :Nora: "Let's just get this done."
+    :Felix: "Agreed."
+    :Dara: "..."
+    => ROOM
+}
+
+// ============================================================
+// THE KITCHEN -- hub
+// ============================================================
+
+=== ROOM {
+    if ROOM > 0 {
+        :: "The three of them wait. The clock ticks."
+    }
+    if known.count() >= 8 {
+        :: "You've heard enough. It's time to bring this together."
+        => TOGETHER
+    }
+    fork {
+        ~ "Approach Nora" {
+            => NORA
+        }
+        ~ "Approach Felix" {
+            => FELIX
+        }
+        ~ "Approach Dara" {
+            => DARA
+        }
+        if known.count() >= 5 {
+            ~ "Bring everyone to the table" {
+                => TOGETHER
+            }
+        }
+    }
+}
+
+// ============================================================
+// NORA -- practical, defensive, carrying the weight
+// ============================================================
+
+=== NORA {
+    nora.talked += 1
+    if nora.talked == 1 {
+        :Nora: "You have questions. Fine. Ask."
+    } else if nora.trust >= 50 {
+        :Nora: "What else do you need?"
+    } else {
+        :Nora: "More questions."
+    }
+    fork NORA_TOPICS {
+        if !known.has("debt") {
+            ~ "Ask about {MOTHER}'s finances" {
+                :Lawyer: "Can you tell me about {MOTHER}'s financial situation?"
+                :Nora: "She was careful. Most of her life."
+                :Nora: "But the last few years... bills piling up."
+                :Nora: "I found notices in the drawer. Red letters."
+                :Nora: "She owed more than this house is worth."
+                known.add("debt")
+                nora.warm(10)
+                => NORA_TOPICS
+            }
+        }
+        if !known.has("sale_offer") {
+            ~ "Ask about the house" {
+                :Lawyer: "Has anything been done with the property?"
+                :: "Nora hesitates."
+                :Nora: "A developer contacted me. Last month."
+                :Nora: "Offered enough to clear the debts and then some."
+                :Nora: "I haven't said yes."
+                :: "She looks at the kitchen window."
+                :Nora: "But I haven't said no either."
+                known.add("sale_offer")
+                => NORA_TOPICS
+            }
+        }
+        if !known.has("argument_nora") {
+            ~ "Ask about Felix" {
+                :Lawyer: "You and Felix haven't spoken in some time."
+                :Nora: "Twelve years."
+                :Nora: "He wanted Mum to sell the house. Move to a flat."
+                :Nora: "I said over my dead body. Things were said."
+                :Nora: "He left. That was that."
+                known.add("argument_nora")
+                nora.cool(5)
+                => NORA_TOPICS
+            }
+        }
+        if known.has("art_fund") and !nora.knows.has("art_fund") {
+            ~ "Mention {MOTHER} funding Dara's studio" {
+                :Lawyer: "Were you aware {MOTHER} was funding Dara's art studio?"
+                :: "Nora goes rigid."
+                :Nora: "She what?"
+                :Nora: "I spent three years managing her money and she was secretly--"
+                :Nora: "Dara! How much did she give you?"
+                :Dara: "I didn't ask for it. She insisted."
+                :Nora: "While I was scraping together her mortgage payments?"
+                :Dara: "I didn't know it was that bad. I'm sorry."
+                nora.knows.add("art_fund")
+                dara.knows.add("debt")
+                nora.cool(15)
+                dara.cool(10)
+                propagated.add("nora_learned_art_fund")
+                => NORA_TOPICS
+            }
+        }
+        if known.has("letter") and !nora.knows.has("letter") {
+            ~ "Tell Nora about the letter" {
+                :Lawyer: "Dara found an unsent letter from {MOTHER}."
+                :: "Nora goes very still."
+                :Nora: "What does it say?"
+                :Lawyer: "She writes about wanting to make things right."
+                :Nora: "... Let me see it."
+                :: "Nora reads it twice. Her hand trembles."
+                nora.knows.add("letter")
+                nora.warm(10)
+                if !felix.knows.has("letter") {
+                    :Nora: "Felix. Come here."
+                    :Felix: "What?"
+                    :Nora: "A letter. From Mum. Read it."
+                    :: "Felix reads in silence. A muscle works in his jaw."
+                    :Felix: "She forgave us."
+                    :Nora: "She forgave everyone but herself."
+                    felix.knows.add("letter")
+                    felix.warm(15)
+                    propagated.add("letter_shared_via_nora")
+                }
+                => NORA_TOPICS
+            }
+        }
+        if known.has("felix_return") and !nora.knows.has("felix_return") {
+            ~ "Tell Nora that Felix planned to move back" {
+                :Lawyer: "For what it's worth -- Felix was planning to come home."
+                :: "Nora blinks."
+                :Nora: "He was?"
+                :Nora: "He never said anything."
+                :Lawyer: "He wanted to surprise {MOTHER}."
+                :: "Nora looks across the kitchen at Felix."
+                :Nora: "That idiot."
+                :: "But there's no edge in it."
+                nora.knows.add("felix_return")
+                nora.warm(20)
+                => NORA_TOPICS
+            }
+        }
+        if known.has("will_draft") and !nora.knows.has("will_draft") {
+            ~ "Tell Nora about the handwritten will" {
+                :Lawyer: "There may be a more recent will. Handwritten, dated October."
+                :Nora: "What? Where?"
+                :Lawyer: "Dara found a draft. It divides the estate equally."
+                :Nora: "Equally."
+                :Nora: "The 2019 will leaves the house to me."
+                :Lawyer: "Which is why we need to find the final signed version."
+                :: "Nora stares at the table for a long time."
+                nora.knows.add("will_draft")
+                nora.cool(5)
+                => NORA_TOPICS
+            }
+        }
+        if known.has("felix_loan") and !nora.knows.has("felix_loan") {
+            ~ "Mention Felix's loan" {
+                :Lawyer: "I found a record of a loan {MOTHER} made to Felix."
+                :Nora: "How much?"
+                :Lawyer: "Thirty thousand. It was never repaid."
+                :: "Nora's knuckles go white on the counter."
+                :Nora: "Thirty thousand pounds."
+                :Nora: "She couldn't afford to heat this house last winter."
+                nora.knows.add("felix_loan")
+                nora.cool(10)
+                :Nora: "Felix. Thirty thousand pounds?"
+                :Felix: "Nora--"
+                :Nora: "She was rationing tea bags!"
+                :Felix: "I know. I'm going to pay it back."
+                :Nora: "With what? Twelve years of silence?"
+                felix.cool(10)
+                propagated.add("loan_confrontation")
+                => NORA_TOPICS
+            }
+        }
+        if nora.knows.has("art_fund") and known.has("debt") and !propagated.has("nora_reflects_fund") {
+            ~ "Ask how she's processing it all" {
+                :Lawyer: "That was a lot to take in."
+                :Nora: "The studio money. The debts."
+                :Nora: "I was so busy managing her accounts I never saw what she was actually doing."
+                :Nora: "She was giving everything away. To all of us. In her own way."
+                :: "Nora wipes her eyes quickly."
+                :Nora: "Don't tell the others I said that."
+                nora.warm(10)
+                propagated.add("nora_reflects_fund")
+                => NORA_TOPICS
+            }
+        }
+        ~ "Step away" {
+            => ROOM
+        }
+    }
+}
+
+// ============================================================
+// FELIX -- quiet, guilty, formal
+// ============================================================
+
+=== FELIX {
+    felix.talked += 1
+    if felix.talked == 1 {
+        :Felix: "I didn't expect to be back in this kitchen."
+        :: "He looks at the chair where he used to sit. Doesn't take it."
+        :Felix: "What do you need to know?"
+    } else if propagated.has("loan_confrontation") and !propagated.has("felix_post_loan") {
+        :: "Felix stares at his hands."
+        propagated.add("felix_post_loan")
+    } else if felix.trust >= 50 {
+        :Felix: "Go ahead."
+    } else {
+        :: "Felix doesn't look up from the table."
+    }
+    fork FELIX_TOPICS {
+        if !known.has("felix_loan") {
+            ~ "Ask about his relationship with {MOTHER}" {
+                :Felix: "She was a good mother. Better than I deserved."
+                :Felix: "She lent me money once. Thirty thousand, to start my business."
+                :Felix: "I was going to pay it back."
+                :: "He turns his wedding ring."
+                :Felix: "I never did."
+                known.add("felix_loan")
+                felix.cool(5)
+                => FELIX_TOPICS
+            }
+        }
+        if !known.has("argument_felix") {
+            ~ "Ask why he left" {
+                :Lawyer: "You've been away a long time."
+                :Felix: "Twelve years."
+                :Felix: "Nora and I disagreed about Mum's care."
+                :Felix: "I thought she needed somewhere smaller. Professional help."
+                :Felix: "Nora heard 'sell the house.' That wasn't what I meant."
+                :Felix: "But try telling her that."
+                known.add("argument_felix")
+                felix.warm(5)
+                if known.has("argument_nora") {
+                    :: "Two versions of the same night. The truth lives between them."
+                }
+                => FELIX_TOPICS
+            }
+        }
+        if !known.has("art_fund") {
+            ~ "Ask about Dara" {
+                :Felix: "She's the best of us, honestly."
+                :Felix: "Mum adored her. Funded her art studio on the quiet."
+                :Felix: "I overheard them on the phone once."
+                :Felix: "Mum insisted. Dara kept saying she'd pay it back."
+                known.add("art_fund")
+                => FELIX_TOPICS
+            }
+        }
+        if !known.has("felix_return") and felix.trust >= 40 and felix.talked >= 2 {
+            ~ "Ask about his plans" {
+                :Lawyer: "What happens after today? Back north?"
+                :: "Felix is quiet for a long time."
+                :Felix: "Actually... I've been looking at a transfer."
+                :Felix: "My firm has an office here. I could come back."
+                :Felix: "I was going to tell Mum. Surprise her."
+                :: "He straightens a crease in the tablecloth."
+                :Felix: "Too late for that."
+                known.add("felix_return")
+                felix.warm(10)
+                => FELIX_TOPICS
+            }
+        }
+        if known.has("debt") and !felix.knows.has("debt") {
+            ~ "Tell Felix about the debts" {
+                :Lawyer: "{MOTHER} had significant debts."
+                :Felix: "How significant?"
+                :Lawyer: "Enough that the estate may not cover them."
+                :: "Felix puts his head in his hands."
+                :Felix: "The loan. If I'd paid it back..."
+                :Felix: "God."
+                felix.knows.add("debt")
+                felix.cool(10)
+                if known.has("felix_loan") and !propagated.has("felix_public_guilt") {
+                    :: "Felix raises his voice. Not shouting. Deliberate."
+                    :Felix: "I owe this family money."
+                    :Felix: "Mum lent me thirty thousand. I never repaid a penny."
+                    :: "The kitchen goes still."
+                    if !nora.knows.has("felix_loan") {
+                        :Nora: "Thirty thousand?"
+                        :: "Her voice is flat. Dangerous."
+                        nora.knows.add("felix_loan")
+                        nora.cool(10)
+                    }
+                    if !dara.knows.has("felix_loan") {
+                        :: "Dara stares at him from the windowsill."
+                        dara.knows.add("felix_loan")
+                    }
+                    propagated.add("felix_public_guilt")
+                }
+                => FELIX_TOPICS
+            }
+        }
+        if known.has("sale_offer") and !felix.knows.has("sale_offer") {
+            ~ "Tell Felix about the sale offer" {
+                :Lawyer: "Nora has been approached about selling the house."
+                :Felix: "Selling?"
+                :: "Felix stands. His chair scrapes the tile."
+                :Felix: "You're selling Mum's house?"
+                :Nora: "I haven't decided anything."
+                :Felix: "It's not just yours to sell!"
+                :Nora: "Where were you for twelve years, Felix?"
+                :Nora: "I paid the council tax. The insurance. The repairs. Alone."
+                felix.knows.add("sale_offer")
+                felix.cool(10)
+                nora.cool(5)
+                propagated.add("sale_fight")
+                if !dara.knows.has("sale_offer") {
+                    :: "From the windowsill, Dara's voice. Small."
+                    :Dara: "You can't sell it. Mum's roses..."
+                    dara.knows.add("sale_offer")
+                    dara.cool(10)
+                }
+                => FELIX_TOPICS
+            }
+        }
+        if known.has("letter") and !felix.knows.has("letter") {
+            ~ "Tell Felix about the letter" {
+                :Lawyer: "Dara found an unsent letter from your mother."
+                :Felix: "What kind of letter?"
+                :Lawyer: "Addressed to all three of you. Written the week she died."
+                :: "You hand it over. Felix reads slowly."
+                :Felix: "She says she understands why I left."
+                :Felix: "She says she wished she'd said it to my face."
+                :: "He folds the letter along its creases. Careful. Precise."
+                felix.knows.add("letter")
+                felix.warm(20)
+                => FELIX_TOPICS
+            }
+        }
+        if known.has("will_draft") and !felix.knows.has("will_draft") {
+            ~ "Tell Felix about the newer will" {
+                :Lawyer: "There may be a more recent will. Three equal shares."
+                :Felix: "Equal? Not just Nora?"
+                :Lawyer: "Handwritten, dated October. We need the signed version."
+                :Felix: "Mum always did things her own way."
+                felix.knows.add("will_draft")
+                felix.warm(5)
+                => FELIX_TOPICS
+            }
+        }
+        if propagated.has("felix_public_guilt") and felix.trust >= 45 and !propagated.has("felix_resolve") {
+            ~ "Ask how he's holding up" {
+                :Lawyer: "That took courage. Saying it out loud."
+                :Felix: "It's not courage. It's the bare minimum."
+                :Felix: "I'm going to repay it. I've got savings."
+                :Felix: "It won't fix anything. But it's owed."
+                felix.warm(10)
+                propagated.add("felix_resolve")
+                => FELIX_TOPICS
+            }
+        }
+        ~ "Step away" {
+            => ROOM
+        }
+    }
+}
+
+// ============================================================
+// DARA -- emotional, observant, the quiet one who sees everything
+// ============================================================
+
+=== DARA {
+    dara.talked += 1
+    if dara.talked == 1 {
+        :Dara: "Sorry. I keep looking at her roses."
+        :Dara: "They're still blooming. Isn't that something."
+    } else if propagated.has("nora_learned_art_fund") and !propagated.has("dara_post_art_fund") {
+        :Dara: "She hates me now. Nora."
+        :Lawyer: "She doesn't hate you."
+        :Dara: "You didn't see her face."
+        propagated.add("dara_post_art_fund")
+    } else if dara.trust >= 50 {
+        :Dara: "Hi again."
+    } else {
+        :: "Dara hugs her knees on the windowsill."
+    }
+    fork DARA_TOPICS {
+        if !known.has("letter") {
+            ~ "Ask about {MOTHER}'s papers" {
+                :Lawyer: "I understand you found some things in {MOTHER}'s belongings?"
+                :Dara: "A letter. In her bedside drawer."
+                :Dara: "Written the week before she died. Never posted."
+                :Dara: "She says she's sorry. That she tried to be fair to all of us."
+                :Dara: "And something about the garden."
+                :Lawyer: "The garden?"
+                :Dara: "'Look where the roses start.' That's what she wrote."
+                known.add("letter")
+                known.add("garden_clue")
+                dara.warm(10)
+                => DARA_TOPICS
+            }
+        }
+        if !known.has("will_draft") {
+            ~ "Ask about the will" {
+                :Dara: "The will you have isn't the only one."
+                :Dara: "I found a draft in her desk. Handwritten. Dated October."
+                :Lawyer: "What does it say?"
+                :Dara: "Three equal shares. The house, everything. Split evenly."
+                :Dara: "Not like the old one that gives it all to Nora."
+                known.add("will_draft")
+                => DARA_TOPICS
+            }
+        }
+        if !known.has("art_fund") {
+            ~ "Ask about her studio" {
+                :Dara: "Mum funded it. My art studio, in the garden shed."
+                :Dara: "A few hundred each month. She said my paintings were payment enough."
+                :Dara: "I should have said no. I know that now."
+                known.add("art_fund")
+                dara.warm(5)
+                => DARA_TOPICS
+            }
+        }
+        if known.has("debt") and !dara.knows.has("debt") {
+            ~ "Tell Dara about the debts" {
+                :Lawyer: "{MOTHER} had debts. Significant ones."
+                :Dara: "Debts?"
+                :Dara: "Oh god. The studio money."
+                :Dara: "Was she borrowing to fund me?"
+                :Lawyer: "I can't say for certain."
+                :Dara: "She was going without so I could paint."
+                :: "Dara presses her forehead to the cold window."
+                dara.knows.add("debt")
+                dara.cool(10)
+                => DARA_TOPICS
+            }
+        }
+        if known.has("felix_loan") and !dara.knows.has("felix_loan") {
+            ~ "Tell Dara about Felix's loan" {
+                :Lawyer: "Your mother lent Felix thirty thousand pounds. It wasn't repaid."
+                :Dara: "Thirty -- while she was sending me a few hundred at a time?"
+                :Dara: "Felix."
+                :: "Her voice carries across the kitchen."
+                :Felix: "Dara, I--"
+                :Dara: "She was eating tinned soup!"
+                :Felix: "I didn't know that."
+                :Dara: "You didn't ask."
+                :: "A long, terrible silence."
+                dara.knows.add("felix_loan")
+                felix.cool(10)
+                dara.cool(5)
+                propagated.add("dara_confronts_felix")
+                => DARA_TOPICS
+            }
+        }
+        if known.has("sale_offer") and !dara.knows.has("sale_offer") {
+            ~ "Tell Dara about the sale offer" {
+                :Lawyer: "Nora has been approached about selling the house."
+                :: "The colour drains from Dara's face."
+                :Dara: "No."
+                :Dara: "This is home. Mum's garden. My studio."
+                :Dara: "She can't just..."
+                :: "Dara bites down on the rest of it."
+                dara.knows.add("sale_offer")
+                dara.cool(15)
+                => DARA_TOPICS
+            }
+        }
+        if known.has("felix_return") and !dara.knows.has("felix_return") {
+            ~ "Tell Dara that Felix planned to come home" {
+                :Lawyer: "Felix was planning to move back."
+                :: "Something softens in Dara's face."
+                :Dara: "Really? He'd actually come back?"
+                :Lawyer: "He wanted to surprise your mother."
+                :Dara: "Oh, Felix..."
+                :: "She looks across the kitchen at her brother."
+                :: "He doesn't notice. But she sees him."
+                dara.knows.add("felix_return")
+                dara.warm(15)
+                => DARA_TOPICS
+            }
+        }
+        if known.has("argument_nora") and known.has("argument_felix") and !dara.knows.has("both_arguments") {
+            ~ "Tell Dara about the argument" {
+                :Lawyer: "I've heard both sides of why Felix left."
+                :Dara: "I was sixteen. They just screamed at each other and then he was gone."
+                :Lawyer: "Felix wanted professional care for your mother. Nora thought he wanted to sell."
+                :Dara: "So they were both trying to help."
+                :Dara: "And both thought the other wasn't."
+                :Dara: "That's this family all over."
+                dara.knows.add("both_arguments")
+                dara.warm(5)
+                => DARA_TOPICS
+            }
+        }
+        if dara.knows.has("debt") and known.has("art_fund") and !propagated.has("dara_guilt_resolve") {
+            ~ "Check on Dara about the studio" {
+                :Lawyer: "You didn't know about the debts. It's not your fault."
+                :Dara: "I could have paid her back. Even a little."
+                :Dara: "Instead I just... kept painting."
+                :Dara: "She'd say it was worth it. She always said that."
+                :Dara: "Maybe I need to believe her."
+                dara.warm(10)
+                propagated.add("dara_guilt_resolve")
+                => DARA_TOPICS
+            }
+        }
+        ~ "Step away" {
+            => ROOM
+        }
+    }
+}
+
+// ============================================================
+// BRINGING IT TOGETHER
+// ============================================================
+
+=== TOGETHER {
+    :Lawyer: "I think we should all sit down."
+    :: "Slowly, they gather at {MOTHER}'s kitchen table."
+    :: "The table where they ate Sunday dinners. Did homework."
+    :: "Had the argument that broke everything."
+    :: ""
+    if known.has("will_draft") {
+        :Lawyer: "First: there's evidence of a more recent will."
+        :Lawyer: "Handwritten, dated last October. Three equal shares."
+        if !nora.knows.has("will_draft") {
+            :Nora: "Equally? But the 2019 will--"
+            :Lawyer: "Is superseded, if we can find the signed version."
+            nora.knows.add("will_draft")
+        }
+        if !felix.knows.has("will_draft") {
+            :Felix: "All three of us. Equal."
+            felix.knows.add("will_draft")
+        }
+        :: ""
+    }
+    if known.has("debt") {
+        if nora.trust >= 50 {
+            :Nora: "I should have told you both about the debts sooner."
+            :Nora: "I was trying to handle it. Like I always do."
+        } else {
+            :Nora: "Now you see why I considered the offer."
+        }
+    }
+    if known.has("felix_loan") {
+        if felix.trust >= 40 {
+            :Felix: "I'm going to repay the loan. All of it."
+            if nora.trust >= 45 {
+                :Nora: "Felix, you don't have to--"
+                :Felix: "I do. It's owed."
+            }
+        } else {
+            :: "Felix says nothing about the money. The silence says enough."
+        }
+    }
+    :: ""
+    if known.has("garden_clue") {
+        :Lawyer: "There's one more thing. The letter mentions the garden."
+        :Lawyer: "'Where the roses start.'"
+        :Dara: "I'll look."
+        :: "Dara slips out the back door into the grey afternoon."
+        :: ""
+        :: "Rain taps the window. The kitchen clock ticks."
+        :: "For a while, nobody speaks."
+        if nora.trust >= 45 and felix.trust >= 45 {
+            :: "Nora and Felix sit across from each other. Not hostile."
+            :: "Just two people who've run out of arguments."
+            :Felix: "I'm transferring to the local office."
+            :: "Nora looks up."
+            :Nora: "You're actually coming back?"
+            :Felix: "If you'll have me."
+            :: "Nora doesn't answer. But she doesn't look away."
+        } else {
+            :: "Nora and Felix sit on opposite ends of the table."
+            :: "The space between them could seat six."
+        }
+        :: ""
+        :: "The back door opens. Dara stands in the frame."
+        :: "Muddy hands. Holding a biscuit tin."
+        :Dara: "Under the first rose bush. Just like she said."
+        :: ""
+        :: "Inside the tin: a signed will, properly witnessed, dated October."
+        :: "Three equal shares."
+        :: "And three sealed envelopes. One name on each."
+        known.add("real_will")
+    } else {
+        :: "Without more to go on, the draft will is all you have."
+        :: "It may hold up. It may not."
+        :Lawyer: "I'll file the draft and we'll see what the court says."
+    }
+    :: ""
+    if nora.trust >= 45 and felix.trust >= 45 and dara.trust >= 45 {
+        => ENDING_TOGETHER
+    } else if nora.trust >= 35 or felix.trust >= 35 or dara.trust >= 35 {
+        => ENDING_FRACTURED
+    } else {
+        => ENDING_APART
+    }
+}
+
+// ============================================================
+// ENDINGS
+// ============================================================
+
+=== ENDING_TOGETHER {
+    :: "They open their envelopes at the table. Together."
+    :: ""
+    :: "Nora cries first. Then Felix."
+    :: "Dara holds hers to her chest and looks out at the roses."
+    :: ""
+    :Nora: "She knew. About all of it."
+    :Felix: "She forgave us anyway."
+    :Dara: "That's what she did. That's what she always did."
+    :: ""
+    :: "You close your briefcase."
+    :: "The will is clear. The house stays in the family."
+    :: "Felix will repay the loan. Nora will stop carrying it alone."
+    :: "Dara's studio in the garden shed will keep its light on."
+    :: ""
+    :: "As you leave, you hear them talking."
+    :: "Really talking. For the first time in twelve years."
+    :: ""
+    :: "{MOTHER}'s roses nod in the rain."
+    fin
+}
+
+=== ENDING_FRACTURED {
+    :: "They take their envelopes to separate corners."
+    :: ""
+    :: "Some wounds closed today. Others opened."
+    :: "The will is clear enough: three equal shares."
+    :: "Whether they can share anything else remains to be seen."
+    :: ""
+    :Nora: "I'll call the solicitor on Monday."
+    :Felix: "Fine."
+    :Dara: "..."
+    :: ""
+    :: "As you leave, the kitchen light clicks off behind you."
+    :: "The garden is dark except for the porch lamp"
+    :: "over {MOTHER}'s roses."
+    fin
+}
+
+=== ENDING_APART {
+    :: "The envelopes sit unopened on the table."
+    :: ""
+    :: "Felix takes his coat. Nora takes her keys."
+    :: "Dara stays at the window."
+    :: ""
+    :Nora: "My solicitor will be in touch about the sale."
+    :Felix: "Do what you want. You always do."
+    :: ""
+    :: "{MOTHER}'s house will be sold by spring."
+    :: "Three equal shares of something worth more than money."
+    :: ""
+    :: "The roses will be pulled up for the new build."
+    :: "Nobody will remember they were there."
+    fin
+}
