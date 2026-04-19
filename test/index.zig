@@ -9,6 +9,7 @@ pub const stamp = @import("stamp.test.zig");
 pub const exp = @import("export.test.zig");
 pub const formatter = @import("formatter.test.zig");
 pub const fuzz = @import("fuzz.test.zig");
+pub const serialization = @import("serialization.test.zig");
 
 test {
     std.testing.refAllDecls(@This());
