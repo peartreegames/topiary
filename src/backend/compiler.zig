@@ -230,98 +230,63 @@ pub const Compiler = struct {
         self.arena.deinit();
     }
 
-    fn fail(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype) Error {
-        try self.module.errors.add(self.current_file.path, msg, token, .err, args);
-        return Error.CompilerError;
-    }
+    const FailOpts = struct {
+        end: ?Token = null,
+        suggestion: ?[]const u8 = null,
+        note: ?[]const u8 = null,
+        err: Error = Error.CompilerError,
+    };
 
-    fn failError(self: *Compiler, comptime msg: []const u8, token: Token, args: anytype, err: Error) Error {
-        try self.module.errors.add(self.current_file.path, msg, token, .err, args);
-        return err;
-    }
+    const WarnOpts = struct {
+        end: ?Token = null,
+        suggestion: ?[]const u8 = null,
+        note: ?[]const u8 = null,
+    };
 
-    fn failWithHelp(
+    fn fail(
         self: *Compiler,
         comptime msg: []const u8,
         token: Token,
         args: anytype,
-        suggestion: ?[]const u8,
-        note: ?[]const u8,
+        opts: FailOpts,
     ) Error {
-        try self.module.errors.addWithHelp(self.current_file.path, msg, token, .err, args, suggestion, note);
-        return Error.CompilerError;
+        try self.addDiagnostic(msg, token, args, .err, opts.end, opts.suggestion, opts.note);
+        return opts.err;
     }
 
-    fn failSpan(
-        self: *Compiler,
-        comptime msg: []const u8,
-        start_token: Token,
-        end_token: ?Token,
-        args: anytype,
-    ) Error {
-        try self.module.errors.addSpan(self.current_file.path, msg, start_token, end_token, .err, args);
-        return Error.CompilerError;
-    }
-
-    fn failSpanWithHelp(
-        self: *Compiler,
-        comptime msg: []const u8,
-        start_token: Token,
-        end_token: ?Token,
-        args: anytype,
-        suggestion: ?[]const u8,
-        note: ?[]const u8,
-    ) Error {
-        try self.module.errors.addSpanWithHelp(self.current_file.path, msg, start_token, end_token, .err, args, suggestion, note);
-        return Error.CompilerError;
-    }
-
-    fn failErrorWithHelp(
+    fn warn(
         self: *Compiler,
         comptime msg: []const u8,
         token: Token,
         args: anytype,
-        suggestion: ?[]const u8,
-        note: ?[]const u8,
-        err: Error,
-    ) Error {
-        try self.module.errors.addWithHelp(self.current_file.path, msg, token, .err, args, suggestion, note);
-        return err;
+        opts: WarnOpts,
+    ) !void {
+        try self.addDiagnostic(msg, token, args, .warn, opts.end, opts.suggestion, opts.note);
     }
 
-    fn failErrorSpan(
-        self: *Compiler,
-        comptime msg: []const u8,
-        start_token: Token,
-        end_token: ?Token,
-        args: anytype,
-        err: Error,
-    ) Error {
-        try self.module.errors.addSpan(self.current_file.path, msg, start_token, end_token, .err, args);
-        return err;
-    }
-
-    fn warnWithHelp(
+    fn addDiagnostic(
         self: *Compiler,
         comptime msg: []const u8,
         token: Token,
         args: anytype,
+        severity: error_mod.CompilerErr.Severity,
+        end: ?Token,
         suggestion: ?[]const u8,
         note: ?[]const u8,
     ) !void {
-        try self.module.errors.addWithHelp(self.current_file.path, msg, token, .warn, args, suggestion, note);
-    }
-
-    fn warnSpanWithHelp(
-        self: *Compiler,
-        comptime msg: []const u8,
-        start_token: Token,
-        end_token: ?Token,
-        args: anytype,
-        suggestion: ?[]const u8,
-        note: ?[]const u8,
-    ) !void {
-        try self.module.errors.addSpanWithHelp(self.current_file.path, msg, start_token, end_token, .warn, args, suggestion, note);
+        const has_span = end != null;
+        const has_help = suggestion != null or note != null;
+        const path = self.current_file.path;
+        const errs = &self.module.errors;
+        if (has_span and has_help) {
+            try errs.addSpanWithHelp(path, msg, token, end, severity, args, suggestion, note);
+        } else if (has_span) {
+            try errs.addSpan(path, msg, token, end, severity, args);
+        } else if (has_help) {
+            try errs.addWithHelp(path, msg, token, severity, args, suggestion, note);
+        } else {
+            try errs.add(path, msg, token, severity, args);
+        }
     }
 
     /// Build a "previous declaration at file:line" note string. Caller does
@@ -395,7 +360,7 @@ pub const Compiler = struct {
             if (self.decl_tokens.contains(q)) lookup_name = q;
         }
         const note = try self.previousDeclNote(lookup_name);
-        return self.failSpanWithHelp(kind ++ " '{s}' is already declared", token, end_token, .{name}, null, note);
+        return self.fail(kind ++ " '{s}' is already declared", token, .{name}, .{ .end = end_token, .note = note });
     }
 
     fn suggestFromList(self: *Compiler, name: []const u8, haystack: []const []const u8) !?[]const u8 {
@@ -445,10 +410,11 @@ pub const Compiler = struct {
                     const sr = try self.suggestClassField(class_def, field);
                     const hint = sr;
 
-                    return self.failSpanWithHelp(
+                    return self.fail(
                         "Class '{s}' does not contain a field '{s}'",
-                        target_token, index_token,
-                        .{ class_def.name, field }, hint, null,
+                        target_token,
+                        .{ class_def.name, field },
+                        .{ .end = index_token, .suggestion = hint },
                     );
                 }
             },
@@ -457,10 +423,11 @@ pub const Compiler = struct {
                     const sr = try self.suggestFromList(field, string_method_names);
                     const hint = sr;
 
-                    return self.failSpanWithHelp(
+                    return self.fail(
                         "Unknown method '{s}' on string",
-                        target_token, index_token,
-                        .{field}, hint, null,
+                        target_token,
+                        .{field},
+                        .{ .end = index_token, .suggestion = hint },
                     );
                 }
             },
@@ -475,10 +442,11 @@ pub const Compiler = struct {
                     const sr = try self.suggestFromList(field, collection_method_names);
                     const hint = sr;
 
-                    return self.failSpanWithHelp(
+                    return self.fail(
                         "Unknown method '{s}' on {s}",
-                        target_token, index_token,
-                        .{ field, type_name }, hint, null,
+                        target_token,
+                        .{ field, type_name },
+                        .{ .end = index_token, .suggestion = hint },
                     );
                 }
             },
@@ -489,10 +457,11 @@ pub const Compiler = struct {
                     .nil => "nil",
                     else => unreachable,
                 };
-                return self.failSpan(
+                return self.fail(
                     "Cannot access field '{s}' on a {s}",
-                    target_token, index_token,
+                    target_token,
                     .{ field, type_name },
+                    .{ .end = index_token },
                 );
             },
             .unknown => {},
@@ -544,12 +513,11 @@ pub const Compiler = struct {
     }
 
     fn failAssignTarget(self: *Compiler, left: *const Expression) Error {
-        return self.failWithHelp(
+        return self.fail(
             "Cannot assign to a {s}",
             left.token,
             .{expressionKindName(left)},
-            null,
-            try self.alloc.dupe(u8, "assignment targets must be a variable or an indexer (e.g. `list[0]` or `obj.field`)"),
+            .{ .note = try self.alloc.dupe(u8, "assignment targets must be a variable or an indexer (e.g. `list[0]` or `obj.field`)") },
         );
     }
 
@@ -668,9 +636,9 @@ pub const Compiler = struct {
     fn resolveInclude(self: *Compiler, raw_path: []const u8, token: Token, end_token: ?Token) Error!?IncludeResult {
         // Resolve original path to module-root-relative form
         const resolved = self.current_file.module.resolveIncludePath(self.current_file, raw_path) catch
-            return self.failSpan("Could not resolve include path '{s}'", token, end_token, .{raw_path});
+            return self.fail("Could not resolve include path '{s}'", token, .{raw_path}, .{ .end = end_token });
         const file = self.module.includes.get(resolved) orelse
-            return self.failSpan("Unknown include file {s}", token, end_token, .{raw_path});
+            return self.fail("Unknown include file {s}", token, .{raw_path}, .{ .end = end_token });
         if (self.emitted_files.contains(resolved)) return null;
         try self.emitted_files.put(self.arena.allocator(), resolved, {});
         const tree = file.tree orelse return Error.NotInitialized;
@@ -735,7 +703,7 @@ pub const Compiler = struct {
             },
             .fork => |f| {
                 const fork_name = self.resolveForkName(f.name, f.id) catch
-                    return self.failSpan("fork must be inside a bough", stmt.token, f.end_token, .{});
+                    return self.fail("fork must be inside a bough", stmt.token, .{}, .{ .end = f.end_token });
                 defer self.alloc.free(fork_name);
 
                 const full_name = try self.getQualifiedName(fork_name);
@@ -812,7 +780,7 @@ pub const Compiler = struct {
             },
             .function => |f| {
                 if (self.scope.parent != null and f.is_extern)
-                    return self.failError("Only global functions can be extern.", token, .{}, Error.IllegalOperation);
+                    return self.fail("Only global functions can be extern.", token, .{}, .{ .err = Error.IllegalOperation });
                 const obj = try self.compileFunctionObj(stmt, token);
                 const full_name = try self.getQualifiedName(f.name);
                 defer self.alloc.free(full_name);
@@ -935,24 +903,22 @@ pub const Compiler = struct {
             },
             .variable => |v| {
                 if (builtins.has(v.name))
-                    return self.failErrorSpan("'{s}' is a builtin function and cannot be used as a variable name", stmt.token, v.name_token, .{v.name}, Error.IllegalOperation);
+                    return self.fail("'{s}' is a builtin function and cannot be used as a variable name", stmt.token, .{v.name}, .{ .end = v.name_token, .err = Error.IllegalOperation });
                 // Warn when the new name hides a variable from an enclosing
                 // scope. Only warn for local-to-local shadowing so global
                 // variables intentionally re-used across scopes remain quiet.
                 if (self.scope.tag != .global) {
                     if (self.scope.resolveOuter(v.name)) |_| {
-                        try self.warnSpanWithHelp(
+                        try self.warn(
                             "'{s}' hides a variable from an outer scope",
                             token,
-                            v.name_token,
                             .{v.name},
-                            null,
-                            null,
+                            .{ .end = v.name_token },
                         );
                     }
                 }
                 const symbol = self.scope.define(self.arena.allocator(), v.name, v.is_mutable) catch {
-                    return self.failSpan("'{s}' is already declared in this scope", token, v.name_token, .{v.name});
+                    return self.fail("'{s}' is already declared in this scope", token, .{v.name}, .{ .end = v.name_token });
                 };
                 try self.compileExpression(&v.initializer);
                 try self.setSymbol(v.name, symbol, token, true);
@@ -1056,7 +1022,7 @@ pub const Compiler = struct {
             },
             .fork => |f| {
                 const fork_name = self.resolveForkName(f.name, f.id) catch
-                    return self.failSpan("fork must be inside a bough", stmt.token, f.end_token, .{});
+                    return self.fail("fork must be inside a bough", stmt.token, .{}, .{ .end = f.end_token });
                 defer self.alloc.free(fork_name);
 
                 const path = try self.getQualifiedName(fork_name);
@@ -1074,7 +1040,7 @@ pub const Compiler = struct {
                     const sr = try self.suggestAnchor(path);
                     const hint = sr;
 
-                    return self.failSpanWithHelp("Could not find anchor '{s}'", token, f.end_token, .{path}, hint, null);
+                    return self.fail("Could not find anchor '{s}'", token, .{path}, .{ .end = f.end_token, .suggestion = hint });
                 }
 
                 try self.enterScope(.local);
@@ -1089,12 +1055,11 @@ pub const Compiler = struct {
                         if (body_stmt.type == .choice) {
                             const choice = body_stmt.type.choice;
                             if (!blockExits(choice.body)) {
-                                try self.warnWithHelp(
+                                try self.warn(
                                     "choice has no divert or 'fin' -- execution will end silently after this choice",
                                     body_stmt.token,
                                     .{},
-                                    try self.alloc.dupe(u8, "use 'fork^' to continue after the choice, or add a divert '=>' inside the choice body"),
-                                    null,
+                                    .{ .suggestion = try self.alloc.dupe(u8, "use 'fork^' to continue after the choice, or add a divert '=>' inside the choice body") },
                                 );
                             }
                         }
@@ -1129,7 +1094,7 @@ pub const Compiler = struct {
                     const sr = try self.suggestAnchor(full_name);
                     const hint = sr;
 
-                    return self.failWithHelp("Could not find anchor '{s}'", token, .{full_name}, hint, null);
+                    return self.fail("Could not find anchor '{s}'", token, .{full_name}, .{ .suggestion = hint });
                 };
                 self.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
 
@@ -1189,7 +1154,7 @@ pub const Compiler = struct {
                     const sr = try self.suggestAnchor(full_name);
                     const hint = sr;
 
-                    return self.failSpanWithHelp("Could not find anchor '{s}'", token, b.name_token, .{full_name}, hint, null);
+                    return self.fail("Could not find anchor '{s}'", token, .{full_name}, .{ .end = b.name_token, .suggestion = hint });
                 };
                 self.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
                 try self.compileVisit(anchor_idx, token);
@@ -1242,7 +1207,7 @@ pub const Compiler = struct {
                     const sr = try self.suggestAnchor(joined);
                     const hint = sr;
 
-                    return self.failSpanWithHelp("Could not find path '{s}'", token, d.end_token, .{joined}, hint, null);
+                    return self.fail("Could not find path '{s}'", token, .{joined}, .{ .end = d.end_token, .suggestion = hint });
                 };
                 if (d.is_backup) {
                     try self.writeOp(.backup, token);
@@ -1284,24 +1249,24 @@ pub const Compiler = struct {
                             .add => left.number + right.number,
                             .subtract => left.number - right.number,
                             .multiply => left.number * right.number,
-                            .divide => if (right.number == 0) return self.failError("Division by zero in static expression", token, .{}, Error.IllegalOperation) else left.number / right.number,
-                            else => return self.failError("Operator not supported in static expressions", token, .{}, Error.IllegalOperation),
+                            .divide => if (right.number == 0) return self.fail("Division by zero in static expression", token, .{}, .{ .err = Error.IllegalOperation }) else left.number / right.number,
+                            else => return self.fail("Operator not supported in static expressions", token, .{}, .{ .err = Error.IllegalOperation }),
                         },
                     };
                 }
-                return self.failError("Static math only supported on numbers", token, .{}, Error.IllegalOperation);
+                return self.fail("Static math only supported on numbers", token, .{}, .{ .err = Error.IllegalOperation });
             },
             .unary => |u| {
                 const val = try self.evaluateLiteral(u.value);
                 if (val == .number and u.operator == .negate) return .{ .number = -val.number };
                 if (val == .bool and u.operator == .not) return .{ .bool = !val.bool };
-                return self.failError("Unary operator not supported in static expressions", token, .{}, Error.IllegalOperation);
+                return self.fail("Unary operator not supported in static expressions", token, .{}, .{ .err = Error.IllegalOperation });
             },
             .number => |n| return .{ .number = n },
             .boolean => |b| return .{ .bool = b },
             .string => |s| {
                 if (s.expressions.len > 0) {
-                    return self.failError("Interpolated strings are not allowed as static default values", token, .{}, Error.IllegalOperation);
+                    return self.fail("Interpolated strings are not allowed as static default values", token, .{}, .{ .err = Error.IllegalOperation });
                 }
                 const obj = try self.alloc.create(Value.Obj);
                 obj.* = .{ .data = .{ .string = try self.alloc.dupe(u8, s.value) } };
@@ -1312,7 +1277,7 @@ pub const Compiler = struct {
                 if (self.constants_map.get(id)) |idx| {
                     return self.constants.items[idx];
                 }
-                return self.failError("Identifier '{s}' cannot be resolved", token, .{id}, Error.CompilerError);
+                return self.fail("Identifier '{s}' cannot be resolved", token, .{id}, .{});
             },
             .indexer => |idx| {
                 // Handle Enum.Value references
@@ -1370,13 +1335,11 @@ pub const Compiler = struct {
                     }
                 }
                 transferred = true;
-                return self.failErrorWithHelp(
+                return self.fail(
                     "Cannot resolve this indexer at compile time",
                     token,
                     .{},
-                    suggestion,
-                    note,
-                    Error.IllegalOperation,
+                    .{ .suggestion = suggestion, .note = note, .err = Error.IllegalOperation },
                 );
             },
             .nil => return .nil,
@@ -1427,17 +1390,18 @@ pub const Compiler = struct {
                 obj.* = .{ .id = UUID.new(), .data = .{ .map = map } };
                 return .{ .obj = obj };
             },
-            else => return self.failErrorWithHelp(
+            else => return self.fail(
                 "Only literal values are allowed here",
                 token,
                 .{},
-                null,
-                try std.fmt.allocPrint(
-                    self.alloc,
-                    "got a {s}; constants must be numbers, strings, bools, nil, or lists/sets/maps of literals",
-                    .{expressionKindName(expr)},
-                ),
-                Error.IllegalOperation,
+                .{
+                    .note = try std.fmt.allocPrint(
+                        self.alloc,
+                        "got a {s}; constants must be numbers, strings, bools, nil, or lists/sets/maps of literals",
+                        .{expressionKindName(expr)},
+                    ),
+                    .err = Error.IllegalOperation,
+                },
             ),
         }
     }
@@ -1543,12 +1507,11 @@ pub const Compiler = struct {
                         .@"switch" => try self.alloc.dupe(u8, "all prongs of this 'switch' exit"),
                         else => null,
                     };
-                    try self.warnWithHelp(
+                    try self.warn(
                         "Unreachable code after '{s}'",
                         next.token,
                         .{exitKeyword(exit_stmt)},
-                        null,
-                        note,
+                        .{ .note = note },
                     );
                     break;
                 }
@@ -1669,7 +1632,7 @@ pub const Compiler = struct {
                             if (idx.target.type == .identifier) {
                                 if (self.constants_map.get(idx.target.type.identifier)) |i| {
                                     const val = self.constants.items[i];
-                                    return self.failSpan("Cannot reassign field on a {s}", idx.target.token, idx.index.token, .{objKindName(val.obj.data)});
+                                    return self.fail("Cannot reassign field on a {s}", idx.target.token, .{objKindName(val.obj.data)}, .{ .end = idx.index.token });
                                 } else {
                                     try self.validateDotAccess(idx.target, idx.index, bin.left.token, idx.target.token, idx.index.token);
                                 }
@@ -1705,7 +1668,7 @@ pub const Compiler = struct {
                     .@"or" => .@"or",
                     .@"and" => .@"and",
                     else => {
-                        return self.failError("Unknown operation '{s}'", token, .{bin.operator.toString()}, Error.IllegalOperation);
+                        return self.fail("Unknown operation '{s}'", token, .{bin.operator.toString()}, .{ .err = Error.IllegalOperation });
                     },
                 };
                 try self.writeOp(op, token);
@@ -1724,7 +1687,7 @@ pub const Compiler = struct {
                                     if (self.constants_map.get(idx.target.type.identifier)) |i| {
                                         const val = self.constants.items[i];
                                         if (val == .obj and (val.obj.data == .class or val.obj.data == .@"enum" or val.obj.data == .function)) {
-                                            return self.failSpan("Cannot assign to a {s} member", idx.target.token, idx.index.token, .{objKindName(val.obj.data)});
+                                            return self.fail("Cannot assign to a {s} member", idx.target.token, .{objKindName(val.obj.data)}, .{ .end = idx.index.token });
                                         }
                                     } else {
                                         try self.validateDotAccess(idx.target, idx.index, bin.left.token, idx.target.token, idx.index.token);
@@ -1853,13 +1816,11 @@ pub const Compiler = struct {
                                             const sr = try self.suggestFromList(field, e.values);
                                             const hint = sr;
                         
-                                            return self.failSpanWithHelp(
+                                            return self.fail(
                                                 "Enum '{s}' does not contain a value '{s}'",
                                                 idx.target.token,
-                                                idx.index.token,
                                                 .{ idx.target.type.identifier, field },
-                                                hint,
-                                                null,
+                                                .{ .end = idx.index.token, .suggestion = hint },
                                             );
                                         }
                                     },
@@ -1869,13 +1830,11 @@ pub const Compiler = struct {
                                             const sr = try self.suggestClassField(c, field);
                                             const hint = sr;
                         
-                                            return self.failSpanWithHelp(
+                                            return self.fail(
                                                 "Class '{s}' does not contain a field '{s}'",
                                                 idx.target.token,
-                                                idx.index.token,
                                                 .{ idx.target.type.identifier, field },
-                                                hint,
-                                                null,
+                                                .{ .end = idx.index.token, .suggestion = hint },
                                             );
                                         }
                                     },
@@ -1924,11 +1883,11 @@ pub const Compiler = struct {
             },
             .instance => |ins| {
                 const const_idx = self.constants_map.get(ins.name) orelse
-                    return self.failSpan("Unknown class '{s}'", token, ins.name_token, .{ins.name});
+                    return self.fail("Unknown class '{s}'", token, .{ins.name}, .{ .end = ins.name_token });
 
                 const class_val = self.constants.items[const_idx];
                 if (class_val != .obj or class_val.obj.data != .class)
-                    return self.failSpan("'{s}' is not a class", token, ins.name_token, .{ins.name});
+                    return self.fail("'{s}' is not a class", token, .{ins.name}, .{ .end = ins.name_token });
 
                 const class_def = class_val.obj.data.class;
                 for (ins.fields, 0..) |field_expr, i| {
@@ -1936,12 +1895,11 @@ pub const Compiler = struct {
                         const sr = try self.suggestClassField(class_def, ins.field_names[i]);
                         const hint = sr;
     
-                        return self.failWithHelp(
+                        return self.fail(
                             "Class '{s}' has no field '{s}'",
                             ins.field_name_tokens[i],
                             .{ ins.name, ins.field_names[i] },
-                            hint,
-                            null,
+                            .{ .suggestion = hint },
                         );
                     }
 
@@ -1965,12 +1923,11 @@ pub const Compiler = struct {
                     if (self.resolveFnArity(callee_name)) |expected| {
                         if (expected != c.arguments.len) {
                             const note = try self.previousDeclNote(callee_name);
-                            return self.failWithHelp(
+                            return self.fail(
                                 "'{s}' expects {d} argument(s), but got {d}",
                                 token,
                                 .{ callee_name, expected, c.arguments.len },
-                                null,
-                                note,
+                                .{ .note = note },
                             );
                         }
                     }
@@ -1997,11 +1954,11 @@ pub const Compiler = struct {
 
     fn setSymbol(self: *Compiler, name: []const u8, symbol: ?*Symbol, token: Token, is_decl: bool) !void {
         if (try self.resolveConstant(name) != null) {
-            return self.fail("Cannot assign to constant '{s}'", token, .{name});
+            return self.fail("Cannot assign to constant '{s}'", token, .{name}, .{});
         }
 
         if (symbol) |s| {
-            if (!is_decl and !s.is_mutable) return self.fail("Cannot assign to constant variable '{s}'", token, .{s.name});
+            if (!is_decl and !s.is_mutable) return self.fail("Cannot assign to constant variable '{s}'", token, .{s.name}, .{});
             switch (s.tag) {
                 .global => {
                     try self.writeOp(if (is_decl) .decl_global else .set_global, token);
@@ -2022,16 +1979,7 @@ pub const Compiler = struct {
         } else {
             const sr = try self.suggestForSymbol(name);
             const hint = sr;
-            try self.module.errors.addWithHelp(
-                self.current_file.path,
-                "Unknown name '{s}'",
-                token,
-                .err,
-                .{name},
-                hint,
-                null,
-            );
-            return Error.SymbolNotFound;
+            return self.fail("Unknown name '{s}'", token, .{name}, .{ .suggestion = hint, .err = Error.SymbolNotFound });
         }
     }
 
@@ -2068,16 +2016,7 @@ pub const Compiler = struct {
 
         const sr = try self.suggestForSymbol(name);
         const hint = sr;
-        try self.module.errors.addWithHelp(
-            self.current_file.path,
-            "Unknown name '{s}'",
-            token,
-            .err,
-            .{name},
-            hint,
-            null,
-        );
-        return Error.SymbolNotFound;
+        return self.fail("Unknown name '{s}'", token, .{name}, .{ .suggestion = hint, .err = Error.SymbolNotFound });
     }
 
     fn calculateScopeDepth(self: *Compiler, symbol: *Symbol) usize {
@@ -2142,7 +2081,7 @@ pub const Compiler = struct {
     }
 
     pub fn replaceConstant(self: *Compiler, name: []const u8, value: Value, token: Token) !void {
-        const i = self.constants_map.get(name) orelse return self.fail("Constant {s} not found", token, .{name});
+        const i = self.constants_map.get(name) orelse return self.fail("Constant {s} not found", token, .{name}, .{});
         self.constants.items[i] = value;
     }
 

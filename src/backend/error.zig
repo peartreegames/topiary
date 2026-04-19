@@ -10,7 +10,7 @@ pub const CompilerErr = struct {
     note: ?[]const u8 = null,
     suggestion: ?[]const u8 = null,
 
-    const Severity = enum {
+    pub const Severity = enum {
         info,
         warn,
         err,
