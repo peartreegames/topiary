@@ -26,7 +26,7 @@ Boughs can be started with jumps, denoted with `=> [Name]`. The first jump must 
 or if using the CLI, the `bough` flag of the run command.
 
 ```topi
-# topi run file.topi --bough GATEHOUSE
+// $ topi run file.topi --bough GATEHOUSE
 
 === GATEHOUSE {
     :Gardener: "I was just pruning the hydrangeas, I swear!" #nervous
@@ -44,7 +44,7 @@ or if using the CLI, the `bough` flag of the run command.
 Boughs can be nested and jumped to with `.` like so:
 
 ```topi
-# topi run file.topi --bough ESTATE.MAZE
+// $ topi run file.topi --bough ESTATE.MAZE
 
 === ESTATE {
     === MAZE {
@@ -524,7 +524,7 @@ When jumping to nested boughs, Topiary ensures all parent variables are initiali
 Consider the following
 
 ```topi
-# topi run file.topi TEA_PARTY.SERVE
+// $ topi run file.topi TEA_PARTY.SERVE
 
 === TEA_PARTY {
     var poison_present = true
