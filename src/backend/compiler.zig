@@ -48,8 +48,6 @@ fn arrayContains(comptime T: type, haystack: []const []const T, needle: []const 
     return false;
 }
 
-const string_method_names: []const []const u8 = &.{ "length", "has", "upper", "lower", "replace", "split", "substr", "trim" };
-const collection_method_names: []const []const u8 = &.{ "count", "add", "remove", "has", "clear" };
 
 pub const Compiler = struct {
     // `alloc` owns data that outlives the compiler: the constants array, every
@@ -415,8 +413,8 @@ pub const Compiler = struct {
                 }
             },
             .string => {
-                if (!arrayContains(u8, string_method_names, field)) {
-                    const sr = try self.suggestFromList(field, string_method_names);
+                if (!builtins.string_methods.has(field)) {
+                    const sr = try self.suggestFromList(field, builtins.string_methods.keys());
                     const hint = sr;
 
                     return self.fail(
@@ -428,14 +426,14 @@ pub const Compiler = struct {
                 }
             },
             .list, .set, .map => {
-                if (!arrayContains(u8, collection_method_names, field)) {
+                if (!builtins.collection_methods.has(field)) {
                     const type_name: []const u8 = switch (sym.var_type) {
                         .list => "list",
                         .set => "set",
                         .map => "map",
                         else => unreachable,
                     };
-                    const sr = try self.suggestFromList(field, collection_method_names);
+                    const sr = try self.suggestFromList(field, builtins.collection_methods.keys());
                     const hint = sr;
 
                     return self.fail(
@@ -558,10 +556,10 @@ pub const Compiler = struct {
 
     pub fn compile(self: *Compiler) Error!void {
         const tree = self.module.entry.tree orelse return Error.IllegalOperation;
-        for (builtins.keys()) |name| {
+        for (builtins.functions.keys()) |name| {
             const obj = try self.alloc.create(Value.Obj);
             errdefer self.alloc.destroy(obj);
-            obj.* = .{ .data = .{ .builtin = builtins.get(name).? } };
+            obj.* = .{ .data = .{ .builtin = builtins.functions.get(name).? } };
             try self.addNamedConstant(name, .{ .obj = obj });
         }
         for (tree.root) |*stmt| {
@@ -929,7 +927,7 @@ pub const Compiler = struct {
                 try self.writeOp(.pop, token);
             },
             .variable => |v| {
-                if (builtins.has(v.name))
+                if (builtins.functions.has(v.name))
                     return self.fail("'{s}' is a builtin function and cannot be used as a variable name", stmt.token, .{v.name}, .{ .end = v.name_token, .err = Error.IllegalOperation });
                 // Warn when the new name hides a variable from an enclosing
                 // scope. Only warn for local-to-local shadowing so global

@@ -1,7 +1,6 @@
-const builtin = @import("builtins.zig");
-pub const builtins = builtin.functions;
-pub const BuiltinFn = builtin.BuiltinFn;
-pub const Builtin = builtin.Builtin;
+pub const builtins = @import("builtins.zig");
+pub const BuiltinFn = builtins.BuiltinFn;
+pub const Builtin = builtins.Builtin;
 
 const gc = @import("gc.zig");
 pub const Gc = gc.Gc;

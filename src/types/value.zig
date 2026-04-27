@@ -461,7 +461,7 @@ pub const Value = union(Type) {
                         const name_buf = try reader.readAlloc(allocator, name_len);
                         defer allocator.free(name_buf);
 
-                        const builtin = runtime_builtins.get(name_buf) orelse
+                        const builtin = runtime_builtins.functions.get(name_buf) orelse
                             return error.BuiltinNotFound;
 
                         const obj = try allocator.create(Value.Obj);

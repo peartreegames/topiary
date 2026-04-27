@@ -165,8 +165,9 @@ test "lower interpolated string produces segments" {
 
     // The interpolated expression resolves to a global load of "name".
     const interp_expr = line.segments[1].interp;
-    try testing.expect(interp_expr.kind == .load_global);
-    try testing.expectEqualStrings("name", interp_expr.kind.load_global.name);
+    try testing.expect(interp_expr.kind == .load);
+    try testing.expect(interp_expr.kind.load == .global);
+    try testing.expectEqualStrings("name", interp_expr.kind.load.global.name);
 }
 
 test "lower for loop defines capture slot" {
@@ -392,6 +393,136 @@ test "diagnostic: fork choice without exit warns" {
     var program = result.program;
     defer program.deinit();
     try testing.expect(hasError(result.mod, "execution will end silently", .warn));
+}
+
+test "lower dot-access produces field expr" {
+    var result = try lowerSource(
+        \\var l = List{1, 2}
+        \\var z = l.count
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+
+    const z_init = program.body[1].kind.var_decl.initializer;
+    try testing.expect(z_init.kind == .field);
+    try testing.expectEqualStrings("count", z_init.kind.field.name);
+}
+
+test "lower bracket-index still produces index expr" {
+    var result = try lowerSource(
+        \\var l = List{1, 2}
+        \\var z = l[0]
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+
+    const z_init = program.body[1].kind.var_decl.initializer;
+    try testing.expect(z_init.kind == .index);
+}
+
+test "diagnostic: dot-access on built-in method does not error" {
+    var result = try lowerSource(
+        \\var l = List{1, 2}
+        \\var n = l.has(1)
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "Unknown name 'has'", .err));
+}
+
+test "diagnostic: dot-access unknown class field errors" {
+    var result = try lowerSource(
+        \\class P { x = 0 }
+        \\var p = new P{}
+        \\=== Main {
+        \\    var z = p.bad
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Class 'P' does not contain a field 'bad'", .err));
+}
+
+test "diagnostic: dot-access valid class field and method does not error" {
+    var result = try lowerSource(
+        \\class P {
+        \\    x = 0,
+        \\    fn greet || { return 1 }
+        \\}
+        \\var p = new P{}
+        \\=== Main {
+        \\    var a = p.x
+        \\    var b = p.greet()
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "does not contain", .err));
+}
+
+test "diagnostic: dot-access unknown collection method errors" {
+    var result = try lowerSource(
+        \\var l = List{1}
+        \\=== Main {
+        \\    var z = l.bogus
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Unknown method 'bogus' on list", .err));
+}
+
+test "diagnostic: dot-access unknown string method errors" {
+    var result = try lowerSource(
+        \\var s = "hello"
+        \\=== Main {
+        \\    var z = s.bogus
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Unknown method 'bogus' on string", .err));
+}
+
+test "diagnostic: dot-access on number rejects field access" {
+    var result = try lowerSource(
+        \\var n = 1
+        \\=== Main {
+        \\    var z = n.foo
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Cannot access field 'foo' on a number", .err));
+}
+
+test "diagnostic: dot-access on unknown type is silent" {
+    var result = try lowerSource(
+        \\fn g |x| { return x }
+        \\=== Main {
+        \\    var z = g(1).foo
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "does not contain", .err));
+    try testing.expect(!hasError(result.mod, "Unknown method", .err));
+    try testing.expect(!hasError(result.mod, "Cannot access field", .err));
 }
 
 test "diagnostic: backup fork choice without exit does not warn" {

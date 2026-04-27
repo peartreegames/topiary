@@ -34,9 +34,6 @@ const RuntimeErr = @import("error.zig").RuntimeErr;
 
 const LocaleProvider = @import("../locale.zig").LocaleProvider;
 
-const string_method_names = [_][]const u8{ "length", "has", "upper", "lower", "replace", "split", "substr", "trim" };
-const collection_method_names = [_][]const u8{ "count", "add", "remove", "has", "clear" };
-
 const stack_size = 4096;
 const frame_size = 255;
 const iterator_size = 255;
@@ -463,10 +460,13 @@ pub const Vm = struct {
     }
 
     fn failUnknownMethod(self: *Vm, comptime kind: []const u8, name: []const u8, valid: []const []const u8) !void {
-        const valid_list = try std.mem.join(self.alloc, ", ", valid);
+        var public: std.ArrayList([]const u8) = .empty;
+        defer public.deinit(self.alloc);
+        for (valid) |v| if (v.len == 0 or v[0] != '_') try public.append(self.alloc, v);
+        const valid_list = try std.mem.join(self.alloc, ", ", public.items);
         defer self.alloc.free(valid_list);
         const hint = blk: {
-            const match = backend.suggest.closest(self.alloc, name, valid) catch null;
+            const match = backend.suggest.closest(self.alloc, name, public.items) catch null;
             if (match) |m| {
                 defer self.alloc.free(m);
                 break :blk std.fmt.allocPrint(self.alloc, "did you mean '{s}'?", .{m}) catch null;
@@ -977,15 +977,15 @@ pub const Vm = struct {
                                     if (builtins.string_methods.get(name)) |method| {
                                         try self.push(try self.builtinValue(method));
                                         try self.push(target);
-                                    } else return self.failUnknownMethod("string", name, &string_method_names);
+                                    } else return self.failUnknownMethod("string", name, builtins.string_methods.keys());
                                 }
                             },
                             .list => |l| {
                                 if (index.asString()) |name| {
-                                    if (builtins.methods.get(name)) |method| {
+                                    if (builtins.collection_methods.get(name)) |method| {
                                         try self.push(try self.builtinValue(method));
                                         try self.push(target);
-                                    } else return self.failUnknownMethod("list", name, &collection_method_names);
+                                    } else return self.failUnknownMethod("list", name, builtins.collection_methods.keys());
                                 } else if (index == .number) {
                                     const i = @as(u32, @intFromFloat(index.number));
                                     if (i < 0 or i >= l.items.len) {
@@ -998,17 +998,17 @@ pub const Vm = struct {
                                     try self.push(v);
                                 } else if (index.asString()) |name| {
                                     if (std.mem.eql(u8, name, "add")) {
-                                        try self.push(try self.builtinValue(builtins.methods.get("__addmap").?));
+                                        try self.push(try self.builtinValue(builtins.collection_methods.get("__addmap").?));
                                         try self.push(target);
-                                    } else if (builtins.methods.get(name)) |method| {
+                                    } else if (builtins.collection_methods.get(name)) |method| {
                                         try self.push(try self.builtinValue(method));
                                         try self.push(target);
-                                    } else return self.failUnknownMethod("map", name, &collection_method_names);
+                                    } else return self.failUnknownMethod("map", name, builtins.collection_methods.keys());
                                 } else try self.push(Nil);
                             },
                             .set => {
                                 const name = index.asString() orelse return self.fail("Can only query set methods by string name, found '{s}'", .{index.typeName()});
-                                const method = builtins.methods.get(name) orelse return self.failUnknownMethod("set", name, &collection_method_names);
+                                const method = builtins.collection_methods.get(name) orelse return self.failUnknownMethod("set", name, builtins.collection_methods.keys());
                                 try self.push(try self.builtinValue(method));
                                 try self.push(target);
                             },

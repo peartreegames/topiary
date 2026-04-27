@@ -77,6 +77,12 @@ pub const Loc = struct {
 ///
 /// scope.zig's `function` tag collapses into `local` here — both live on
 /// the call frame stack and use the same get_local/set_local opcodes.
+///
+/// `Slot` doubles as the payload for `Expr.Kind.load`: every load is a
+/// reference to a definition site, and the descriptor needed at the use
+/// site (kind, index, var_type, mutability) is the same one stored at
+/// the declaration. `name` is set when borrowing from a parser-arena
+/// identifier; declaration sites synthesize one as needed.
 pub const Slot = union(enum) {
     /// Stack-frame local. Includes function parameters and the function's
     /// own name (callable recursively).
@@ -91,6 +97,9 @@ pub const Slot = union(enum) {
         index: C.LOCAL,
         is_mutable: bool,
         var_type: VarType = .unknown,
+        /// Borrowed from the parser arena (or duped into IR arena for
+        /// loads). Used for diagnostics and dumps.
+        name: []const u8 = "",
     };
 
     pub const Upvalue = struct {
@@ -98,12 +107,14 @@ pub const Slot = union(enum) {
         depth: u8,
         is_mutable: bool,
         var_type: VarType = .unknown,
+        name: []const u8 = "",
     };
 
     pub const Global = struct {
         index: C.GLOBAL,
         is_mutable: bool,
         var_type: VarType = .unknown,
+        name: []const u8 = "",
     };
 };
 
@@ -410,9 +421,11 @@ pub const Expr = struct {
     pub const Kind = union(enum) {
         // ---- Loads --------------------------------------------------------
 
-        load_local: LoadLocal,
-        load_upvalue: LoadUpvalue,
-        load_global: LoadGlobal,
+        /// Reference to a definition site (local/upvalue/global). The
+        /// `Slot` descriptor doubles for both declaration and use, so
+        /// every metadata field a walker needs (kind, index, var_type,
+        /// is_mutable, name) is right here.
+        load: Slot,
         load_const: LoadConst,
 
         // ---- Literals -----------------------------------------------------
@@ -437,6 +450,7 @@ pub const Expr = struct {
         // ---- Access / call ------------------------------------------------
 
         index: Index,
+        field: Field,
         call: Call,
         instance: Instance,
 
@@ -450,23 +464,6 @@ pub const Expr = struct {
 
         @"extern",
     };
-};
-
-pub const LoadLocal = struct {
-    index: C.LOCAL,
-    /// Borrowed name from AST arena, kept for diagnostics and dumps.
-    name: []const u8,
-};
-
-pub const LoadUpvalue = struct {
-    index: C.LOCAL,
-    depth: u8,
-    name: []const u8,
-};
-
-pub const LoadGlobal = struct {
-    index: C.GLOBAL,
-    name: []const u8,
 };
 
 pub const LoadConst = struct {
@@ -511,6 +508,15 @@ pub const IfExpr = struct {
 pub const Index = struct {
     target: ExprRef,
     index: ExprRef,
+};
+
+/// Dot-access (`obj.field`). The field name is a borrowed string —
+/// not a symbol/anchor — so lowering does not run name resolution on
+/// it. Borrows from the parser arena, like identifier names elsewhere
+/// in the IR.
+pub const Field = struct {
+    target: ExprRef,
+    name: []const u8,
 };
 
 pub const Call = struct {

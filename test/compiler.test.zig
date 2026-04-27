@@ -21,7 +21,7 @@ const File = topi.module.File;
 
 const testing = std.testing;
 const allocator = testing.allocator;
-const cl = builtins.values().len;
+const cl = builtins.functions.values().len;
 
 pub fn compileSource(source: []const u8, mod: *Module) !Bytecode {
     const file = try mod.arena.allocator().create(File);

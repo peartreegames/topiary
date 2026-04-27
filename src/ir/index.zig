@@ -33,9 +33,6 @@ pub const TextSegment = program.TextSegment;
 
 pub const ExprRef = program.ExprRef;
 pub const Expr = program.Expr;
-pub const LoadLocal = program.LoadLocal;
-pub const LoadUpvalue = program.LoadUpvalue;
-pub const LoadGlobal = program.LoadGlobal;
 pub const LoadConst = program.LoadConst;
 pub const MapPair = program.MapPair;
 pub const Range = program.Range;

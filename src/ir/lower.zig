@@ -401,7 +401,7 @@ const Lowerer = struct {
         return .{
             .loc = locFrom(tok),
             .kind = .{ .@"for" = .{
-                .capture_slot = self.slotFromSymbol(sym),
+                .capture_slot = try self.slotFromSymbol(sym),
                 .capture_name = try self.arena().dupe(u8, f.capture),
                 .iterator = iterator,
                 .body = try self.lowerBody(f.body),
@@ -480,14 +480,14 @@ const Lowerer = struct {
             };
             params[i] = .{
                 .name = try self.arena().dupe(u8, pname),
-                .slot = self.slotFromSymbol(psym),
+                .slot = try self.slotFromSymbol(psym),
             };
         }
 
         const body = try self.lowerBody(f.body);
 
         const is_top_level = (anchor != null);
-        const name_slot: ?ir.Slot = if (is_top_level or fn_sym == null) null else self.slotFromSymbol(fn_sym.?);
+        const name_slot: ?ir.Slot = if (is_top_level or fn_sym == null) null else try self.slotFromSymbol(fn_sym.?);
 
         return .{
             .loc = locFrom(tok),
@@ -565,7 +565,7 @@ const Lowerer = struct {
     }
 
     fn lowerVariableStmt(self: *Lowerer, v: anytype, tok: Token) Error!ir.Stmt {
-        if (builtins.has(v.name)) {
+        if (builtins.functions.has(v.name)) {
             try self.errors().addSpan(
                 self.current_file.path,
                 "'{s}' is a builtin function and cannot be used as a variable name",
@@ -589,7 +589,7 @@ const Lowerer = struct {
             .loc = locFrom(tok),
             .kind = .{ .var_decl = .{
                 .name = try self.arena().dupe(u8, v.name),
-                .slot = self.slotFromSymbol(sym),
+                .slot = try self.slotFromSymbol(sym),
                 .is_mutable = v.is_mutable,
                 .initializer = try self.lowerExpression(&v.initializer),
             } },
@@ -602,12 +602,29 @@ const Lowerer = struct {
 
     fn lowerExpression(self: *Lowerer, expr: *const ast.Expression) Error!ir.ExprRef {
         const node = try self.arena().create(ir.Expr);
+        const kind = try self.lowerExprKind(expr);
+        var var_type = inferExprType(expr);
+        if (var_type == .unknown) var_type = loadVarType(kind);
         node.* = .{
             .loc = locFrom(expr.token),
-            .var_type = inferExprType(expr),
-            .kind = try self.lowerExprKind(expr),
+            .var_type = var_type,
+            .kind = kind,
         };
         return node;
+    }
+
+    /// Identifier loads inherit type from the resolved slot. `inferExprType`
+    /// only looks at the AST expression kind, so loads come back `.unknown`
+    /// even when the slot already knows its type.
+    fn loadVarType(kind: ir.Expr.Kind) VarType {
+        return switch (kind) {
+            .load => |s| switch (s) {
+                .local => |l| l.var_type,
+                .upvalue => |u| u.var_type,
+                .global => |g| g.var_type,
+            },
+            else => .unknown,
+        };
     }
 
     fn lowerExpressions(self: *Lowerer, exprs: []const ast.Expression) Error![]const ir.ExprRef {
@@ -645,10 +662,19 @@ const Lowerer = struct {
                 .target = try self.lowerExpression(c.target),
                 .arguments = try self.lowerExpressions(c.arguments),
             } },
-            .indexer => |idx| .{ .index = .{
-                .target = try self.lowerExpression(idx.target),
-                .index = try self.lowerExpression(idx.index),
-            } },
+            .indexer => |idx| blk: {
+                if (expr.token.token_type == .dot) {
+                    std.debug.assert(idx.index.type == .identifier);
+                    break :blk .{ .field = .{
+                        .target = try self.lowerExpression(idx.target),
+                        .name = idx.index.type.identifier,
+                    } };
+                }
+                break :blk .{ .index = .{
+                    .target = try self.lowerExpression(idx.target),
+                    .index = try self.lowerExpression(idx.index),
+                } };
+            },
             .instance => |i| try self.lowerInstance(i, expr.token),
             .@"extern" => .@"extern",
         };
@@ -674,7 +700,7 @@ const Lowerer = struct {
             if (b.left.type == .identifier) {
                 const name = b.left.type.identifier;
                 if (try self.resolveSymbol(name)) |sym| {
-                    target_slot = self.slotFromSymbol(sym);
+                    target_slot = try self.slotFromSymbol(sym);
                 }
             }
         }
@@ -717,7 +743,7 @@ const Lowerer = struct {
 
     fn lowerIdentifier(self: *Lowerer, name: []const u8, tok: Token) Error!ir.Expr.Kind {
         _ = tok;
-        if (try self.resolveSymbol(name)) |sym| return try self.loadFromSymbol(sym);
+        if (try self.resolveSymbol(name)) |sym| return .{ .load = try self.slotFromSymbol(sym) };
         // Could be a constant / anchor — single-segment path.
         const single = [_][]const u8{name};
         const anchor = try self.refByPath(&single);
@@ -1014,9 +1040,7 @@ const Lowerer = struct {
     ) Error!void {
         const e: *ir.Expr = @constCast(expr);
         switch (e.kind) {
-            .number, .bool, .nil, .@"extern",
-            .load_local, .load_upvalue, .load_global,
-            => {},
+            .number, .bool, .nil, .@"extern", .load => {},
             .load_const => |*lc| try self.patchAnchor(&lc.target, stack, e.loc.start),
             .text => |segs| for (segs) |seg| try self.validateSegment(seg, stack),
             .list => |xs| for (xs) |x| try self.validateExpr(x, stack),
@@ -1043,6 +1067,7 @@ const Lowerer = struct {
                 try self.validateExpr(i.target, stack);
                 try self.validateExpr(i.index, stack);
             },
+            .field => |*f| try self.validateExpr(f.target, stack),
             .call => |*c| {
                 try self.validateExpr(c.target, stack);
                 for (c.arguments) |a| try self.validateExpr(a, stack);
@@ -1211,9 +1236,7 @@ const Lowerer = struct {
     ) Error!void {
         const e: *const ir.Expr = expr;
         switch (e.kind) {
-            .number, .bool, .nil, .@"extern",
-            .load_local, .load_upvalue, .load_global, .load_const,
-            => {},
+            .number, .bool, .nil, .@"extern", .load, .load_const => {},
             .text => |segs| for (segs) |seg| try self.semSegment(seg, stack),
             .list => |xs| for (xs) |x| try self.semExpr(x, stack),
             .set => |xs| for (xs) |x| try self.semExpr(x, stack),
@@ -1238,6 +1261,10 @@ const Lowerer = struct {
             .index => |*i| {
                 try self.semExpr(i.target, stack);
                 try self.semExpr(i.index, stack);
+            },
+            .field => |*f| {
+                try self.checkFieldAccess(f, e.loc.start);
+                try self.semExpr(f.target, stack);
             },
             .call => |*c| {
                 try self.checkCallArity(c, stack, e.loc.start);
@@ -1300,6 +1327,74 @@ const Lowerer = struct {
         }
     }
 
+    /// Validate `obj.field` against the target's resolved type. Mirrors
+    /// the AST-walking `compiler.zig:validateDotAccess` behavior:
+    /// instance/string/collection get name-table checks; primitives are
+    /// rejected outright; `.unknown` is silently permissive (chained
+    /// access, call returns, etc.).
+    fn checkFieldAccess(
+        self: *Lowerer,
+        f: *const ir.Field,
+        tok: Token,
+    ) Error!void {
+        switch (f.target.var_type) {
+            .instance => |class_name| {
+                const class = self.class_by_path.get(class_name) orelse return;
+                if (classHasField(class, f.name)) return;
+                if (classHasMethod(class, f.name)) return;
+                try self.errors().add(
+                    self.pathForTok(tok),
+                    "Class '{s}' does not contain a field '{s}'",
+                    tok,
+                    .err,
+                    .{ class.name, f.name },
+                );
+            },
+            .string => {
+                if (builtins.string_methods.has(f.name)) return;
+                try self.errors().add(
+                    self.pathForTok(tok),
+                    "Unknown method '{s}' on string",
+                    tok,
+                    .err,
+                    .{f.name},
+                );
+            },
+            .list, .set, .map => {
+                if (builtins.collection_methods.has(f.name)) return;
+                const type_name: []const u8 = switch (f.target.var_type) {
+                    .list => "list",
+                    .set => "set",
+                    .map => "map",
+                    else => unreachable,
+                };
+                try self.errors().add(
+                    self.pathForTok(tok),
+                    "Unknown method '{s}' on {s}",
+                    tok,
+                    .err,
+                    .{ f.name, type_name },
+                );
+            },
+            .number, .boolean, .nil => {
+                const type_name: []const u8 = switch (f.target.var_type) {
+                    .number => "number",
+                    .boolean => "boolean",
+                    .nil => "nil",
+                    else => unreachable,
+                };
+                try self.errors().add(
+                    self.pathForTok(tok),
+                    "Cannot access field '{s}' on a {s}",
+                    tok,
+                    .err,
+                    .{ f.name, type_name },
+                );
+            },
+            .unknown => {},
+        }
+    }
+
     fn checkUnreachable(self: *Lowerer, stmts: []const ir.Stmt) Error!void {
         var exited_at: ?usize = null;
         for (stmts, 0..) |*s, i| {
@@ -1346,43 +1441,30 @@ const Lowerer = struct {
         return self.scope.resolve(self.scratchAlloc(), name);
     }
 
-    fn slotFromSymbol(self: *Lowerer, sym: *Symbol) ir.Slot {
+    /// Build the IR slot descriptor for a resolved scope symbol. Used
+    /// both at declaration sites (as `VarDecl.slot`) and at use sites
+    /// (wrapped in `Expr.Kind.load`). `sym.name` is duped into the IR
+    /// arena so the slot outlives the scratch-lifetime symbol.
+    fn slotFromSymbol(self: *Lowerer, sym: *Symbol) Error!ir.Slot {
+        const name = try self.arena().dupe(u8, sym.name);
         return switch (sym.tag) {
             .local, .function => .{ .local = .{
                 .index = @intCast(sym.index),
                 .is_mutable = sym.is_mutable,
                 .var_type = sym.var_type,
+                .name = name,
             } },
             .upvalue => .{ .upvalue = .{
                 .index = @intCast(sym.index),
                 .depth = self.calculateScopeDepth(sym),
                 .is_mutable = sym.is_mutable,
                 .var_type = sym.var_type,
+                .name = name,
             } },
             .global => .{ .global = .{
                 .index = @intCast(sym.index),
                 .is_mutable = sym.is_mutable,
                 .var_type = sym.var_type,
-            } },
-        };
-    }
-
-    fn loadFromSymbol(self: *Lowerer, sym: *Symbol) Error!ir.Expr.Kind {
-        // sym.name lives in the scratch arena — dupe into program arena
-        // so the IR outlives the lowerer.
-        const name = try self.arena().dupe(u8, sym.name);
-        return switch (sym.tag) {
-            .local, .function => .{ .load_local = .{
-                .index = @intCast(sym.index),
-                .name = name,
-            } },
-            .upvalue => .{ .load_upvalue = .{
-                .index = @intCast(sym.index),
-                .depth = self.calculateScopeDepth(sym),
-                .name = name,
-            } },
-            .global => .{ .load_global = .{
-                .index = @intCast(sym.index),
                 .name = name,
             } },
         };
@@ -1492,9 +1574,11 @@ fn exitKeyword(stmt: *const ir.Stmt) []const u8 {
 
 fn callTargetName(target: ir.ExprRef) ?[]const u8 {
     return switch (target.kind) {
-        .load_local => |l| l.name,
-        .load_global => |g| g.name,
-        .load_upvalue => |u| u.name,
+        .load => |s| switch (s) {
+            .local => |l| l.name,
+            .upvalue => |u| u.name,
+            .global => |g| g.name,
+        },
         .load_const => |lc| lastPathSegment(lc.target.path),
         else => null,
     };
@@ -1508,6 +1592,13 @@ fn lastPathSegment(path: []const u8) []const u8 {
 fn classHasField(class: *const ir.ClassDecl, name: []const u8) bool {
     for (class.field_names) |fname| {
         if (std.mem.eql(u8, fname, name)) return true;
+    }
+    return false;
+}
+
+fn classHasMethod(class: *const ir.ClassDecl, name: []const u8) bool {
+    for (class.methods) |m| {
+        if (std.mem.eql(u8, m.name, name)) return true;
     }
     return false;
 }

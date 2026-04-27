@@ -72,7 +72,11 @@ pub const functions = std.StaticStringMap(Builtin).initComptime(.{ .{
     "typeOf", Builtin{ .arity = 1, .backing = typeOf, .is_method = false, .name = "typeOf" },
 } });
 
-pub const methods = std.StaticStringMap(Builtin).initComptime(.{ .{
+/// Methods callable on collection receivers (list, set, map). The VM
+/// dispatches by receiver type, so this map is the type-narrow allowed
+/// set for `.list/.set/.map` — distinct from `string_methods` below.
+/// `__addmap` is internal: maps rewrite `add` to it for the 3-arg form.
+pub const collection_methods = std.StaticStringMap(Builtin).initComptime(.{ .{
     "count", Builtin{ .arity = 1, .backing = count_method, .is_method = true, .name = "count" },
 }, .{
     "add", Builtin{ .arity = 2, .backing = add_method, .is_method = true, .name = "add" },
@@ -84,18 +88,6 @@ pub const methods = std.StaticStringMap(Builtin).initComptime(.{ .{
     "has", Builtin{ .arity = 2, .backing = has_method, .is_method = true, .name = "has" },
 }, .{
     "clear", Builtin{ .arity = 1, .backing = clear_method, .is_method = true, .name = "clear" },
-}, .{
-    "upper", Builtin{ .arity = 1, .backing = upper_method, .is_method = true, .name = "upper" },
-}, .{
-    "lower", Builtin{ .arity = 1, .backing = lower_method, .is_method = true, .name = "lower" },
-}, .{
-    "replace", Builtin{ .arity = 3, .backing = replace_method, .is_method = true, .name = "replace" },
-}, .{
-    "split", Builtin{ .arity = 2, .backing = split_method, .is_method = true, .name = "split" },
-}, .{
-    "substr", Builtin{ .arity = 3, .backing = substr_method, .is_method = true, .name = "substr" },
-}, .{
-    "trim", Builtin{ .arity = 1, .backing = trim_method, .is_method = true, .name = "trim" },
 } });
 
 pub const string_methods = std.StaticStringMap(Builtin).initComptime(.{
