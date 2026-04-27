@@ -70,7 +70,7 @@ pub const Compiler = struct {
 
     module: *Module,
     current_file: *File,
-    emitted_files: std.StringArrayHashMapUnmanaged(void) = .empty,
+    emitted_files: std.array_hash_map.String(void) = .empty,
     path_stack: std.ArrayList([]const u8) = .empty,
 
     // Diagnostics tracking: keys are borrowed from `constants_map` keys.

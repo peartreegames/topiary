@@ -160,7 +160,7 @@ pub const Program = struct {
     /// Index of every named anchor in the program, keyed by full path.
     /// Mirrors the compiler's `constants_map`, but only contains
     /// anchor-typed entries — for fast IR-walking lookups.
-    anchors: std.StringArrayHashMapUnmanaged(AnchorRef) = .empty,
+    anchors: std.array_hash_map.String(AnchorRef) = .empty,
 
     /// Source files this program spans (file_index → path). Populated by
     /// lowering from the parser's include resolution.

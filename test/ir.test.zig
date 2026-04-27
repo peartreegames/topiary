@@ -231,3 +231,184 @@ test "lower dump round-trip does not panic" {
     try testing.expect(std.mem.indexOf(u8, out, "bough") != null);
     try testing.expect(std.mem.indexOf(u8, out, "Story.Chapter") != null);
 }
+
+// ===========================================================================
+// Semantic diagnostics — emit-time and post-walk
+// ===========================================================================
+
+const CompilerErr = topi.backend.CompilerErr;
+
+fn hasError(mod: *Module, needle: []const u8, severity: CompilerErr.Severity) bool {
+    for (mod.errors.list.items) |e| {
+        if (e.severity != severity) continue;
+        if (std.mem.indexOf(u8, e.fmt, needle) != null) return true;
+    }
+    return false;
+}
+
+test "diagnostic: builtin shadow flags variable named like a builtin" {
+    var result = try lowerSource("var rnd = 0");
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "is a builtin function", .err));
+}
+
+test "diagnostic: ordinary variable does not trigger builtin shadow" {
+    var result = try lowerSource("var something = 0");
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "is a builtin function", .err));
+}
+
+test "diagnostic: assigning to a constant variable errors" {
+    var result = try lowerSource(
+        \\const x = 0
+        \\=== Main {
+        \\    x = 1
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Cannot assign to constant variable 'x'", .err));
+}
+
+test "diagnostic: assigning to mutable variable is fine" {
+    var result = try lowerSource(
+        \\var x = 0
+        \\=== Main {
+        \\    x = 1
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "Cannot assign", .err));
+}
+
+test "diagnostic: arity mismatch on direct call" {
+    var result = try lowerSource(
+        \\fn add |a, b| { return a + b }
+        \\=== Main {
+        \\    var x = add(1)
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "'add' expects 2 argument(s), but got 1", .err));
+}
+
+test "diagnostic: matching arity does not error" {
+    var result = try lowerSource(
+        \\fn add |a, b| { return a + b }
+        \\=== Main {
+        \\    var x = add(1, 2)
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "expects", .err));
+}
+
+test "diagnostic: instance with unknown field errors" {
+    var result = try lowerSource(
+        \\class Point { x = 0, y = 0 }
+        \\=== Main {
+        \\    var p = new Point{ x = 1, z = 9 }
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Class 'Point' has no field 'z'", .err));
+}
+
+test "diagnostic: instance with valid fields is fine" {
+    var result = try lowerSource(
+        \\class Point { x = 0, y = 0 }
+        \\=== Main {
+        \\    var p = new Point{ x = 1, y = 2 }
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "has no field", .err));
+}
+
+test "diagnostic: unreachable code after fin warns" {
+    var result = try lowerSource(
+        \\=== Main {
+        \\    fin
+        \\    :: "never"
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Unreachable code after 'fin'", .warn));
+}
+
+test "diagnostic: bough after divert is not flagged unreachable" {
+    var result = try lowerSource(
+        \\=== A {
+        \\    => B
+        \\}
+        \\=== B {
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "Unreachable", .warn));
+}
+
+test "diagnostic: fork choice without exit warns" {
+    var result = try lowerSource(
+        \\=== Main {
+        \\    fork {
+        \\        ~ "Stay" {
+        \\            :: "ok"
+        \\        }
+        \\        ~ "Leave" {
+        \\            => Done
+        \\        }
+        \\    }
+        \\}
+        \\=== Done { fin }
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "execution will end silently", .warn));
+}
+
+test "diagnostic: backup fork choice without exit does not warn" {
+    var result = try lowerSource(
+        \\=== Main {
+        \\    fork^ {
+        \\        ~ "Stay" {
+        \\            :: "ok"
+        \\        }
+        \\        ~ "Leave" {
+        \\            :: "bye"
+        \\        }
+        \\    }
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "end silently", .warn));
+}

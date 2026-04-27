@@ -37,6 +37,8 @@ const File = module_mod.File;
 const error_mod = @import("../backend/error.zig");
 const CompilerErrors = error_mod.CompilerErrors;
 
+const builtins = @import("../runtime/index.zig").builtins;
+
 pub const Error = error{
     OutOfMemory,
     LowerError,
@@ -67,6 +69,12 @@ const Lowerer = struct {
     /// Per-walk de-dup of include resolution.
     seen_files: std.array_hash_map.String(void),
 
+    /// Function arity by anchor path. Populated during validateAnchors;
+    /// consumed by validateSemantics for the arity-mismatch check.
+    arity_by_path: std.array_hash_map.String(u8),
+    /// Class metadata by anchor path. Same lifecycle as arity_by_path.
+    class_by_path: std.array_hash_map.String(*const ir.ClassDecl),
+
     fn init(parent_alloc: std.mem.Allocator, module: *Module) !Lowerer {
         var program = ir.Program.init(parent_alloc);
         errdefer program.deinit();
@@ -85,6 +93,8 @@ const Lowerer = struct {
             .scope = root_scope,
             .path_stack = .empty,
             .seen_files = .empty,
+            .arity_by_path = .empty,
+            .class_by_path = .empty,
         };
     }
 
@@ -128,6 +138,9 @@ const Lowerer = struct {
 
         // Resolve forward references by walking the IR.
         try self.validateAnchors();
+
+        // Run semantic diagnostics over the now fully-resolved IR.
+        try self.validateSemantics();
     }
 
     fn populateFilesTable(self: *Lowerer) Error!void {
@@ -539,6 +552,17 @@ const Lowerer = struct {
     }
 
     fn lowerVariableStmt(self: *Lowerer, v: anytype, tok: Token) Error!ir.Stmt {
+        if (builtins.has(v.name)) {
+            try self.errors().addSpan(
+                self.current_file.path,
+                "'{s}' is a builtin function and cannot be used as a variable name",
+                tok,
+                v.name_token,
+                .err,
+                .{v.name},
+            );
+            return .{ .loc = locFrom(tok), .kind = .fin };
+        }
         const sym = self.scope.define(self.scratchAlloc(), v.name, v.is_mutable) catch |e| switch (e) {
             error.SymbolAlreadyDeclared => {
                 try self.errors().addSpan(self.current_file.path, "'{s}' is already declared in this scope", tok, v.name_token, .err, .{v.name});
@@ -632,10 +656,13 @@ const Lowerer = struct {
 
     fn lowerBinaryOp(self: *Lowerer, b: anytype) Error!ir.Expr.Kind {
         var target_slot: ?ir.Slot = null;
-        if (isAssignOp(b.operator) and b.left.type == .identifier) {
-            const name = b.left.type.identifier;
-            if (try self.resolveSymbol(name)) |sym| {
-                target_slot = self.slotFromSymbol(sym);
+        if (isAssignOp(b.operator)) {
+            try self.validateAssignTarget(b.left);
+            if (b.left.type == .identifier) {
+                const name = b.left.type.identifier;
+                if (try self.resolveSymbol(name)) |sym| {
+                    target_slot = self.slotFromSymbol(sym);
+                }
             }
         }
         return .{ .bin_op = .{
@@ -644,6 +671,35 @@ const Lowerer = struct {
             .right = try self.lowerExpression(b.right),
             .target_slot = target_slot,
         } };
+    }
+
+    /// Diagnose an assignment whose LHS is a constant. The parser already
+    /// rejects non-identifier/non-indexer assignment targets, so by the
+    /// time we see one here it's been shape-checked.
+    fn validateAssignTarget(self: *Lowerer, left: *const ast.Expression) Error!void {
+        if (left.type != .identifier) return;
+        const name = left.type.identifier;
+        if (try self.resolveSymbol(name)) |sym| {
+            if (!sym.is_mutable) {
+                try self.errors().add(
+                    self.current_file.path,
+                    "Cannot assign to constant variable '{s}'",
+                    left.token,
+                    .err,
+                    .{name},
+                );
+            }
+            return;
+        }
+        if (self.program.anchors.contains(name)) {
+            try self.errors().add(
+                self.current_file.path,
+                "Cannot assign to constant '{s}'",
+                left.token,
+                .err,
+                .{name},
+            );
+        }
     }
 
     fn lowerIdentifier(self: *Lowerer, name: []const u8, tok: Token) Error!ir.Expr.Kind {
@@ -772,6 +828,9 @@ const Lowerer = struct {
         return .{ .kind = null, .path = bare };
     }
 
+    /// Joins `prefix` and `suffix` segments with ".". The result lives in
+    /// the scratch arena: callers that store it long-term must dupe it
+    /// into the program arena themselves.
     fn joinScopedPath(
         self: *Lowerer,
         prefix: []const []const u8,
@@ -780,7 +839,7 @@ const Lowerer = struct {
         const all = try self.scratchAlloc().alloc([]const u8, prefix.len + suffix.len);
         @memcpy(all[0..prefix.len], prefix);
         @memcpy(all[prefix.len..], suffix);
-        return try std.mem.join(self.arena(), ".", all);
+        return try std.mem.join(self.scratchAlloc(), ".", all);
     }
 
     /// Insert an anchor into `program.anchors`. Returns the canonical
@@ -874,6 +933,7 @@ const Lowerer = struct {
             .visit => |*v| try self.patchAnchor(&v.target, stack, stmt.loc.start),
             .class => |*c| {
                 try self.patchAnchor(&c.anchor, stack, stmt.loc.start);
+                if (c.anchor.kind != null) try self.class_by_path.put(self.scratchAlloc(), c.anchor.path, c);
                 for (c.field_initializers) |e| try self.validateExpr(e, stack);
                 try stack.append(self.scratchAlloc(), c.anchor.path);
                 defer _ = stack.pop();
@@ -914,7 +974,12 @@ const Lowerer = struct {
         stack: *std.ArrayList([]const u8),
         tok: Token,
     ) Error!void {
-        if (f.anchor) |*a| try self.patchAnchor(@constCast(a), stack, tok);
+        if (f.anchor) |*a| {
+            try self.patchAnchor(@constCast(a), stack, tok);
+            if (a.kind != null) {
+                try self.arity_by_path.put(self.scratchAlloc(), a.path, @intCast(f.parameters.len));
+            }
+        }
         try self.validateBody(f.body, stack);
     }
 
@@ -1006,6 +1071,251 @@ const Lowerer = struct {
         }
 
         try self.errors().add(self.current_file.path, "Unknown name '{s}'", tok, .err, .{writer_path});
+    }
+
+    // =======================================================================
+    // Semantic validation pass — diagnostics that need fully-resolved IR
+    // =======================================================================
+
+    /// Walk the now fully-resolved IR to apply semantic checks: arity
+    /// mismatch, instance-field validation, unreachable code, and
+    /// fork-has-no-exit. Reads `self.arity_by_path` and `self.class_by_path`,
+    /// which `validateAnchors` populated during its own walk.
+    fn validateSemantics(self: *Lowerer) Error!void {
+        var stack: std.ArrayList([]const u8) = .empty;
+        defer stack.deinit(self.scratchAlloc());
+        try self.semBody(self.program.body, &stack);
+    }
+
+    fn semBody(
+        self: *Lowerer,
+        stmts: []const ir.Stmt,
+        stack: *std.ArrayList([]const u8),
+    ) Error!void {
+        try self.checkUnreachable(stmts);
+        for (stmts) |*s| try self.semStmt(s, stack);
+    }
+
+    fn semStmt(
+        self: *Lowerer,
+        stmt: *const ir.Stmt,
+        stack: *std.ArrayList([]const u8),
+    ) Error!void {
+        const a = self.scratchAlloc();
+        switch (stmt.kind) {
+            .line => |*l| {
+                for (l.segments) |seg| try self.semSegment(seg, stack);
+            },
+            .choice => |*c| {
+                for (c.segments) |seg| try self.semSegment(seg, stack);
+                try stack.append(a, c.anchor.path);
+                defer _ = stack.pop();
+                try self.semBody(c.body, stack);
+            },
+            .fork => |*f| {
+                // Non-backup fork: warn on each choice with no exit.
+                for (f.body) |*body_stmt| {
+                    if (body_stmt.kind == .choice) {
+                        const choice = body_stmt.kind.choice;
+                        if (!blockExits(choice.body)) {
+                            try self.errors().addWithHelp(
+                                self.current_file.path,
+                                "choice has no divert or 'fin' -- execution will end silently after this choice",
+                                body_stmt.loc.start,
+                                .warn,
+                                .{},
+                                try self.errors().allocator.dupe(u8, "use 'fork^' to continue after the choice, or add a divert '=>' inside the choice body"),
+                                null,
+                            );
+                        }
+                    }
+                }
+                try stack.append(a, f.anchor.path);
+                defer _ = stack.pop();
+                try self.semBody(f.body, stack);
+            },
+            .backup_fork => |*f| {
+                try stack.append(a, f.anchor.path);
+                defer _ = stack.pop();
+                try self.semBody(f.body, stack);
+            },
+            .bough => |*b| {
+                try stack.append(a, b.anchor.path);
+                defer _ = stack.pop();
+                try self.semBody(b.body, stack);
+            },
+            .class => |*c| {
+                for (c.field_initializers) |e| try self.semExpr(e, stack);
+                try stack.append(a, c.anchor.path);
+                defer _ = stack.pop();
+                for (c.methods) |*m| try self.semBody(m.body, stack);
+            },
+            .function => |*f| try self.semBody(f.body, stack),
+            .block => |*b| try self.semBody(b.body, stack),
+            .@"if" => |*i| {
+                try self.semExpr(i.condition, stack);
+                try self.semBody(i.then_branch, stack);
+                if (i.else_branch) |eb| try self.semBody(eb, stack);
+            },
+            .@"while" => |*w| {
+                try self.semExpr(w.condition, stack);
+                try self.semBody(w.body, stack);
+            },
+            .@"for" => |*f| {
+                try self.semExpr(f.iterator, stack);
+                try self.semBody(f.body, stack);
+            },
+            .@"switch" => |*sw| {
+                try self.semExpr(sw.capture, stack);
+                for (sw.prongs) |*p| {
+                    if (p.values) |vs| for (vs) |e| try self.semExpr(e, stack);
+                    try self.semBody(p.body, stack);
+                }
+            },
+            .return_value, .expr_stmt => |e| try self.semExpr(e, stack),
+            .var_decl => |*v| try self.semExpr(v.initializer, stack),
+            .divert, .backup_divert, .visit, .enum_decl,
+            .return_void, .@"break", .@"continue", .fin, .include,
+            => {},
+        }
+    }
+
+    fn semSegment(
+        self: *Lowerer,
+        seg: ir.TextSegment,
+        stack: *std.ArrayList([]const u8),
+    ) Error!void {
+        switch (seg) {
+            .literal => {},
+            .interp => |e| try self.semExpr(e, stack),
+        }
+    }
+
+    fn semExpr(
+        self: *Lowerer,
+        expr: ir.ExprRef,
+        stack: *std.ArrayList([]const u8),
+    ) Error!void {
+        const e: *const ir.Expr = expr;
+        switch (e.kind) {
+            .number, .bool, .nil, .@"extern",
+            .load_local, .load_upvalue, .load_global, .load_const,
+            => {},
+            .text => |segs| for (segs) |seg| try self.semSegment(seg, stack),
+            .list => |xs| for (xs) |x| try self.semExpr(x, stack),
+            .set => |xs| for (xs) |x| try self.semExpr(x, stack),
+            .map => |pairs| for (pairs) |p| {
+                try self.semExpr(p.key, stack);
+                try self.semExpr(p.value, stack);
+            },
+            .range => |*r| {
+                try self.semExpr(r.left, stack);
+                try self.semExpr(r.right, stack);
+            },
+            .bin_op => |*b| {
+                try self.semExpr(b.left, stack);
+                try self.semExpr(b.right, stack);
+            },
+            .un_op => |*u| try self.semExpr(u.operand, stack),
+            .if_expr => |*ie| {
+                try self.semExpr(ie.condition, stack);
+                try self.semExpr(ie.then_value, stack);
+                try self.semExpr(ie.else_value, stack);
+            },
+            .index => |*i| {
+                try self.semExpr(i.target, stack);
+                try self.semExpr(i.index, stack);
+            },
+            .call => |*c| {
+                try self.checkCallArity(c, stack, e.loc.start);
+                try self.semExpr(c.target, stack);
+                for (c.arguments) |arg| try self.semExpr(arg, stack);
+            },
+            .instance => |*ins| {
+                try self.checkInstanceFields(ins, e.loc.start);
+                for (ins.fields) |fe| try self.semExpr(fe, stack);
+            },
+            .builtin => |*bi| for (bi.arguments) |a| try self.semExpr(a, stack),
+        }
+    }
+
+    fn checkCallArity(
+        self: *Lowerer,
+        call: *const ir.Call,
+        stack: *std.ArrayList([]const u8),
+        tok: Token,
+    ) Error!void {
+        const name = callTargetName(call.target) orelse return;
+        const arity = self.lookupArity(name, stack.items) orelse return;
+        if (arity != call.arguments.len) {
+            try self.errors().add(
+                self.current_file.path,
+                "'{s}' expects {d} argument(s), but got {d}",
+                tok,
+                .err,
+                .{ name, arity, call.arguments.len },
+            );
+        }
+    }
+
+    fn lookupArity(self: *Lowerer, name: []const u8, stack: []const []const u8) ?u8 {
+        var i: usize = stack.len;
+        while (i > 0) : (i -= 1) {
+            const candidate = self.joinScopedPath(stack[0..i], &.{name}) catch return null;
+            if (self.arity_by_path.get(candidate)) |a| return a;
+        }
+        return self.arity_by_path.get(name);
+    }
+
+    fn checkInstanceFields(
+        self: *Lowerer,
+        ins: *const ir.Instance,
+        tok: Token,
+    ) Error!void {
+        if (ins.class.kind == null) return; // unresolved; reported elsewhere
+        const class = self.class_by_path.get(ins.class.path) orelse return;
+        for (ins.field_names) |fname| {
+            if (!classHasField(class, fname)) {
+                try self.errors().add(
+                    self.current_file.path,
+                    "Class '{s}' has no field '{s}'",
+                    tok,
+                    .err,
+                    .{ class.name, fname },
+                );
+            }
+        }
+    }
+
+    fn checkUnreachable(self: *Lowerer, stmts: []const ir.Stmt) Error!void {
+        var exited_at: ?usize = null;
+        for (stmts, 0..) |*s, i| {
+            if (exited_at == null and statementExits(s)) {
+                exited_at = i;
+                break;
+            }
+        }
+        if (exited_at) |i| {
+            for (stmts[i + 1 ..]) |*next| {
+                if (next.kind != .bough) {
+                    const note: ?[]const u8 = switch (stmts[i].kind) {
+                        .@"if" => try self.errors().allocator.dupe(u8, "all branches of this 'if' exit"),
+                        .@"switch" => try self.errors().allocator.dupe(u8, "all prongs of this 'switch' exit"),
+                        else => null,
+                    };
+                    try self.errors().addWithHelp(
+                        self.current_file.path,
+                        "Unreachable code after '{s}'",
+                        next.loc.start,
+                        .warn,
+                        .{exitKeyword(&stmts[i])},
+                        null,
+                        note,
+                    );
+                    break;
+                }
+            }
+        }
     }
 
     // =======================================================================
@@ -1125,6 +1435,68 @@ fn inferExprType(expr: *const ast.Expression) VarType {
         .nil => .nil,
         else => .unknown,
     };
+}
+
+fn statementExits(stmt: *const ir.Stmt) bool {
+    return switch (stmt.kind) {
+        .return_value, .return_void, .fin, .fork, .divert => true,
+        .backup_fork, .backup_divert => false,
+        .@"if" => |i| i.else_branch != null and
+            blockExits(i.then_branch) and
+            blockExits(i.else_branch.?),
+        .@"switch" => |s| switchAlwaysExits(s.prongs),
+        else => false,
+    };
+}
+
+fn switchAlwaysExits(prongs: []const ir.Prong) bool {
+    var has_explicit_else = false;
+    for (prongs) |p| {
+        if (p.values == null) has_explicit_else = true;
+        if (!blockExits(p.body)) return false;
+    }
+    return has_explicit_else;
+}
+
+fn blockExits(body: []const ir.Stmt) bool {
+    for (body) |*s| {
+        if (statementExits(s)) return true;
+    }
+    return false;
+}
+
+fn exitKeyword(stmt: *const ir.Stmt) []const u8 {
+    return switch (stmt.kind) {
+        .return_value, .return_void => "return",
+        .fin => "fin",
+        .divert, .backup_divert => "divert",
+        .fork, .backup_fork => "fork",
+        .@"if" => "if",
+        .@"switch" => "switch",
+        else => "",
+    };
+}
+
+fn callTargetName(target: ir.ExprRef) ?[]const u8 {
+    return switch (target.kind) {
+        .load_local => |l| l.name,
+        .load_global => |g| g.name,
+        .load_upvalue => |u| u.name,
+        .load_const => |lc| lastPathSegment(lc.target.path),
+        else => null,
+    };
+}
+
+fn lastPathSegment(path: []const u8) []const u8 {
+    if (std.mem.lastIndexOfScalar(u8, path, '.')) |i| return path[i + 1 ..];
+    return path;
+}
+
+fn classHasField(class: *const ir.ClassDecl, name: []const u8) bool {
+    for (class.field_names) |fname| {
+        if (std.mem.eql(u8, fname, name)) return true;
+    }
+    return false;
 }
 
 fn isAssignOp(op: ast.BinaryOp) bool {

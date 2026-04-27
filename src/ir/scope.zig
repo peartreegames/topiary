@@ -19,7 +19,7 @@ pub const Scope = struct {
     tag: Tag,
 
     count: u32 = 0,
-    symbols: std.StringArrayHashMapUnmanaged(*Symbol),
+    symbols: std.array_hash_map.String(*Symbol),
 
     pub const Tag = union(enum(u4)) {
         global,
