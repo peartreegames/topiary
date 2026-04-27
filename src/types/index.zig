@@ -10,6 +10,8 @@ pub const Iterator = value.Iterator;
 pub const Type = value.Type;
 pub const OnValueChanged = value.OnValueChanged;
 
+pub const VarType = @import("var_type.zig").VarType;
+
 pub const Class = @import("class.zig").Class;
 pub const Function = @import("function.zig").Function;
 pub const Enum = @import("enum.zig").Enum;

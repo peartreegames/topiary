@@ -8,7 +8,7 @@ const err = @import("error.zig");
 pub const CompilerErr = err.CompilerErr;
 pub const CompilerErrors = err.CompilerErrors;
 
-const scope = @import("scope.zig");
+const scope = @import("../ir/scope.zig");
 const Symbol = scope.Symbol;
 
 const compiler = @import("compiler.zig");

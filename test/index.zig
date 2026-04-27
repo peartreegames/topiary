@@ -10,6 +10,7 @@ pub const exp = @import("export.test.zig");
 pub const formatter = @import("formatter.test.zig");
 pub const fuzz = @import("fuzz.test.zig");
 pub const serialization = @import("serialization.test.zig");
+pub const ir = @import("ir.test.zig");
 
 test {
     std.testing.refAllDecls(@This());

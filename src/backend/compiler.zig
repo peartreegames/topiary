@@ -21,7 +21,7 @@ const Value = types.Value;
 const Function = types.Function;
 const Anchor = types.Anchor;
 
-const scope = @import("scope.zig");
+const scope = @import("../ir/scope.zig");
 const Scope = scope.Scope;
 const Symbol = scope.Symbol;
 

@@ -3,17 +3,7 @@ const utils = @import("../utils/index.zig");
 const C = utils.C;
 const UUID = utils.UUID;
 
-pub const VarType = union(enum) {
-    unknown,
-    number,
-    boolean,
-    nil,
-    string,
-    list,
-    set,
-    map,
-    instance: []const u8,
-};
+pub const VarType = @import("../types/var_type.zig").VarType;
 
 pub const Symbol = struct {
     index: C.GLOBAL,
