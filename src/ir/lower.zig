@@ -119,6 +119,14 @@ const Lowerer = struct {
     fn errors(self: *Lowerer) *CompilerErrors {
         return &self.module.errors;
     }
+    /// Resolves the file path for a token's `file_index`. Validation passes
+    /// can't rely on `current_file` because that points at whatever file
+    /// the emit walk last visited; IR nodes live across multiple included
+    /// files.
+    fn pathForTok(self: *Lowerer, tok: Token) []const u8 {
+        if (tok.file_index < self.program.files.len) return self.program.files[tok.file_index];
+        return self.current_file.path;
+    }
 
     // =======================================================================
     // Top-level orchestration
@@ -150,7 +158,12 @@ const Lowerer = struct {
         var i: usize = 0;
         while (it.next()) |kv| : (i += 1) {
             const idx = self.module.includes.getIndex(kv.key_ptr.*) orelse i;
-            files[idx] = try self.arena().dupe(u8, kv.value_ptr.*.path);
+            // Borrow `File.path` directly — it lives in the module's arena,
+            // which outlives the Program. These slices are passed into
+            // `CompilerErrors`; storing them in the program arena would
+            // dangle once a caller deinits the Program before reading
+            // `module.errors`.
+            files[idx] = kv.value_ptr.*.path;
         }
         self.program.files = files;
     }
@@ -1070,7 +1083,7 @@ const Lowerer = struct {
             return;
         }
 
-        try self.errors().add(self.current_file.path, "Unknown name '{s}'", tok, .err, .{writer_path});
+        try self.errors().add(self.pathForTok(tok), "Unknown name '{s}'", tok, .err, .{writer_path});
     }
 
     // =======================================================================
@@ -1119,7 +1132,7 @@ const Lowerer = struct {
                         const choice = body_stmt.kind.choice;
                         if (!blockExits(choice.body)) {
                             try self.errors().addWithHelp(
-                                self.current_file.path,
+                                self.pathForTok(body_stmt.loc.start),
                                 "choice has no divert or 'fin' -- execution will end silently after this choice",
                                 body_stmt.loc.start,
                                 .warn,
@@ -1249,7 +1262,7 @@ const Lowerer = struct {
         const arity = self.lookupArity(name, stack.items) orelse return;
         if (arity != call.arguments.len) {
             try self.errors().add(
-                self.current_file.path,
+                self.pathForTok(tok),
                 "'{s}' expects {d} argument(s), but got {d}",
                 tok,
                 .err,
@@ -1277,7 +1290,7 @@ const Lowerer = struct {
         for (ins.field_names) |fname| {
             if (!classHasField(class, fname)) {
                 try self.errors().add(
-                    self.current_file.path,
+                    self.pathForTok(tok),
                     "Class '{s}' has no field '{s}'",
                     tok,
                     .err,
@@ -1304,7 +1317,7 @@ const Lowerer = struct {
                         else => null,
                     };
                     try self.errors().addWithHelp(
-                        self.current_file.path,
+                        self.pathForTok(next.loc.start),
                         "Unreachable code after '{s}'",
                         next.loc.start,
                         .warn,
