@@ -347,6 +347,116 @@ test "diagnostic: instance with valid fields is fine" {
     try testing.expect(!hasError(result.mod, "has no field", .err));
 }
 
+test "diagnostic: class field literal defaults are accepted" {
+    var result = try lowerSource(
+        \\class A {
+        \\    n = 0,
+        \\    b = true,
+        \\    nothing = nil,
+        \\    s = "hello",
+        \\    items = List{1, 2, 3}
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "Only literal values", .err));
+    try testing.expect(!hasError(result.mod, "Interpolated strings", .err));
+}
+
+test "diagnostic: class field arithmetic on literals is accepted" {
+    var result = try lowerSource(
+        \\class A {
+        \\    radius = 5,
+        \\    diameter = 5 * 2,
+        \\    sign = -1,
+        \\    flag = !true
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "Only literal values", .err));
+}
+
+test "diagnostic: class field enum reference is accepted" {
+    var result = try lowerSource(
+        \\enum Status { ACTIVE, IDLE }
+        \\class A {
+        \\    state = Status.ACTIVE
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "Only literal values", .err));
+}
+
+test "diagnostic: class field interpolated string errors" {
+    var result = try lowerSource(
+        \\class A {
+        \\    name = "world",
+        \\    greeting = "hi {name}"
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Interpolated strings are not allowed as static default values", .err));
+}
+
+test "diagnostic: class field with function call errors" {
+    var result = try lowerSource(
+        \\fn compute || return 5
+        \\class A {
+        \\    val = compute()
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Only literal values are allowed here", .err));
+}
+
+test "diagnostic: class field referencing variable errors" {
+    var result = try lowerSource(
+        \\var counter = 0
+        \\class A {
+        \\    seed = counter
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Only literal values are allowed here", .err));
+}
+
+test "diagnostic: class field referencing another class instance is accepted" {
+    var result = try lowerSource(
+        \\class Inner { v = 1 }
+        \\class Outer {
+        \\    nested = new Inner{}
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "Only literal values", .err));
+}
+
+test "diagnostic: class field with non-literal inside list errors" {
+    var result = try lowerSource(
+        \\fn pick || return 1
+        \\class A {
+        \\    items = List{1, pick(), 3}
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Only literal values are allowed here", .err));
+}
+
 test "diagnostic: unreachable code after fin warns" {
     var result = try lowerSource(
         \\=== Main {
@@ -507,6 +617,173 @@ test "diagnostic: dot-access on number rejects field access" {
     var program = result.program;
     defer program.deinit();
     try testing.expect(hasError(result.mod, "Cannot access field 'foo' on a number", .err));
+}
+
+test "diagnostic: enum value access errors on unknown value" {
+    var result = try lowerSource(
+        \\enum E { A, B }
+        \\=== Main {
+        \\    var z = E.C
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Enum 'E' does not contain a value 'C'", .err));
+}
+
+test "diagnostic: enum value access on valid value is silent" {
+    var result = try lowerSource(
+        \\enum E { A, B }
+        \\=== Main {
+        \\    var z = E.A
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "does not contain", .err));
+}
+
+test "diagnostic: class-as-constant unknown field errors" {
+    var result = try lowerSource(
+        \\class C { x = 0 }
+        \\=== Main {
+        \\    var z = C.bogus
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Class 'C' does not contain a field 'bogus'", .err));
+}
+
+test "diagnostic: class-as-constant valid method called directly is silent" {
+    var result = try lowerSource(
+        \\class C {
+        \\    x = 0,
+        \\    fn foo || { return 1 }
+        \\}
+        \\=== Main {
+        \\    var z = C.foo()
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "does not contain", .err));
+    try testing.expect(!hasError(result.mod, "Cannot store", .err));
+}
+
+test "diagnostic: storing top-level function as value errors" {
+    var result = try lowerSource(
+        \\fn sum |x, y| return x + y
+        \\=== Main {
+        \\    var f = sum
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Cannot store function 'sum' as a value", .err));
+}
+
+test "diagnostic: reassigning a variable to a function errors" {
+    var result = try lowerSource(
+        \\fn sum |x, y| return x + y
+        \\fn product |x, y| return x * y
+        \\=== Main {
+        \\    var f = sum(0, 0)
+        \\    f = product
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Cannot store function 'product' as a value", .err));
+}
+
+test "diagnostic: storing class method as value errors" {
+    var result = try lowerSource(
+        \\class C {
+        \\    x = 0,
+        \\    fn foo || { return 1 }
+        \\}
+        \\=== Main {
+        \\    var z = C.foo
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Cannot store method 'foo' as a value", .err));
+}
+
+test "diagnostic: storing instance method as value errors" {
+    var result = try lowerSource(
+        \\class C {
+        \\    x = 0,
+        \\    fn foo || { return 1 }
+        \\}
+        \\var c = new C{}
+        \\=== Main {
+        \\    var z = c.foo
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Cannot store method 'foo' as a value", .err));
+}
+
+test "diagnostic: function as call argument is silent" {
+    var result = try lowerSource(
+        \\fn double |x| return x * 2
+        \\fn apply |f, x| return f(x)
+        \\=== Main {
+        \\    var n = apply(double, 5)
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "Cannot store", .err));
+}
+
+test "diagnostic: function in list literal errors" {
+    var result = try lowerSource(
+        \\fn sum |x, y| return x + y
+        \\=== Main {
+        \\    var fns = List{sum}
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Cannot store function 'sum' as a value", .err));
+}
+
+test "diagnostic: returning a function value errors" {
+    var result = try lowerSource(
+        \\fn sum |x, y| return x + y
+        \\fn pick || {
+        \\    return sum
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Cannot store function 'sum' as a value", .err));
 }
 
 test "diagnostic: dot-access on unknown type is silent" {

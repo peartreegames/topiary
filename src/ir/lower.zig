@@ -74,6 +74,8 @@ const Lowerer = struct {
     arity_by_path: std.array_hash_map.String(u8),
     /// Class metadata by anchor path. Same lifecycle as arity_by_path.
     class_by_path: std.array_hash_map.String(*const ir.ClassDecl),
+    /// Enum metadata by anchor path. Same lifecycle as arity_by_path.
+    enum_by_path: std.array_hash_map.String(*const ir.EnumDecl),
 
     fn init(parent_alloc: std.mem.Allocator, module: *Module) !Lowerer {
         var program = ir.Program.init(parent_alloc);
@@ -95,6 +97,7 @@ const Lowerer = struct {
             .seen_files = .empty,
             .arity_by_path = .empty,
             .class_by_path = .empty,
+            .enum_by_path = .empty,
         };
     }
 
@@ -461,13 +464,17 @@ const Lowerer = struct {
         // Define the symbol in the *current* scope so callers in the same
         // scope can resolve it.
         const fn_sym = self.scope.define(self.scratchAlloc(), f.name, false) catch null;
+        if (fn_sym) |s| s.var_type = .function_type;
 
         try self.enterScope(.function);
         defer self.exitScope();
 
         // The function's own name binds inside the body for self-recursion.
         const inner_self = self.scope.define(self.scratchAlloc(), f.name, false) catch null;
-        if (inner_self) |s| s.tag = .function;
+        if (inner_self) |s| {
+            s.tag = .function;
+            s.var_type = .function_type;
+        }
 
         const params = try self.arena().alloc(ir.Parameter, f.parameters.len);
         for (f.parameters, 0..) |pname, i| {
@@ -622,6 +629,19 @@ const Lowerer = struct {
                 .local => |l| l.var_type,
                 .upvalue => |u| u.var_type,
                 .global => |g| g.var_type,
+            },
+            // `kind` may be null at lowering time for forward-referenced
+            // anchors; validateAnchors patches it later but this load's
+            // var_type is already frozen, so forward refs stay `.unknown`
+            // (silently permissive — matches Part B's posture).
+            .load_const => |lc| blk: {
+                const k = lc.target.kind orelse break :blk .unknown;
+                break :blk switch (k) {
+                    .@"enum" => .{ .enum_type = lc.target.path },
+                    .class => .{ .class_type = lc.target.path },
+                    .function, .extern_function => .function_type,
+                    else => .unknown,
+                };
             },
             else => .unknown,
         };
@@ -978,7 +998,11 @@ const Lowerer = struct {
                 defer _ = stack.pop();
                 for (c.methods) |*m| try self.validateFunction(@constCast(m), stack, stmt.loc.start);
             },
-            .enum_decl => |*e| try self.patchAnchor(&e.anchor, stack, stmt.loc.start),
+            .enum_decl => |*e| {
+                try self.patchAnchor(&e.anchor, stack, stmt.loc.start);
+                if (e.anchor.kind != null)
+                    try self.enum_by_path.put(self.scratchAlloc(), e.anchor.path, e);
+            },
             .block => |*b| try self.validateBody(b.body, stack),
             .@"if" => |*i| {
                 try self.validateExpr(i.condition, stack);
@@ -1183,7 +1207,11 @@ const Lowerer = struct {
                 try self.semBody(b.body, stack);
             },
             .class => |*c| {
-                for (c.field_initializers) |e| try self.semExpr(e, stack);
+                for (c.field_initializers) |e| {
+                    try self.checkNotFunctionRef(e, e.loc.start);
+                    try self.checkStaticInitializer(e);
+                    try self.semExpr(e, stack);
+                }
                 try stack.append(a, c.anchor.path);
                 defer _ = stack.pop();
                 for (c.methods) |*m| try self.semBody(m.body, stack);
@@ -1210,8 +1238,15 @@ const Lowerer = struct {
                     try self.semBody(p.body, stack);
                 }
             },
-            .return_value, .expr_stmt => |e| try self.semExpr(e, stack),
-            .var_decl => |*v| try self.semExpr(v.initializer, stack),
+            .return_value => |e| {
+                try self.checkNotFunctionRef(e, e.loc.start);
+                try self.semExpr(e, stack);
+            },
+            .expr_stmt => |e| try self.semExpr(e, stack),
+            .var_decl => |*v| {
+                try self.checkNotFunctionRef(v.initializer, v.initializer.loc.start);
+                try self.semExpr(v.initializer, stack);
+            },
             .divert, .backup_divert, .visit, .enum_decl,
             .return_void, .@"break", .@"continue", .fin, .include,
             => {},
@@ -1238,10 +1273,17 @@ const Lowerer = struct {
         switch (e.kind) {
             .number, .bool, .nil, .@"extern", .load, .load_const => {},
             .text => |segs| for (segs) |seg| try self.semSegment(seg, stack),
-            .list => |xs| for (xs) |x| try self.semExpr(x, stack),
-            .set => |xs| for (xs) |x| try self.semExpr(x, stack),
+            .list => |xs| for (xs) |x| {
+                try self.checkNotFunctionRef(x, x.loc.start);
+                try self.semExpr(x, stack);
+            },
+            .set => |xs| for (xs) |x| {
+                try self.checkNotFunctionRef(x, x.loc.start);
+                try self.semExpr(x, stack);
+            },
             .map => |pairs| for (pairs) |p| {
                 try self.semExpr(p.key, stack);
+                try self.checkNotFunctionRef(p.value, p.value.loc.start);
                 try self.semExpr(p.value, stack);
             },
             .range => |*r| {
@@ -1249,6 +1291,8 @@ const Lowerer = struct {
                 try self.semExpr(r.right, stack);
             },
             .bin_op => |*b| {
+                if (isAssignOp(b.op))
+                    try self.checkNotFunctionRef(b.right, b.right.loc.start);
                 try self.semExpr(b.left, stack);
                 try self.semExpr(b.right, stack);
             },
@@ -1273,7 +1317,10 @@ const Lowerer = struct {
             },
             .instance => |*ins| {
                 try self.checkInstanceFields(ins, e.loc.start);
-                for (ins.fields) |fe| try self.semExpr(fe, stack);
+                for (ins.fields) |fe| {
+                    try self.checkNotFunctionRef(fe, fe.loc.start);
+                    try self.semExpr(fe, stack);
+                }
             },
             .builtin => |*bi| for (bi.arguments) |a| try self.semExpr(a, stack),
         }
@@ -1391,7 +1438,170 @@ const Lowerer = struct {
                     .{ f.name, type_name },
                 );
             },
+            .enum_type => |path| {
+                const e = self.enum_by_path.get(path) orelse return;
+                for (e.values) |v| if (std.mem.eql(u8, v, f.name)) return;
+                try self.errors().add(
+                    self.pathForTok(tok),
+                    "Enum '{s}' does not contain a value '{s}'",
+                    tok,
+                    .err,
+                    .{ e.name, f.name },
+                );
+            },
+            .class_type => |path| {
+                const c = self.class_by_path.get(path) orelse return;
+                if (classHasField(c, f.name)) return;
+                if (classHasMethod(c, f.name)) return;
+                try self.errors().add(
+                    self.pathForTok(tok),
+                    "Class '{s}' does not contain a field '{s}'",
+                    tok,
+                    .err,
+                    .{ c.name, f.name },
+                );
+            },
+            .function_type => {
+                try self.errors().add(
+                    self.pathForTok(tok),
+                    "Cannot access field '{s}' on a function",
+                    tok,
+                    .err,
+                    .{f.name},
+                );
+            },
             .unknown => {},
+        }
+    }
+
+    /// True when `expr` evaluates to a function value: a bare reference
+    /// to a top-level function or extern fn, or a method-as-value
+    /// (`Class.method` / `instance.method` without a call). Used to
+    /// reject storing such values, since `runtime/state.zig` can't
+    /// round-trip them through save/load.
+    fn isFunctionRef(self: *const Lowerer, expr: ir.ExprRef) bool {
+        if (expr.var_type == .function_type) return true;
+        return switch (expr.kind) {
+            .field => |f| blk: {
+                const class_path = switch (f.target.var_type) {
+                    .instance => |p| p,
+                    .class_type => |p| p,
+                    else => break :blk false,
+                };
+                const class = self.class_by_path.get(class_path) orelse break :blk false;
+                break :blk classHasMethod(class, f.name);
+            },
+            else => false,
+        };
+    }
+
+    /// Emit a diagnostic if `expr` would store a function as a value.
+    /// Allowed positions (call target, call argument) skip this check.
+    fn checkNotFunctionRef(self: *Lowerer, expr: ir.ExprRef, tok: Token) Error!void {
+        if (!self.isFunctionRef(expr)) return;
+        const fn_note = try self.errors().allocator.dupe(u8, "functions are not preserved across save/load — use them only as call targets or call arguments");
+        const method_note = "methods are not preserved across save/load — call them directly instead";
+        switch (expr.kind) {
+            .load_const => |lc| try self.errors().addWithHelp(
+                self.pathForTok(tok),
+                "Cannot store function '{s}' as a value",
+                tok,
+                .err,
+                .{lc.target.path},
+                null,
+                fn_note,
+            ),
+            .load => |s| {
+                const name = switch (s) {
+                    .local => |l| l.name,
+                    .upvalue => |u| u.name,
+                    .global => |g| g.name,
+                };
+                try self.errors().addWithHelp(
+                    self.pathForTok(tok),
+                    "Cannot store function '{s}' as a value",
+                    tok,
+                    .err,
+                    .{name},
+                    null,
+                    fn_note,
+                );
+            },
+            .field => |f| {
+                self.errors().allocator.free(fn_note);
+                try self.errors().addWithHelp(
+                    self.pathForTok(tok),
+                    "Cannot store method '{s}' as a value",
+                    tok,
+                    .err,
+                    .{f.name},
+                    null,
+                    try self.errors().allocator.dupe(u8, method_note),
+                );
+            },
+            else => {
+                self.errors().allocator.free(fn_note);
+                unreachable;
+            },
+        }
+    }
+
+    /// Reject class field initializers that aren't a literal-shape
+    /// expression (numbers, bools, nil, non-interpolated strings,
+    /// recursive lists/sets/maps/ranges of literals, arithmetic on
+    /// numbers, references to other compile-time constants, enum/class
+    /// dot-access, or `new C{}`). The actual evaluation into a runtime
+    /// `Value` stays in codegen — this is a structural pre-check only.
+    fn checkStaticInitializer(self: *Lowerer, expr: ir.ExprRef) Error!void {
+        switch (expr.kind) {
+            // Literals + references to compile-time constants.
+            .number, .bool, .nil, .load_const => {},
+            .text => |segs| for (segs) |seg| switch (seg) {
+                .literal => {},
+                .interp => {
+                    try self.errors().add(
+                        self.pathForTok(expr.loc.start),
+                        "Interpolated strings are not allowed as static default values",
+                        expr.loc.start,
+                        .err,
+                        .{},
+                    );
+                    return;
+                },
+            },
+            // Recursive cases.
+            .list => |xs| for (xs) |x| try self.checkStaticInitializer(x),
+            .set => |xs| for (xs) |x| try self.checkStaticInitializer(x),
+            .map => |pairs| for (pairs) |p| {
+                try self.checkStaticInitializer(p.key);
+                try self.checkStaticInitializer(p.value);
+            },
+            .range => |r| {
+                try self.checkStaticInitializer(r.left);
+                try self.checkStaticInitializer(r.right);
+            },
+            .bin_op => |b| {
+                try self.checkStaticInitializer(b.left);
+                try self.checkStaticInitializer(b.right);
+            },
+            .un_op => |u| try self.checkStaticInitializer(u.operand),
+            // `Enum.Value` / `Class.field` — recurse into target.
+            .field => |f| try self.checkStaticInitializer(f.target),
+            // `new C{...}` — recurse into each field.
+            .instance => |ins| for (ins.fields) |fe| try self.checkStaticInitializer(fe),
+            // Everything else is non-static: variable loads, calls,
+            // computed indexers, if-expressions, builtins.
+            .load, .if_expr, .index, .call, .builtin, .@"extern" => {
+                try self.errors().addWithHelp(
+                    self.pathForTok(expr.loc.start),
+                    "Only literal values are allowed here",
+                    expr.loc.start,
+                    .err,
+                    .{},
+                    null,
+                    try self.errors().allocator.dupe(u8, "class field defaults must be numbers, strings, bools, nil, or lists/sets/maps of literals"),
+                );
+            },
         }
     }
 

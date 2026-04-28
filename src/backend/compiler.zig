@@ -458,6 +458,11 @@ pub const Compiler = struct {
                     .{ .end = index_token },
                 );
             },
+            // Enum / class / function names take the constants_map
+            // dispatch above (compiler.zig:1816+) or the call-site
+            // path; their var_type tags exist for the IR validator
+            // and aren't reached here in practice.
+            .enum_type, .class_type, .function_type => {},
             .unknown => {},
         }
     }
