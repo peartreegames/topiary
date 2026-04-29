@@ -83,9 +83,18 @@ pub const Codegen = struct {
         program: *const ir.Program,
     ) !Bytecode {
         var arena = std.heap.ArenaAllocator.init(alloc);
-        errdefer arena.deinit();
-        const root_scope = try Scope.create(arena.allocator(), null, .global);
-        const emitter = try Emitter.init(alloc, module);
+        // Pre-cg failure paths need explicit cleanup since cg.deinit isn't
+        // deferred yet. Once cg owns arena+emitter, defer cg.deinit() is
+        // the sole owner — using errdefer here would double-free with the
+        // defer on the error path.
+        const root_scope = Scope.create(arena.allocator(), null, .global) catch |e| {
+            arena.deinit();
+            return e;
+        };
+        const emitter = Emitter.init(alloc, module) catch |e| {
+            arena.deinit();
+            return e;
+        };
 
         var cg: Codegen = .{
             .alloc = alloc,

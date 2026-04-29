@@ -118,7 +118,14 @@ pub const Module = struct {
 
         // Phase 3: Compile (or codegen-from-IR behind the flag).
         const result = if (backend.use_ir_codegen) blk: {
-            var program = try ir.lower(allocator, self);
+            // Parent the IR program's arena on the module's arena. The
+            // bytecode constants borrow strings from the IR (anchor
+            // paths, tag names, extern function names, identifier
+            // constants), so those buffers must outlive the bytecode.
+            // Module.arena outlives both, and ArenaAllocator.free is a
+            // no-op, so `program.deinit()` safely returns memory to the
+            // module's arena where it's reclaimed at module deinit.
+            var program = try ir.lower(self.arena.allocator(), self);
             defer program.deinit();
             // TODO(step-12 cut-over): IR lowering / validation collect
             // diagnostics on `module.errors` without short-circuiting,
