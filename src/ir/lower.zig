@@ -494,7 +494,9 @@ const Lowerer = struct {
 
         const params = try self.arena().alloc(ir.Parameter, f.parameters.len);
         for (f.parameters, 0..) |pname, i| {
-            const psym = self.scope.define(self.scratchAlloc(), pname, false) catch |e| switch (e) {
+            // Parameters are mutable bindings — the body may reassign
+            // them (e.g. `while count > 0 { count -= 1 }`).
+            const psym = self.scope.define(self.scratchAlloc(), pname, true) catch |e| switch (e) {
                 error.SymbolAlreadyDeclared => {
                     try self.errors().add(self.current_file.path, "Duplicate parameter '{s}'", tok, .err, .{pname});
                     continue;
