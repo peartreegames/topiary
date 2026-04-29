@@ -8,12 +8,6 @@ const err = @import("error.zig");
 pub const CompilerErr = err.CompilerErr;
 pub const CompilerErrors = err.CompilerErrors;
 
-const scope = @import("../ir/scope.zig");
-const Symbol = scope.Symbol;
-
-const compiler = @import("compiler.zig");
-pub const Compiler = compiler.Compiler;
-
 pub const emit = @import("emit.zig");
 pub const codegen = @import("codegen.zig");
 pub const Codegen = codegen.Codegen;

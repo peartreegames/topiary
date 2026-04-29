@@ -8,10 +8,7 @@ const Function = topi.types.Function;
 
 const Errors = topi.backend.CompilerErrors;
 const Bytecode = topi.backend.Bytecode;
-const Compiler = topi.backend.Compiler;
 const OpCode = topi.backend.OpCode;
-const Scope = topi.backend.Scope;
-const Symbol = topi.backend.Symbol;
 const builtins = topi.runtime.builtins;
 
 const parseSource = @import("parser.test.zig").parseSource;
