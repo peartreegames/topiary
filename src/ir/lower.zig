@@ -482,6 +482,16 @@ const Lowerer = struct {
 
         try self.enterScope(.function);
 
+        // Methods receive an implicit `self` as the first parameter at
+        // runtime — define it in the IR's function scope so identifier
+        // resolution inside the body finds it.
+        if (f.is_method) {
+            _ = self.scope.define(self.scratchAlloc(), "self", false) catch |e| switch (e) {
+                error.SymbolAlreadyDeclared => {},
+                error.OutOfMemory => return error.OutOfMemory,
+            };
+        }
+
         const params = try self.arena().alloc(ir.Parameter, f.parameters.len);
         for (f.parameters, 0..) |pname, i| {
             const psym = self.scope.define(self.scratchAlloc(), pname, false) catch |e| switch (e) {
@@ -500,13 +510,10 @@ const Lowerer = struct {
         const body = try self.lowerBody(f.body);
 
         // Capture locals_count BEFORE exitScope — the function scope's
-        // own count still includes parameters / inner_self / top-level
+        // own count still includes parameters / `self` / top-level
         // var_decls in the body, while `self.locals_count` holds the
         // high-water mark from any nested local scopes inside the body.
-        // Methods receive an implicit `self` as their first parameter
-        // at runtime; the IR scope doesn't track it, so add one.
-        var fn_locals_count = @max(self.scope.count, self.locals_count);
-        if (f.is_method) fn_locals_count += 1;
+        const fn_locals_count = @max(self.scope.count, self.locals_count);
         self.exitScope();
         self.locals_count = saved_locals_count;
 
