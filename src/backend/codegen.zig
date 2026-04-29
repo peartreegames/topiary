@@ -28,6 +28,9 @@ const UUID = utils.UUID;
 const types = @import("../types/index.zig");
 const Value = types.Value;
 const Anchor = types.Anchor;
+const Function = types.Function;
+const Class = types.Class;
+const Enum = types.Enum;
 
 const builtins = @import("../runtime/index.zig").builtins;
 
@@ -273,11 +276,271 @@ pub const Codegen = struct {
             .@"while" => |w| try self.compileWhile(w, token),
             .@"for" => |f| try self.compileFor(f, token),
             .@"switch" => |s| try self.compileSwitch(s, token),
+            .function => |f| try self.compileFunctionStmt(f, token),
+            .class => |c| try self.compileClassStmt(c, token),
+            .enum_decl => |e| try self.compileEnumStmt(e, token),
             .include => {
                 // Lowering inlined the included statements directly into
                 // body; the marker has nothing to emit.
             },
             else => return error.NotYetImplemented,
+        }
+    }
+
+    fn compileFunctionStmt(self: *Codegen, f: ir.FunctionDecl, token: Token) Error!void {
+        // Extern functions: prepass already added the extern Value.Obj
+        // as a separate constant. The named .nil placeholder remains
+        // .nil — matching the AST compiler's behavior.
+        if (f.is_extern) return;
+        const obj = try self.compileFunctionToObj(f, token);
+        if (f.anchor) |a| {
+            self.emitter.replaceConstant(a.path, .{ .obj = obj }) catch {};
+        }
+        // Nested-function bindings (name_slot != null) are not yet
+        // supported in this codegen — they require an explicit closure
+        // emission path. Leaving the obj orphaned would leak; the
+        // current AST compiler also doesn't emit closures, so we mirror
+        // that gap. If the IR ever lowers a true nested function, this
+        // path will need extending.
+    }
+
+    fn compileFunctionToObj(self: *Codegen, f: ir.FunctionDecl, token: Token) Error!*Value.Obj {
+        try self.emitter.enterChunk();
+
+        for (f.body) |*s| try self.compileStmt(s);
+
+        // Ensure every function ends with a return — matches the AST
+        // compiler at compiler.zig:1346.
+        if (!(try self.emitter.lastIs(.return_value)) and !(try self.emitter.lastIs(.return_void))) {
+            try self.emitter.writeOp(.return_void, token);
+        }
+
+        const chunk = try self.emitter.exitChunk();
+        defer chunk.deinit();
+
+        // Methods receive an implicit `self` as the first parameter —
+        // bumps reported arity by one.
+        var arity: u8 = @intCast(f.parameters.len);
+        if (f.is_method) arity += 1;
+
+        const obj = try self.alloc.create(Value.Obj);
+        errdefer self.alloc.destroy(obj);
+        obj.* = .{
+            .id = UUID.new(),
+            .data = .{
+                .function = .{
+                    .name = if (f.name.len > 0) try self.alloc.dupe(u8, f.name) else null,
+                    .arity = arity,
+                    .is_method = f.is_method,
+                    .instructions = try chunk.instructions.toOwnedSlice(self.alloc),
+                    .debug_info = try chunk.debugInfo(self.alloc),
+                    .locals_count = f.locals_count,
+                },
+            },
+        };
+        return obj;
+    }
+
+    fn compileClassStmt(self: *Codegen, c: ir.ClassDecl, token: Token) Error!void {
+        const class_name = try self.alloc.dupe(u8, c.name);
+        errdefer self.alloc.free(class_name);
+
+        var fields = try self.alloc.alloc(Class.Member, c.field_names.len);
+        errdefer self.alloc.free(fields);
+        var fields_filled: usize = 0;
+        errdefer {
+            for (fields[0..fields_filled]) |m| {
+                self.alloc.free(m.name);
+                m.value.destroyStatic(self.alloc);
+            }
+        }
+        for (c.field_names, c.field_initializers, 0..) |name, init_expr, i| {
+            const value = try self.evaluateLiteral(init_expr);
+            errdefer value.destroyStatic(self.alloc);
+            const dup_name = try self.alloc.dupe(u8, name);
+            fields[i] = .{ .name = dup_name, .value = value };
+            fields_filled = i + 1;
+        }
+
+        var methods = try self.alloc.alloc(Class.Member, c.methods.len);
+        errdefer self.alloc.free(methods);
+        var methods_filled: usize = 0;
+        errdefer {
+            for (methods[0..methods_filled]) |m| {
+                self.alloc.free(m.name);
+                m.value.destroy(self.alloc);
+            }
+        }
+        for (c.methods, 0..) |method, i| {
+            const fn_obj = try self.compileFunctionToObj(method, token);
+            errdefer (Value{ .obj = fn_obj }).destroy(self.alloc);
+            const dup_name = try self.alloc.dupe(u8, method.name);
+            methods[i] = .{ .name = dup_name, .value = .{ .obj = fn_obj } };
+            methods_filled = i + 1;
+        }
+
+        const class_data = try Class.init(class_name, fields, methods);
+        const obj = try self.alloc.create(Value.Obj);
+        errdefer self.alloc.destroy(obj);
+        obj.* = .{
+            .id = UUID.new(),
+            .data = .{ .class = class_data },
+        };
+        self.emitter.replaceConstant(c.anchor.path, .{ .obj = obj }) catch {};
+    }
+
+    fn compileEnumStmt(self: *Codegen, e: ir.EnumDecl, token: Token) Error!void {
+        _ = token;
+        var values = try self.alloc.alloc([]const u8, e.values.len);
+        errdefer self.alloc.free(values);
+        var values_filled: usize = 0;
+        errdefer for (values[0..values_filled]) |v| self.alloc.free(v);
+
+        for (e.values, 0..) |v, i| {
+            values[i] = try self.alloc.dupe(u8, v);
+            values_filled = i + 1;
+        }
+
+        const enum_name = try self.alloc.dupe(u8, e.name);
+        errdefer self.alloc.free(enum_name);
+
+        const obj = try self.alloc.create(Value.Obj);
+        errdefer self.alloc.destroy(obj);
+        obj.* = .{
+            .id = UUID.fromStringHash(e.name),
+            .data = .{ .@"enum" = .{
+                .name = enum_name,
+                .values = values,
+                .is_seq = e.is_seq,
+            } },
+        };
+        self.emitter.replaceConstant(e.anchor.path, .{ .obj = obj }) catch {};
+    }
+
+    /// Static evaluation of literal-shape IR expressions to a `Value`.
+    /// `validate.zig:checkStaticInitializer` already verified the input
+    /// is a permissible literal-shape, so this function trusts its
+    /// inputs and only handles the legal cases.
+    fn evaluateLiteral(self: *Codegen, expr: ir.ExprRef) Error!Value {
+        switch (expr.kind) {
+            .number => |n| return .{ .number = n },
+            .bool => |b| return .{ .bool = b },
+            .nil => return .nil,
+            .text => |segs| {
+                // checkStaticInitializer rejects interpolated text, so
+                // segments are guaranteed all-literal here.
+                var len: usize = 0;
+                for (segs) |s| switch (s) {
+                    .literal => |l| len += l.len,
+                    .interp => unreachable,
+                };
+                const buf = try self.alloc.alloc(u8, len);
+                errdefer self.alloc.free(buf);
+                var pos: usize = 0;
+                for (segs) |s| switch (s) {
+                    .literal => |l| {
+                        @memcpy(buf[pos .. pos + l.len], l);
+                        pos += l.len;
+                    },
+                    .interp => unreachable,
+                };
+                const obj = try self.alloc.create(Value.Obj);
+                obj.* = .{ .data = .{ .string = buf } };
+                return .{ .obj = obj };
+            },
+            .un_op => |u| {
+                const inner = try self.evaluateLiteral(u.operand);
+                return switch (u.op) {
+                    .negate => .{ .number = -inner.number },
+                    .not => .{ .bool = !inner.bool },
+                };
+            },
+            .bin_op => |bin| {
+                const left = try self.evaluateLiteral(bin.left);
+                errdefer left.destroyStatic(self.alloc);
+                const right = try self.evaluateLiteral(bin.right);
+                return .{
+                    .number = switch (bin.op) {
+                        .add => left.number + right.number,
+                        .subtract => left.number - right.number,
+                        .multiply => left.number * right.number,
+                        .divide => left.number / right.number,
+                        else => unreachable,
+                    },
+                };
+            },
+            .load_const => |lc| {
+                const idx = self.emitter.constants_map.get(lc.target.path).?;
+                return self.emitter.constants.items[idx];
+            },
+            .field => |f| {
+                // Enum or class static value access — validated to point
+                // at an existing member.
+                const target = try self.evaluateLiteral(f.target);
+                if (target == .obj) switch (target.obj.data) {
+                    .@"enum" => |e| {
+                        for (e.values, 0..) |v, i| {
+                            if (std.mem.eql(u8, v, f.name)) return .{ .number = @floatFromInt(i) };
+                        }
+                        unreachable;
+                    },
+                    .class => |cls| {
+                        for (cls.fields) |m| {
+                            if (std.mem.eql(u8, m.name, f.name)) return m.value;
+                        }
+                        unreachable;
+                    },
+                    else => unreachable,
+                };
+                unreachable;
+            },
+            .list => |items| {
+                var list = try std.ArrayList(Value).initCapacity(self.alloc, items.len);
+                errdefer {
+                    for (list.items) |item| item.destroyStatic(self.alloc);
+                    list.deinit(self.alloc);
+                }
+                for (items) |item| {
+                    list.appendAssumeCapacity(try self.evaluateLiteral(item));
+                }
+                const obj = try self.alloc.create(Value.Obj);
+                obj.* = .{ .id = UUID.new(), .data = .{ .list = list } };
+                return .{ .obj = obj };
+            },
+            .set => |items| {
+                var set = Value.Obj.SetType.empty;
+                errdefer {
+                    for (set.keys()) |k| k.destroyStatic(self.alloc);
+                    set.deinit(self.alloc);
+                }
+                for (items) |item| {
+                    try set.put(self.alloc, try self.evaluateLiteral(item), {});
+                }
+                const obj = try self.alloc.create(Value.Obj);
+                obj.* = .{ .id = UUID.new(), .data = .{ .set = set } };
+                return .{ .obj = obj };
+            },
+            .map => |pairs| {
+                var map = Value.Obj.MapType.empty;
+                errdefer {
+                    var it = map.iterator();
+                    while (it.next()) |entry| {
+                        entry.key_ptr.*.destroyStatic(self.alloc);
+                        entry.value_ptr.*.destroyStatic(self.alloc);
+                    }
+                    map.deinit(self.alloc);
+                }
+                for (pairs) |p| {
+                    const k = try self.evaluateLiteral(p.key);
+                    errdefer k.destroyStatic(self.alloc);
+                    const v = try self.evaluateLiteral(p.value);
+                    try map.put(self.alloc, k, v);
+                }
+                const obj = try self.alloc.create(Value.Obj);
+                obj.* = .{ .id = UUID.new(), .data = .{ .map = map } };
+                return .{ .obj = obj };
+            },
+            else => unreachable,
         }
     }
 

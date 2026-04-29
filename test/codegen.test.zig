@@ -244,6 +244,49 @@ test "Codegen assignment parity" {
     }
 }
 
+test "Codegen function parity" {
+    const cases = [_][]const u8{
+        "fn five || { return 5 }",
+        "fn five || { return 5 } five()",
+        "fn add |a, b| { return a + b } add(1, 2)",
+        "fn id |x| { return x } id(1) + id(2)",
+        // recursion (function name binds inside body)
+        "fn fact |n| { if n <= 1 { return 1 } return n * fact(n - 1) }",
+    };
+    for (cases) |src| {
+        errdefer std.log.warn("case: {s}", .{src});
+        var pair = try compileBoth(src);
+        defer pair.deinit();
+        try expectByteParity(pair);
+    }
+}
+
+test "Codegen class parity" {
+    const cases = [_][]const u8{
+        "class Pt { x = 0 y = 0 }",
+        "class Pt { x = 0 y = 0 } var p = new Pt{}",
+    };
+    for (cases) |src| {
+        errdefer std.log.warn("case: {s}", .{src});
+        var pair = try compileBoth(src);
+        defer pair.deinit();
+        try expectByteParity(pair);
+    }
+}
+
+test "Codegen enum parity" {
+    const cases = [_][]const u8{
+        "enum Color { Red, Green, Blue }",
+        "enum Color { Red, Green, Blue } const c = Color.Green",
+    };
+    for (cases) |src| {
+        errdefer std.log.warn("case: {s}", .{src});
+        var pair = try compileBoth(src);
+        defer pair.deinit();
+        try expectByteParity(pair);
+    }
+}
+
 test "Codegen var_decl parity" {
     const cases = [_][]const u8{
         "const x = 5",

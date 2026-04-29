@@ -69,6 +69,11 @@ const Lowerer = struct {
     /// Per-walk de-dup of include resolution.
     seen_files: std.array_hash_map.String(void),
 
+    /// High-water mark of local-scope counts seen since the last
+    /// reset (saved/restored around `function` scopes). Used to
+    /// populate `FunctionDecl.locals_count` for codegen.
+    locals_count: u32 = 0,
+
     fn init(parent_alloc: std.mem.Allocator, module: *Module) !Lowerer {
         var program = ir.Program.init(parent_alloc);
         errdefer program.deinit();
@@ -450,20 +455,21 @@ const Lowerer = struct {
             error.OutOfMemory => return error.OutOfMemory,
         };
 
-        // Define the symbol in the *current* scope so callers in the same
-        // scope can resolve it.
-        const fn_sym = self.scope.define(self.scratchAlloc(), f.name, false) catch null;
-        if (fn_sym) |s| s.var_type = .function_type;
+        // Functions are reachable via their anchor path (load_const),
+        // not via scope. Mirrors the AST compiler, which never adds
+        // function names to the scope chain — every reference falls
+        // through `loadSymbol` to `resolveConstant`. This matters for
+        // self-recursion: `fact(n-1)` inside `fn fact` resolves via
+        // `refByPath` walking path_stack, finding the anchor in
+        // `program.anchors`, and emitting a constant load.
+
+        // Save and reset locals_count around the function body — local
+        // counts inside this function shouldn't leak to the outer
+        // function or to top-level. Mirrors compiler.zig:1329-1357.
+        const saved_locals_count = self.locals_count;
+        self.locals_count = 0;
 
         try self.enterScope(.function);
-        defer self.exitScope();
-
-        // The function's own name binds inside the body for self-recursion.
-        const inner_self = self.scope.define(self.scratchAlloc(), f.name, false) catch null;
-        if (inner_self) |s| {
-            s.tag = .function;
-            s.var_type = .function_type;
-        }
 
         const params = try self.arena().alloc(ir.Parameter, f.parameters.len);
         for (f.parameters, 0..) |pname, i| {
@@ -482,19 +488,25 @@ const Lowerer = struct {
 
         const body = try self.lowerBody(f.body);
 
-        const is_top_level = (anchor != null);
-        const name_slot: ?ir.Slot = if (is_top_level or fn_sym == null) null else try self.slotFromSymbol(fn_sym.?);
+        // Capture locals_count BEFORE exitScope — the function scope's
+        // own count still includes parameters / inner_self / top-level
+        // var_decls in the body, while `self.locals_count` holds the
+        // high-water mark from any nested local scopes inside the body.
+        const fn_locals_count = @max(self.scope.count, self.locals_count);
+        self.exitScope();
+        self.locals_count = saved_locals_count;
 
         return .{
             .loc = locFrom(tok),
             .kind = .{ .function = .{
                 .name = try self.arena().dupe(u8, f.name),
-                .name_slot = name_slot,
+                .name_slot = null,
                 .anchor = anchor,
                 .is_method = f.is_method,
                 .is_extern = f.is_extern,
                 .parameters = params,
                 .body = body,
+                .locals_count = fn_locals_count,
             } },
         };
     }
@@ -1126,7 +1138,18 @@ const Lowerer = struct {
         self.scope = try Scope.create(self.scratchAlloc(), self.scope, tag);
     }
     fn exitScope(self: *Lowerer) void {
-        self.scope = self.scope.parent orelse self.scope;
+        const old = self.scope;
+        self.scope = old.parent orelse old;
+        // Mirror compiler.zig:exitScope. Local scopes share a stack
+        // frame with their parent (count is inherited), so old.count is
+        // already the merged high-water; non-local scopes (function,
+        // global) count separately and need additive merging.
+        if (old.tag == .local) {
+            if (old.count > self.locals_count) self.locals_count = old.count;
+        } else {
+            const merged = self.scope.count + old.count;
+            if (merged > self.locals_count) self.locals_count = merged;
+        }
     }
 
     fn resolveSymbol(self: *Lowerer, name: []const u8) Error!?*Symbol {

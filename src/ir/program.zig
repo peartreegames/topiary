@@ -346,6 +346,11 @@ pub const FunctionDecl = struct {
     is_extern: bool = false,
     parameters: []const Parameter = &.{},
     body: []const Stmt = &.{},
+    /// High-water mark of locals (parameters + var_decls + nested local
+    /// scopes) needed to allocate this function's stack frame at runtime.
+    /// Populated by lowering — codegen emits this directly into the
+    /// produced `Function` object.
+    locals_count: u32 = 0,
 };
 
 pub const ClassDecl = struct {
