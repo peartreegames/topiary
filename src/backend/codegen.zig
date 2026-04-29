@@ -632,8 +632,7 @@ pub const Codegen = struct {
             }, token);
             return;
         }
-        // Assignment ops belong to Step 8.
-        if (isAssignOp(bin.op)) return error.NotYetImplemented;
+        if (isAssignOp(bin.op)) return self.compileAssign(bin, token);
         try self.compileExpr(bin.left);
         try self.compileExpr(bin.right);
         const op: OpCode = switch (bin.op) {
@@ -651,6 +650,73 @@ pub const Codegen = struct {
             else => return error.NotYetImplemented,
         };
         try self.emitter.writeOp(op, token);
+    }
+
+    /// Lvalue-aware emission for `=` / `+=` / `-=` / `*=` / `/=` / `%=`.
+    /// IR sets `bin.target_slot` when the LHS resolves to a slot;
+    /// otherwise the LHS is an `.index` expression and we go through
+    /// `set_property`. Mirrors compiler.zig's two assignment paths.
+    fn compileAssign(self: *Codegen, bin: ir.BinOp, token: Token) Error!void {
+        const arith_op: ?OpCode = switch (bin.op) {
+            .assign_add => .add,
+            .assign_subtract => .subtract,
+            .assign_multiply => .multiply,
+            .assign_divide => .divide,
+            .assign_modulus => .modulus,
+            .assign => null,
+            else => unreachable,
+        };
+
+        if (bin.target_slot) |slot| {
+            // identifier = ... | identifier op= ...
+            if (arith_op) |op| {
+                try self.compileExpr(bin.left);
+                try self.compileExpr(bin.right);
+                try self.emitter.writeOp(op, token);
+            } else {
+                try self.compileExpr(bin.right);
+            }
+            try self.emitSetSlot(slot, token);
+            // Assignment is an expression — re-load so the value sits
+            // on the stack for any enclosing expr_stmt to pop.
+            try self.emitLoad(slot, token);
+            return;
+        }
+
+        // Indexer assignment: LHS is a `.index` expression.
+        std.debug.assert(bin.left.kind == .index);
+
+        if (arith_op) |op| {
+            // Compound: load current value, add, dup, recompile lvalue
+            // sans the trailing `.index` op, then set_property.
+            try self.compileExpr(bin.left);
+            try self.compileExpr(bin.right);
+            try self.emitter.writeOp(op, token);
+        } else {
+            try self.compileExpr(bin.right);
+        }
+        try self.emitter.writeOp(.dup, token);
+        try self.compileExpr(bin.left);
+        try self.emitter.removeLast(.index);
+        try self.emitter.writeOp(.set_property, token);
+    }
+
+    fn emitSetSlot(self: *Codegen, slot: ir.Slot, token: Token) Error!void {
+        switch (slot) {
+            .local => |l| {
+                try self.emitter.writeOp(.set_local, token);
+                _ = try self.emitter.writeInt(C.LOCAL, l.index, token);
+            },
+            .upvalue => |u| {
+                try self.emitter.writeOp(.set_upvalue, token);
+                _ = try self.emitter.writeInt(u8, u.depth, token);
+                _ = try self.emitter.writeInt(C.LOCAL, u.index, token);
+            },
+            .global => |g| {
+                try self.emitter.writeOp(.set_global, token);
+                _ = try self.emitter.writeInt(C.GLOBAL, g.index + self.global_offset, token);
+            },
+        }
     }
 
     fn emitLoad(self: *Codegen, slot: ir.Slot, token: Token) Error!void {

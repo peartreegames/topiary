@@ -221,6 +221,29 @@ test "Codegen text/collections/index parity" {
     }
 }
 
+test "Codegen assignment parity" {
+    const cases = [_][]const u8{
+        // simple
+        "var x = 0 x = 5",
+        "var x = 0 x = 1 + 2",
+        // compound on identifiers
+        "var x = 0 x += 5",
+        "var x = 1 x -= 1",
+        "var x = 2 x *= 3",
+        "var x = 6 x /= 2",
+        "var x = 7 x %= 2",
+        // indexer assign
+        "var xs = List{1, 2, 3} xs[0] = 99",
+        "var xs = List{1, 2, 3} xs[0] += 5",
+    };
+    for (cases) |src| {
+        errdefer std.log.warn("case: {s}", .{src});
+        var pair = try compileBoth(src);
+        defer pair.deinit();
+        try expectByteParity(pair);
+    }
+}
+
 test "Codegen var_decl parity" {
     const cases = [_][]const u8{
         "const x = 5",
