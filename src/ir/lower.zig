@@ -600,6 +600,21 @@ const Lowerer = struct {
             );
             return .{ .loc = locFrom(tok), .kind = .fin };
         }
+        // Warn when a local declaration hides an outer-scope variable.
+        // Only locals trigger the warning — global re-use across scopes
+        // is intentional and stays quiet.
+        if (self.scope.tag != .global) {
+            if (self.scope.resolveOuter(v.name)) |_| {
+                try self.errors().addSpan(
+                    self.current_file.path,
+                    "'{s}' hides a variable from an outer scope",
+                    tok,
+                    v.name_token,
+                    .warn,
+                    .{v.name},
+                );
+            }
+        }
         const sym = self.scope.define(self.scratchAlloc(), v.name, v.is_mutable) catch |e| switch (e) {
             error.SymbolAlreadyDeclared => {
                 try self.errors().addSpan(self.current_file.path, "'{s}' is already declared in this scope", tok, v.name_token, .err, .{v.name});
@@ -753,28 +768,50 @@ const Lowerer = struct {
     /// rejects non-identifier/non-indexer assignment targets, so by the
     /// time we see one here it's been shape-checked.
     fn validateAssignTarget(self: *Lowerer, left: *const ast.Expression) Error!void {
-        if (left.type != .identifier) return;
-        const name = left.type.identifier;
-        if (try self.resolveSymbol(name)) |sym| {
-            if (!sym.is_mutable) {
-                try self.errors().add(
-                    self.current_file.path,
-                    "Cannot assign to constant variable '{s}'",
-                    left.token,
-                    .err,
-                    .{name},
-                );
-            }
-            return;
-        }
-        if (self.program.anchors.contains(name)) {
-            try self.errors().add(
-                self.current_file.path,
-                "Cannot assign to constant '{s}'",
-                left.token,
-                .err,
-                .{name},
-            );
+        switch (left.type) {
+            .identifier => |name| {
+                if (try self.resolveSymbol(name)) |sym| {
+                    if (!sym.is_mutable) {
+                        try self.errors().add(
+                            self.current_file.path,
+                            "Cannot assign to constant variable '{s}'",
+                            left.token,
+                            .err,
+                            .{name},
+                        );
+                    }
+                    return;
+                }
+                if (self.program.anchors.contains(name)) {
+                    try self.errors().add(
+                        self.current_file.path,
+                        "Cannot assign to constant '{s}'",
+                        left.token,
+                        .err,
+                        .{name},
+                    );
+                }
+            },
+            .indexer => |idx| {
+                // `Type.field = ...` for dot-access on a class or enum
+                // anchor — both are immutable. The parser produces
+                // .indexer for both `[i]` and `.field`; the dot form
+                // has token_type == .dot.
+                if (left.token.token_type != .dot) return;
+                if (idx.target.type != .identifier) return;
+                const target_name = idx.target.type.identifier;
+                if (self.program.anchors.get(target_name)) |a| switch (a.kind orelse return) {
+                    .class, .@"enum" => try self.errors().add(
+                        self.current_file.path,
+                        "Cannot assign to constant '{s}'",
+                        left.token,
+                        .err,
+                        .{target_name},
+                    ),
+                    else => {},
+                };
+            },
+            else => {},
         }
     }
 

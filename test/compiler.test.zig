@@ -1155,7 +1155,7 @@ test "Static Literal Error Mentions Kind" {
     var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const res = compileSource(input, mod);
-    try testing.expectError(error.IllegalOperation, res);
+    try testing.expectError(error.CompilerError, res);
     var has_kind_note = false;
     for (mod.errors.list.items) |e| {
         if (e.note) |n| {
@@ -1194,7 +1194,7 @@ test "Class field compile error does not leak prior defaults" {
         var mod = try Module.initEmpty(allocator, std.testing.io);
         defer mod.deinit();
         const res = compileSource(src, mod);
-        try testing.expectError(error.IllegalOperation, res);
+        try testing.expectError(error.CompilerError, res);
     }
 }
 
