@@ -287,6 +287,62 @@ test "Codegen enum parity" {
     }
 }
 
+// Narrative parity tests need stable UUIDs. The parser stamps fresh
+// `UUID.new()` for boughs/forks/choices/dialogue lines that lack an
+// explicit `@ID`, and `UUID.new()` is non-deterministic — running it
+// twice on the same source produces different IDs, which breaks
+// byte-parity even when the rest of the bytecode matches. The
+// workaround is annotating every UUID-bearing node with an `@ID`.
+// Lines (dialogue) don't yet carry a stable @ID syntax, so we skip
+// pure-line cases here. Step 11's full-suite parity gate will surface
+// any remaining gaps.
+// Narrative parity tests need stable UUIDs. The parser stamps fresh
+// `UUID.new()` for boughs/forks/choices/dialogue lines that lack an
+// explicit `@ID`, and `UUID.new()` is non-deterministic — running it
+// twice on the same source produces different IDs, which breaks
+// byte-parity even when the rest of the bytecode matches. Lines
+// (dialogue) and most narrative nodes need explicit `@ID`s for these
+// tests. Step 11's full-suite parity gate runs against `compiler.test`
+// + `vm.test` + `serialization.test` and surfaces remaining gaps.
+test "Codegen narrative parity" {
+    const cases = [_][]const u8{
+        // empty bough
+        \\=== Start @AAAAAAAA-AAAAAAAA {
+        \\}
+        ,
+        // bough with divert
+        \\=== Start @AAAAAAAA-AAAAAAAA {
+        \\    => Other
+        \\}
+        \\=== Other @BBBBBBBB-BBBBBBBB {
+        \\    fin
+        \\}
+        ,
+        // backup divert
+        \\=== Start @AAAAAAAA-AAAAAAAA {
+        \\    =>^ Other
+        \\}
+        \\=== Other @BBBBBBBB-BBBBBBBB {
+        \\    fin
+        \\}
+        ,
+        // visit two boughs
+        \\=== Start @AAAAAAAA-AAAAAAAA {
+        \\    => Other
+        \\}
+        \\=== Other @BBBBBBBB-BBBBBBBB {
+        \\    => Start
+        \\}
+        ,
+    };
+    for (cases) |src| {
+        errdefer std.log.warn("case: {s}", .{src});
+        var pair = try compileBoth(src);
+        defer pair.deinit();
+        try expectByteParity(pair);
+    }
+}
+
 test "Codegen var_decl parity" {
     const cases = [_][]const u8{
         "const x = 5",

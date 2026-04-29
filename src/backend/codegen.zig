@@ -279,12 +279,176 @@ pub const Codegen = struct {
             .function => |f| try self.compileFunctionStmt(f, token),
             .class => |c| try self.compileClassStmt(c, token),
             .enum_decl => |e| try self.compileEnumStmt(e, token),
+            .line => |l| try self.compileLine(l, token),
+            .choice => |c| try self.compileChoice(c, token),
+            .fork => |f| try self.compileFork(f, false, token),
+            .backup_fork => |f| try self.compileFork(f, true, token),
+            .divert => |d| try self.compileDivert(d, false, token),
+            .backup_divert => |d| try self.compileDivert(d, true, token),
+            .bough => |b| try self.compileBough(b, token),
+            .visit => |v| {
+                const idx = try self.anchorIdx(v.target.path);
+                try self.compileVisit(idx, token);
+            },
             .include => {
                 // Lowering inlined the included statements directly into
                 // body; the marker has nothing to emit.
             },
-            else => return error.NotYetImplemented,
         }
+    }
+
+    // =======================================================================
+    // Narrative emission
+    // =======================================================================
+
+    fn anchorIdx(self: *Codegen, path: []const u8) Error!C.CONSTANT {
+        return self.emitter.constants_map.get(path) orelse {
+            // Lowering should have caught unresolved anchors. If we get
+            // here it's a codegen bug, not a writer error.
+            return error.NotYetImplemented;
+        };
+    }
+
+    fn compileVisit(self: *Codegen, anchor_idx: C.CONSTANT, token: Token) Error!void {
+        try self.emitter.writeOp(.visit, token);
+        _ = try self.emitter.writeInt(C.CONSTANT, anchor_idx, token);
+    }
+
+    /// Common pattern for `.loc`-bearing nodes (line + choice). Pushes
+    /// each interp value, builds the joined `{N}`-marked string, and
+    /// emits `.loc <const_idx> <interp_count>`. Returns the interp
+    /// count for callers that still need to write follow-up trailers.
+    fn emitLocString(
+        self: *Codegen,
+        segments: []const ir.TextSegment,
+        uuid: UUID.ID,
+        token: Token,
+    ) Error!u8 {
+        var interp_count: u8 = 0;
+        for (segments) |seg| {
+            switch (seg) {
+                .interp => |e| {
+                    try self.compileExpr(e);
+                    interp_count += 1;
+                },
+                .literal => {},
+            }
+        }
+        var buf: std.ArrayList(u8) = .empty;
+        errdefer buf.deinit(self.alloc);
+        var idx: usize = 0;
+        for (segments) |seg| {
+            switch (seg) {
+                .literal => |s| try buf.appendSlice(self.alloc, s),
+                .interp => {
+                    var num_buf: [32]u8 = undefined;
+                    const n = std.fmt.bufPrint(&num_buf, "{d}", .{idx}) catch unreachable;
+                    try buf.append(self.alloc, '{');
+                    try buf.appendSlice(self.alloc, n);
+                    try buf.append(self.alloc, '}');
+                    idx += 1;
+                },
+            }
+        }
+        const obj = try self.alloc.create(Value.Obj);
+        obj.* = .{
+            .id = uuid,
+            .data = .{ .string = try buf.toOwnedSlice(self.alloc) },
+        };
+        const c_idx = try self.emitter.addConstant(.{ .obj = obj });
+        try self.emitter.writeOp(.loc, token);
+        _ = try self.emitter.writeInt(C.CONSTANT, c_idx, token);
+        _ = try self.emitter.writeInt(u8, interp_count, token);
+        return interp_count;
+    }
+
+    fn compileLine(self: *Codegen, line: ir.Line, token: Token) Error!void {
+        for (line.tags) |tag| {
+            try self.emitter.addIdentifierConstant(self.arena.allocator(), tag.name, token);
+        }
+        _ = try self.emitLocString(line.segments, line.uuid, token);
+        if (line.speaker) |speaker| {
+            try self.emitter.addIdentifierConstant(self.arena.allocator(), speaker, token);
+        }
+        try self.emitter.writeOp(.dialogue, token);
+        _ = try self.emitter.writeInt(u8, if (line.speaker == null) 0 else 1, token);
+        _ = try self.emitter.writeInt(u8, @intCast(line.tags.len), token);
+    }
+
+    fn compileChoice(self: *Codegen, c: ir.Choice, token: Token) Error!void {
+        for (c.tags) |tag| {
+            try self.emitter.addIdentifierConstant(self.arena.allocator(), tag.name, token);
+        }
+        const anchor_idx = try self.anchorIdx(c.anchor.path);
+
+        // The choice's anchor entry IP is the position before the loc;
+        // codegen patches the IP on the Anchor Value.Obj.
+        const entry_ip = self.emitter.instructionPos();
+        self.emitter.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
+
+        _ = try self.emitLocString(c.segments, c.uuid, token);
+
+        const choice_jp = try self.emitter.emitJump(.choice, token);
+        _ = try self.emitter.writeInt(u8, if (c.is_unique) 1 else 0, token);
+        _ = try self.emitter.writeInt(C.CONSTANT, anchor_idx, token);
+        _ = try self.emitter.writeInt(u8, @intCast(c.tags.len), token);
+
+        const end_jp = try self.emitter.emitJump(.jump, token);
+        try self.emitter.patchJump(choice_jp);
+
+        try self.compileVisit(anchor_idx, token);
+        for (c.body) |*s| try self.compileStmt(s);
+        try self.emitter.writeOp(.end, token);
+        try self.emitter.patchJump(end_jp);
+    }
+
+    fn compileFork(self: *Codegen, f: ir.Fork, is_backup: bool, token: Token) Error!void {
+        const anchor_idx = try self.anchorIdx(f.anchor.path);
+        const start_pos = self.emitter.instructionPos();
+        self.emitter.constants.items[anchor_idx].obj.data.anchor.ip = start_pos;
+        try self.compileVisit(anchor_idx, token);
+
+        for (f.body) |*s| try self.compileStmt(s);
+
+        var backup_jp: ?JumpPatch = null;
+        if (is_backup) {
+            backup_jp = try self.emitter.emitJump(.backup, token);
+            _ = try self.emitter.writeInt(u8, 1, token); // 1 = fork backup
+        }
+        try self.emitter.writeOp(.fork, token);
+        const end_pos = self.emitter.instructionPos();
+        if (backup_jp) |jp| try self.emitter.patchJumpTo(jp, end_pos);
+    }
+
+    fn compileDivert(self: *Codegen, d: ir.Divert, is_backup: bool, token: Token) Error!void {
+        const anchor_idx = try self.anchorIdx(d.target.path);
+        if (is_backup) {
+            const backup_jp = try self.emitter.emitJump(.backup, token);
+            _ = try self.emitter.writeInt(u8, 0, token); // 0 = divert backup
+            try self.emitter.writeOp(.divert, token);
+            _ = try self.emitter.writeInt(C.CONSTANT, anchor_idx, token);
+            try self.emitter.patchJump(backup_jp);
+        } else {
+            try self.emitter.writeOp(.divert, token);
+            _ = try self.emitter.writeInt(C.CONSTANT, anchor_idx, token);
+        }
+    }
+
+    fn compileBough(self: *Codegen, b: ir.Bough, token: Token) Error!void {
+        const anchor_idx = try self.anchorIdx(b.anchor.path);
+        const skip_jp = try self.emitter.emitJump(.jump, token);
+
+        const entry_ip = self.emitter.instructionPos();
+        self.emitter.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
+        // The IR injects `.visit` as the first stmt of every bough body
+        // (lower.zig:lowerBoughStmt), so we don't auto-emit one here —
+        // descending into body covers it.
+
+        for (b.body) |*s| try self.compileStmt(s);
+        try self.emitter.writeOp(.end, token);
+
+        const end = self.emitter.instructionPos();
+        try self.emitter.patchJumpTo(skip_jp, end);
     }
 
     fn compileFunctionStmt(self: *Codegen, f: ir.FunctionDecl, token: Token) Error!void {
@@ -1087,9 +1251,27 @@ fn computeBodyLocals(body: []const ir.Stmt, current: *usize, hi: *usize) void {
                 if (i.else_branch) |eb| computeBodyLocals(eb, current, hi);
             },
             .block => |b| computeBodyLocals(b.body, current, hi),
-            .bough => |b| computeBodyLocals(b.body, current, hi),
-            .fork, .backup_fork => |f| computeBodyLocals(f.body, current, hi),
-            .choice => |c| computeBodyLocals(c.body, current, hi),
+            // Bough/fork/choice enter their own local scope
+            // (compiler.zig:1042/963/1059), inheriting `current` as the
+            // starting frame size.
+            .bough => |b| {
+                const saved = current.*;
+                if (current.* > hi.*) hi.* = current.*;
+                computeBodyLocals(b.body, current, hi);
+                current.* = saved;
+            },
+            .fork, .backup_fork => |f| {
+                const saved = current.*;
+                if (current.* > hi.*) hi.* = current.*;
+                computeBodyLocals(f.body, current, hi);
+                current.* = saved;
+            },
+            .choice => |c| {
+                const saved = current.*;
+                if (current.* > hi.*) hi.* = current.*;
+                computeBodyLocals(c.body, current, hi);
+                current.* = saved;
+            },
             // Function bodies have their own frame, skip.
             .function => {},
             else => {},
