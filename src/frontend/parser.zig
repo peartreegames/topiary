@@ -782,22 +782,15 @@ pub const Parser = struct {
         var list = std.ArrayList(Expression).empty;
         errdefer list.deinit(self.allocator);
         self.next();
-
-        if (self.currentIs(.right_brace)) {
-            return .{ .token = start_token, .type = .{ .map = try list.toOwnedSlice(self.allocator) } };
-        }
-
-        const first = try self.mapPairSetKey();
-        self.next();
-        if (self.currentIs(.comma)) self.next();
-        try list.append(self.allocator, first);
         while (!self.currentIs(.right_brace)) {
+            if (self.currentIs(.eof))
+                return self.fail("Unterminated map literal", start_token, .{});
             const item = try self.mapPairSetKey();
             if (item.type != .map_pair)
                 return self.fail("Map entries must use 'key: value' syntax", item.token, .{});
             try list.append(self.allocator, item);
             self.next();
-            if (self.currentIs(.comma) or self.peekIs(.right_brace)) self.next();
+            if (self.currentIs(.comma)) self.next();
         }
         return .{ .token = start_token, .type = .{ .map = try list.toOwnedSlice(self.allocator) } };
     }
@@ -808,22 +801,15 @@ pub const Parser = struct {
         var list = std.ArrayList(Expression).empty;
         errdefer list.deinit(self.allocator);
         self.next();
-
-        if (self.currentIs(.right_brace)) {
-            return .{ .token = start_token, .type = .{ .set = try list.toOwnedSlice(self.allocator) } };
-        }
-
-        const first = try self.mapPairSetKey();
-        self.next();
-        if (self.currentIs(.comma)) self.next();
-        try list.append(self.allocator, first);
         while (!self.currentIs(.right_brace)) {
+            if (self.currentIs(.eof))
+                return self.fail("Unterminated set literal", start_token, .{});
             const item = try self.mapPairSetKey();
             if (item.type == .map_pair)
                 return self.fail("Set items cannot use 'key: value' syntax", item.token, .{});
             try list.append(self.allocator, item);
             self.next();
-            if (self.currentIs(.comma) or self.peekIs(.right_brace)) self.next();
+            if (self.currentIs(.comma)) self.next();
         }
         return .{ .token = start_token, .type = .{ .set = try list.toOwnedSlice(self.allocator) } };
     }

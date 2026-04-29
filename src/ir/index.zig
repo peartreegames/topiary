@@ -46,8 +46,10 @@ pub const BuiltinExpr = program.BuiltinExpr;
 
 pub const dump = @import("dump.zig").dump;
 pub const lower = @import("lower.zig").lower;
+pub const validate = @import("validate.zig").validate;
 
 test {
     _ = @import("dump.zig");
     _ = @import("lower.zig");
+    _ = @import("validate.zig");
 }

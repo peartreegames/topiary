@@ -417,6 +417,66 @@ test "Parse Nested Iterable Types" {
     try testing.expect(tree.root[0].type.expression.type.list[0].type == .list);
 }
 
+test "Parse Iterable Class Field Initializers" {
+    const input =
+        \\ class C {
+        \\     s = Set{1, 2, 3}
+        \\     m = Map{"a": 1, "b": 2, "c": 3}
+        \\     l = List{1, 2, 3}
+        \\     es = Set{}
+        \\     em = Map{}
+        \\ }
+    ;
+    const mod = try parseSourceClean(input);
+    defer mod.deinit();
+    const tree = mod.entry.tree.?;
+    const cls = tree.root[0].type.class;
+    try testing.expectEqual(@as(usize, 5), cls.fields.len);
+
+    try testing.expectEqualStrings("s", cls.field_names[0]);
+    try testing.expect(cls.fields[0].type == .set);
+    try testing.expectEqual(@as(usize, 3), cls.fields[0].type.set.len);
+
+    try testing.expectEqualStrings("m", cls.field_names[1]);
+    try testing.expect(cls.fields[1].type == .map);
+    try testing.expectEqual(@as(usize, 3), cls.fields[1].type.map.len);
+
+    try testing.expectEqualStrings("l", cls.field_names[2]);
+    try testing.expect(cls.fields[2].type == .list);
+    try testing.expectEqual(@as(usize, 3), cls.fields[2].type.list.len);
+
+    try testing.expectEqualStrings("es", cls.field_names[3]);
+    try testing.expect(cls.fields[3].type == .set);
+    try testing.expectEqual(@as(usize, 0), cls.fields[3].type.set.len);
+
+    try testing.expectEqualStrings("em", cls.field_names[4]);
+    try testing.expect(cls.fields[4].type == .map);
+    try testing.expectEqual(@as(usize, 0), cls.fields[4].type.map.len);
+}
+
+test "Parse Iterable Class Field Initializers Trailing" {
+    // Set/Map as the last field (no field after) used to trip the class body
+    // parser because the literal's own '}' was followed by the class's '}'.
+    const input =
+        \\ class A { s = Set{1, 2, 3} }
+        \\ class B { m = Map{"a": 1, "b": 2} }
+    ;
+    const mod = try parseSourceClean(input);
+    defer mod.deinit();
+    const tree = mod.entry.tree.?;
+    try testing.expectEqual(@as(usize, 2), tree.root.len);
+
+    const a = tree.root[0].type.class;
+    try testing.expectEqual(@as(usize, 1), a.fields.len);
+    try testing.expect(a.fields[0].type == .set);
+    try testing.expectEqual(@as(usize, 3), a.fields[0].type.set.len);
+
+    const b = tree.root[1].type.class;
+    try testing.expectEqual(@as(usize, 1), b.fields.len);
+    try testing.expect(b.fields[0].type == .map);
+    try testing.expectEqual(@as(usize, 2), b.fields[0].type.map.len);
+}
+
 test "Parse Enum" {
     const input =
         \\ enum E {
