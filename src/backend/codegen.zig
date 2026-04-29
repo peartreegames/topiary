@@ -461,10 +461,10 @@ pub const Codegen = struct {
     }
 
     fn compileFunctionStmt(self: *Codegen, f: ir.FunctionDecl, token: Token) Error!void {
-        // Extern functions: prepass already added the extern Value.Obj
-        // as a separate constant. The named .nil placeholder remains
-        // .nil — matching the AST compiler's behavior.
-        if (f.is_extern) return;
+        // Extern functions: prepass already added a separate extern
+        // Value.Obj for FFI dispatch. The named slot still gets a
+        // compiled function obj (whose body is whatever the writer
+        // wrote — typically a stub the FFI override replaces).
         const obj = try self.compileFunctionToObj(f, token);
         if (f.anchor) |a| {
             self.emitter.replaceConstant(a.path, .{ .obj = obj }) catch {};

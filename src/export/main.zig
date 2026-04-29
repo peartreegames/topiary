@@ -1,7 +1,5 @@
 const std = @import("std");
 const topi = @import("topi");
-const Compiler = topi.backend.Compiler;
-const CompilerErrors = topi.backend.CompilerErrors;
 const Bytecode = topi.backend.Bytecode;
 
 const Vm = topi.runtime.Vm;
@@ -79,13 +77,7 @@ fn createModule(path: []const u8, logger: ExportLogger, allocator: std.mem.Alloc
 }
 
 fn createBytecode(mod: *Module, logger: ExportLogger, allocator: std.mem.Allocator) ?Bytecode {
-    var compiler = Compiler.init(allocator, &mod.*) catch |err| {
-        logger.log("Could not create compiler: {s}", .{@errorName(err)}, .err);
-        return null;
-    };
-    defer compiler.deinit();
-
-    compiler.compile() catch |err| {
+    return mod.generateBytecode(allocator) catch |err| {
         var output_log: std.Io.Writer.Allocating = .init(mod.allocator);
         defer output_log.deinit();
         const output_writer = &output_log.writer;
@@ -95,11 +87,6 @@ fn createBytecode(mod: *Module, logger: ExportLogger, allocator: std.mem.Allocat
             return null;
         };
         logger.log("Could not compile file '{s}': {s}\n{s}", .{ mod.entry.path, @errorName(err), output_log.written() }, .err);
-        return null;
-    };
-
-    return compiler.bytecode() catch |err| {
-        logger.log("Could not create bytecode: {s}", .{@errorName(err)}, .err);
         return null;
     };
 }
