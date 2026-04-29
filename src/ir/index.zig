@@ -40,6 +40,7 @@ pub const BinOp = program.BinOp;
 pub const UnOp = program.UnOp;
 pub const IfExpr = program.IfExpr;
 pub const Index = program.Index;
+pub const Field = program.Field;
 pub const Call = program.Call;
 pub const Instance = program.Instance;
 pub const BuiltinExpr = program.BuiltinExpr;

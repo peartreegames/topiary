@@ -195,6 +195,32 @@ test "Codegen switch parity" {
     }
 }
 
+test "Codegen text/collections/index parity" {
+    const cases = [_][]const u8{
+        // strings
+        \\const greeting = "hello"
+        ,
+        \\const x = 1
+        \\const greeting = "hi {x}!"
+        ,
+        // collections
+        "const xs = List{1, 2, 3}",
+        "const s = Set{1, 2, 3}",
+        \\const m = Map{"a": 1, "b": 2}
+        ,
+        // index
+        "const xs = List{1, 2, 3} const y = xs[0]",
+        // field on a list (method)
+        "const xs = List{1, 2, 3} const n = xs.count",
+    };
+    for (cases) |src| {
+        errdefer std.log.warn("case: {s}", .{src});
+        var pair = try compileBoth(src);
+        defer pair.deinit();
+        try expectByteParity(pair);
+    }
+}
+
 test "Codegen var_decl parity" {
     const cases = [_][]const u8{
         "const x = 5",

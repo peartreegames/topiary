@@ -450,8 +450,173 @@ pub const Codegen = struct {
                 try self.compileExpr(r.left);
                 try self.emitter.writeOp(.range, token);
             },
+            .text => |segs| try self.compileText(segs, token),
+            .list => |items| try self.compileCollection(.list, items, token),
+            .set => |items| try self.compileCollection(.set, items, token),
+            .map => |pairs| try self.compileMap(pairs, token),
+            .index => |idx| {
+                try self.compileExpr(idx.target);
+                try self.compileExpr(idx.index);
+                try self.emitter.writeOp(.index, token);
+            },
+            .field => |f| try self.compileField(expr, f, token),
+            .instance => |ins| try self.compileInstance(ins, token),
+            .call => |c| try self.compileCall(c, token),
             else => return error.NotYetImplemented,
         }
+    }
+
+    fn compileText(self: *Codegen, segments: []const ir.TextSegment, token: Token) Error!void {
+        // Push interp values in segment order. The reconstructed string
+        // uses `{N}` to mark each interp by its position in the push
+        // sequence — same convention the runtime expects.
+        var interp_count: usize = 0;
+        for (segments) |seg| {
+            switch (seg) {
+                .interp => |e| {
+                    try self.compileExpr(e);
+                    interp_count += 1;
+                },
+                .literal => {},
+            }
+        }
+
+        // Reconstruct the joined string.
+        var buf: std.ArrayList(u8) = .empty;
+        errdefer buf.deinit(self.alloc);
+        var idx: usize = 0;
+        for (segments) |seg| {
+            switch (seg) {
+                .literal => |s| try buf.appendSlice(self.alloc, s),
+                .interp => {
+                    var num_buf: [32]u8 = undefined;
+                    const n = std.fmt.bufPrint(&num_buf, "{d}", .{idx}) catch unreachable;
+                    try buf.append(self.alloc, '{');
+                    try buf.appendSlice(self.alloc, n);
+                    try buf.append(self.alloc, '}');
+                    idx += 1;
+                },
+            }
+        }
+        const obj = try self.alloc.create(Value.Obj);
+        obj.* = .{ .data = .{ .string = try buf.toOwnedSlice(self.alloc) } };
+        const c_idx = try self.emitter.addConstant(.{ .obj = obj });
+        try self.emitter.writeOp(.string, token);
+        _ = try self.emitter.writeInt(C.CONSTANT, c_idx, token);
+        _ = try self.emitter.writeInt(u8, @intCast(interp_count), token);
+    }
+
+    fn compileCollection(
+        self: *Codegen,
+        comptime op: OpCode,
+        items: []const ir.ExprRef,
+        token: Token,
+    ) Error!void {
+        for (items) |item| try self.compileExpr(item);
+        try self.emitter.writeOp(op, token);
+        _ = try self.emitter.writeInt(C.COLLECTION, @intCast(items.len), token);
+    }
+
+    fn compileMap(self: *Codegen, pairs: []const ir.MapPair, token: Token) Error!void {
+        for (pairs) |p| {
+            try self.compileExpr(p.key);
+            try self.compileExpr(p.value);
+        }
+        try self.emitter.writeOp(.map, token);
+        _ = try self.emitter.writeInt(C.COLLECTION, @intCast(pairs.len), token);
+    }
+
+    fn compileField(self: *Codegen, expr: ir.ExprRef, f: ir.Field, token: Token) Error!void {
+        // Dot-access into a constant-pool entry can resolve to another
+        // anchor (e.g. `Parent.Child`) — emit get_global on its visit
+        // index instead of an `.index` lookup.
+        if (try self.resolveAnchorChain(expr)) |anchor_idx| {
+            const anchor = self.emitter.constants.items[anchor_idx].obj.data.anchor;
+            try self.emitter.writeOp(.get_global, token);
+            _ = try self.emitter.writeInt(C.GLOBAL, anchor.visit_index, token);
+            return;
+        }
+        try self.compileExpr(f.target);
+        try self.emitter.addIdentifierConstant(self.arena.allocator(), f.name, token);
+        try self.emitter.writeOp(.index, token);
+    }
+
+    fn compileInstance(self: *Codegen, ins: ir.Instance, token: Token) Error!void {
+        const const_idx = self.emitter.constants_map.get(ins.class.path) orelse
+            return error.NotYetImplemented;
+
+        for (ins.fields, 0..) |field_expr, i| {
+            try self.compileExpr(field_expr);
+            try self.emitter.addIdentifierConstant(self.arena.allocator(), ins.field_names[i], token);
+        }
+        try self.emitter.writeOp(.constant, token);
+        _ = try self.emitter.writeInt(C.CONSTANT, const_idx, token);
+        try self.emitter.writeOp(.instance, token);
+        _ = try self.emitter.writeInt(C.FIELDS, @intCast(ins.fields.len), token);
+    }
+
+    fn compileCall(self: *Codegen, c: ir.Call, token: Token) Error!void {
+        try self.compileExpr(c.target);
+        for (c.arguments) |arg| try self.compileExpr(arg);
+        try self.emitter.writeOp(.call, token);
+        // Method calls (target is `index` or `field`) include the
+        // receiver as an additional argument on the stack.
+        var length = c.arguments.len;
+        if (c.target.kind == .index or c.target.kind == .field) length += 1;
+        std.debug.assert(c.arguments.len < std.math.maxInt(C.ARGS));
+        _ = try self.emitter.writeInt(C.ARGS, @intCast(length), token);
+    }
+
+    /// Walk a `.field` chain and check whether the fully-qualified path
+    /// is a registered anchor. Returns its constant-pool index if so.
+    /// Mirrors `compiler.zig:flattenIndexer + resolveAnchor`.
+    fn resolveAnchorChain(self: *Codegen, expr: ir.ExprRef) Error!?C.CONSTANT {
+        var parts: std.ArrayList([]const u8) = .empty;
+        defer parts.deinit(self.alloc);
+
+        var cur: ir.ExprRef = expr;
+        while (true) {
+            switch (cur.kind) {
+                .field => |f| {
+                    try parts.append(self.alloc, f.name);
+                    cur = f.target;
+                },
+                .load_const => |lc| {
+                    // Reached the chain head: a constant-pool name.
+                    // The path so far is `lc.target.path . parts...`
+                    // but we accumulated suffixes only — split lc's path
+                    // and prepend so the lookup is the full path.
+                    try parts.append(self.alloc, lc.target.path);
+                    break;
+                },
+                .load => |slot| {
+                    // Reached an identifier load. Use the slot's name as
+                    // the chain head so e.g. `MyEnum.Value` works when
+                    // `MyEnum` was pulled in via load (not load_const).
+                    const name = switch (slot) {
+                        .local => |l| l.name,
+                        .upvalue => |u| u.name,
+                        .global => |g| g.name,
+                    };
+                    if (name.len == 0) return null;
+                    try parts.append(self.alloc, name);
+                    break;
+                },
+                else => return null,
+            }
+        }
+        // parts is in reverse order: [field_n ... field_1, head_path].
+        // The head may itself contain dots (anchor.path). Build the
+        // candidate path by reversing and joining.
+        std.mem.reverse([]const u8, parts.items);
+        const path = try std.mem.join(self.alloc, ".", parts.items);
+        defer self.alloc.free(path);
+
+        if (self.emitter.constants_map.get(path)) |i| {
+            const v = self.emitter.constants.items[i];
+            if (v == .obj and v.obj.data == .anchor) return i;
+        }
+        return null;
     }
 
     fn compileBinOp(self: *Codegen, bin: ir.BinOp, token: Token) Error!void {
