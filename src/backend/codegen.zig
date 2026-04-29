@@ -18,6 +18,7 @@
 const std = @import("std");
 
 const ir = @import("../ir/index.zig");
+const ast = @import("../frontend/ast.zig");
 const Module = @import("../module.zig").Module;
 
 const utils = @import("../utils/index.zig");
@@ -35,6 +36,7 @@ const Scope = scope_mod.Scope;
 
 const emit = @import("emit.zig");
 const Emitter = emit.Emitter;
+const OpCode = @import("opcode.zig").OpCode;
 
 const Token = @import("../frontend/token.zig").Token;
 
@@ -107,8 +109,37 @@ pub const Codegen = struct {
             try self.prepass(stmt);
         }
 
-        // Body emission is implemented in subsequent steps.
-        if (self.program.body.len != 0) return error.NotYetImplemented;
+        // Two-pass top-level emission: non-bough first (so that the
+        // first `.jump` in the bytecode stream is the bough skip-over-
+        // body that `Vm.start` expects for `--bough` diverts), then
+        // boughs.
+        for (self.program.body) |*stmt| try self.emitNonBough(stmt);
+        for (self.program.body) |*stmt| try self.emitBough(stmt);
+
+        // Final `.end` opcode so the VM can grab the initial
+        // jump_request after the program completes.
+        const chunk = self.emitter.chunk;
+        if (chunk.debug_markers.items.len > 0) {
+            const dupe = chunk.debug_markers.items[chunk.debug_markers.items.len - 1];
+            try chunk.debug_markers.ensureTotalCapacity(self.alloc, chunk.debug_markers.items.len + 1);
+            chunk.debug_markers.appendAssumeCapacity(dupe);
+            try chunk.instructions.append(self.alloc, @intFromEnum(OpCode.end));
+        }
+    }
+
+    fn emitNonBough(self: *Codegen, stmt: *const ir.Stmt) Error!void {
+        switch (stmt.kind) {
+            .bough, .include => {},
+            else => try self.compileStmt(stmt),
+        }
+    }
+
+    fn emitBough(self: *Codegen, stmt: *const ir.Stmt) Error!void {
+        switch (stmt.kind) {
+            .bough => try self.compileStmt(stmt),
+            .include => {},
+            else => {},
+        }
     }
 
     fn prepass(self: *Codegen, stmt: *const ir.Stmt) Error!void {
@@ -192,6 +223,123 @@ pub const Codegen = struct {
         try self.emitter.addNamedConstantTok(self.arena.allocator(), full_path, .{ .obj = anchor_obj });
     }
 
+    // =======================================================================
+    // Statement emission
+    // =======================================================================
+
+    fn compileStmt(self: *Codegen, stmt: *const ir.Stmt) Error!void {
+        switch (stmt.kind) {
+            .expr_stmt => |e| {
+                try self.compileExpr(e);
+                try self.emitter.writeOp(.pop, stmt.loc.start);
+            },
+            else => return error.NotYetImplemented,
+        }
+    }
+
+    // =======================================================================
+    // Expression emission
+    // =======================================================================
+
+    fn compileExpr(self: *Codegen, expr: ir.ExprRef) Error!void {
+        const token = expr.loc.start;
+        switch (expr.kind) {
+            .number => |n| {
+                const i = try self.emitter.addLiteralConstant(self.arena.allocator(), .{ .number = n });
+                try self.emitter.writeOp(.constant, token);
+                _ = try self.emitter.writeInt(C.CONSTANT, i, token);
+            },
+            .bool => |b| try self.emitter.writeOp(if (b) .true else .false, token),
+            .nil => try self.emitter.writeOp(.nil, token),
+            .load => |slot| try self.emitLoad(slot, token),
+            .load_const => |lc| {
+                const idx = self.emitter.constants_map.get(lc.target.path) orelse
+                    return error.NotYetImplemented;
+                try self.emitter.writeOp(.constant, token);
+                _ = try self.emitter.writeInt(C.CONSTANT, idx, token);
+            },
+            .un_op => |u| {
+                try self.compileExpr(u.operand);
+                switch (u.op) {
+                    .negate => try self.emitter.writeOp(.negate, token),
+                    .not => try self.emitter.writeOp(.not, token),
+                }
+            },
+            .bin_op => |bin| try self.compileBinOp(bin, token),
+            .if_expr => |ie| {
+                try self.compileExpr(ie.condition);
+                const false_jp = try self.emitter.emitJump(.jump_if_false, token);
+                try self.compileExpr(ie.then_value);
+                const end_jp = try self.emitter.emitJump(.jump, token);
+                try self.emitter.patchJump(false_jp);
+                try self.compileExpr(ie.else_value);
+                try self.emitter.patchJump(end_jp);
+            },
+            .range => |r| {
+                try self.compileExpr(r.right);
+                try self.compileExpr(r.left);
+                try self.emitter.writeOp(.range, token);
+            },
+            else => return error.NotYetImplemented,
+        }
+    }
+
+    fn compileBinOp(self: *Codegen, bin: ir.BinOp, token: Token) Error!void {
+        // `<` / `<=` are emitted as `>` / `>=` with operands swapped, to
+        // keep the runtime opcode set small (mirrors compiler.zig:1504).
+        if (bin.op == .less_than or bin.op == .less_than_equal) {
+            try self.compileExpr(bin.right);
+            try self.compileExpr(bin.left);
+            try self.emitter.writeOp(switch (bin.op) {
+                .less_than => .greater_than,
+                .less_than_equal => .greater_than_equal,
+                else => unreachable,
+            }, token);
+            return;
+        }
+        // Assignment ops belong to Step 8.
+        if (isAssignOp(bin.op)) return error.NotYetImplemented;
+        try self.compileExpr(bin.left);
+        try self.compileExpr(bin.right);
+        const op: OpCode = switch (bin.op) {
+            .add => .add,
+            .subtract => .subtract,
+            .multiply => .multiply,
+            .divide => .divide,
+            .modulus => .modulus,
+            .equal => .equal,
+            .not_equal => .not_equal,
+            .greater_than => .greater_than,
+            .greater_than_equal => .greater_than_equal,
+            .@"or" => .@"or",
+            .@"and" => .@"and",
+            else => return error.NotYetImplemented,
+        };
+        try self.emitter.writeOp(op, token);
+    }
+
+    fn emitLoad(self: *Codegen, slot: ir.Slot, token: Token) Error!void {
+        switch (slot) {
+            .local => |l| {
+                try self.emitter.writeOp(.get_local, token);
+                _ = try self.emitter.writeInt(C.LOCAL, l.index, token);
+            },
+            .upvalue => |u| {
+                try self.emitter.writeOp(.get_upvalue, token);
+                _ = try self.emitter.writeInt(u8, u.depth, token);
+                _ = try self.emitter.writeInt(C.LOCAL, u.index, token);
+            },
+            .global => |g| {
+                try self.emitter.writeOp(.get_global, token);
+                _ = try self.emitter.writeInt(C.GLOBAL, g.index, token);
+            },
+        }
+    }
+
+    // =======================================================================
+    // Bytecode finalization
+    // =======================================================================
+
     fn bytecode(self: *Codegen) !Bytecode {
         const global_symbols = try self.alloc.alloc(Bytecode.GlobalSymbol, self.root_scope.symbols.count());
         var filled: usize = 0;
@@ -217,3 +365,16 @@ pub const Codegen = struct {
         };
     }
 };
+
+fn isAssignOp(op: ast.BinaryOp) bool {
+    return switch (op) {
+        .assign,
+        .assign_add,
+        .assign_subtract,
+        .assign_multiply,
+        .assign_divide,
+        .assign_modulus,
+        => true,
+        else => false,
+    };
+}

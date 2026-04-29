@@ -113,3 +113,32 @@ test "Codegen empty program parity" {
     defer pair.deinit();
     try expectByteParity(pair);
 }
+
+test "Codegen expressions parity" {
+    const cases = [_][]const u8{
+        "1 + 2",
+        "1 - 2",
+        "3 * 4",
+        "10 / 2",
+        "5 % 2",
+        "1 == 2",
+        "1 != 2",
+        "1 < 2",
+        "1 <= 2",
+        "1 > 2",
+        "1 >= 2",
+        "true and false",
+        "true or false",
+        "!true",
+        "-5",
+        "true",
+        "false",
+        "0..10",
+    };
+    for (cases) |src| {
+        errdefer std.log.warn("case: {s}", .{src});
+        var pair = try compileBoth(src);
+        defer pair.deinit();
+        try expectByteParity(pair);
+    }
+}
