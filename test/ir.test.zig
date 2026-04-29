@@ -773,7 +773,7 @@ test "diagnostic: function in list literal errors" {
     try testing.expect(hasError(result.mod, "Cannot store function 'sum' as a value", .err));
 }
 
-test "diagnostic: returning a function value errors" {
+test "returning a function value is allowed (used for currying)" {
     var result = try lowerSource(
         \\fn sum |x, y| return x + y
         \\fn pick || {
@@ -783,7 +783,7 @@ test "diagnostic: returning a function value errors" {
     defer result.mod.deinit();
     var program = result.program;
     defer program.deinit();
-    try testing.expect(hasError(result.mod, "Cannot store function 'sum' as a value", .err));
+    try testing.expect(!hasError(result.mod, "Cannot store function 'sum' as a value", .err));
 }
 
 test "diagnostic: dot-access on unknown type is silent" {

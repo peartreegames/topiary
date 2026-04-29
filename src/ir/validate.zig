@@ -247,7 +247,10 @@ const Validator = struct {
                 }
             },
             .return_value => |e| {
-                try self.checkNotFunctionRef(e, e.loc.start);
+                // Returning a function value is permitted: the value is
+                // ephemeral on the stack and the caller decides what to
+                // do with it. Storage positions (var_decl, assignments,
+                // list/set/map/instance fields) are still rejected.
                 try self.semExpr(e, stack);
             },
             .expr_stmt => |e| try self.semExpr(e, stack),

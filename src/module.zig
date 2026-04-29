@@ -125,18 +125,20 @@ pub const Module = struct {
             // Module.arena outlives both, and ArenaAllocator.free is a
             // no-op, so `program.deinit()` safely returns memory to the
             // module's arena where it's reclaimed at module deinit.
+            const prev_err_count = self.errors.list.items.len;
             var program = try ir.lower(self.arena.allocator(), self);
             defer program.deinit();
-            // TODO(step-12 cut-over): IR lowering / validation collect
-            // diagnostics on `module.errors` without short-circuiting,
-            // while the AST compiler raises `error.CompilerError`
-            // immediately on `fail()`. Tests that expect compile errors
-            // (e.g. "Cannot assign to constant") still need a way to
-            // surface those. Promoting `.err` diagnostics here works
-            // for fatal cases but spuriously fires for others, so
-            // proper resolution requires categorizing IR diagnostics
-            // into fatal vs. recoverable. Deferred to test-updating
-            // pass after compiler.zig is removed.
+            // Module-level fatal-diagnostic gate. The IR collects errors
+            // on `module.errors` without short-circuiting, but tests
+            // (and the runtime contract) expect `error.CompilerError`
+            // when compilation isn't well-formed. Bridge: if lowering
+            // or validation appended any `.err` entries, refuse to emit
+            // bytecode. Future refactor: give the IR its own fatal vs.
+            // recoverable severity so lowering halts at the source
+            // instead of walking the whole tree before noticing.
+            for (self.errors.list.items[prev_err_count..]) |entry| {
+                if (entry.severity == .err) return error.CompilerError;
+            }
             break :blk try Codegen.emit(allocator, self, &program);
         } else blk: {
             var compiler = try Compiler.init(allocator, self);
