@@ -70,6 +70,11 @@ const Lowerer = struct {
     /// Per-walk de-dup of include resolution.
     seen_files: std.array_hash_map.String(void),
 
+    /// Token of each anchor's first declaration, keyed by qualified path.
+    /// Used to point "previously declared at" notes on duplicate-decl
+    /// diagnostics. Same lifetime as the IR program (scratch arena).
+    decl_tokens: std.array_hash_map.String(Token),
+
     /// High-water mark of local-scope counts seen since the last
     /// reset (saved/restored around `function` scopes). Used to
     /// populate `FunctionDecl.locals_count` for codegen.
@@ -93,6 +98,7 @@ const Lowerer = struct {
             .scope = root_scope,
             .path_stack = .empty,
             .seen_files = .empty,
+            .decl_tokens = .empty,
         };
     }
 
@@ -262,11 +268,12 @@ const Lowerer = struct {
         const path = try self.qualifyName(choice_name);
         const anchor = self.registerAnchor(path, .choice, c.id) catch |e| switch (e) {
             error.SymbolAlreadyDeclared => blk: {
-                try self.errors().add(self.current_file.path, "'{s}' is already declared", tok, .err, .{choice_name});
+                try self.errors().addWithHelp(self.current_file.path, "'{s}' is already declared", tok, .err, .{choice_name}, null, try self.previousDeclNote(path));
                 break :blk ir.AnchorRef{ .kind = .choice, .path = path, .uuid = c.id };
             },
             error.OutOfMemory => return error.OutOfMemory,
         };
+        try self.recordDeclToken(path, tok);
 
         try self.pushPath(choice_name);
         defer self.popPath();
@@ -305,11 +312,12 @@ const Lowerer = struct {
         const path = try self.qualifyName(fork_name);
         const anchor = self.registerAnchor(path, .fork, f.id) catch |e| switch (e) {
             error.SymbolAlreadyDeclared => blk: {
-                try self.errors().addSpan(self.current_file.path, "'{s}' is already declared", tok, f.end_token, .err, .{fork_name});
+                try self.errors().addSpanWithHelp(self.current_file.path, "'{s}' is already declared", tok, f.end_token, .err, .{fork_name}, null, try self.previousDeclNote(path));
                 break :blk ir.AnchorRef{ .kind = .fork, .path = path, .uuid = f.id };
             },
             error.OutOfMemory => return error.OutOfMemory,
         };
+        try self.recordDeclToken(path, tok);
 
         try self.pushPath(fork_name);
         defer self.popPath();
@@ -331,11 +339,12 @@ const Lowerer = struct {
         const path = try self.qualifyName(b.name);
         const anchor = self.registerAnchor(path, .bough, b.id) catch |e| switch (e) {
             error.SymbolAlreadyDeclared => blk: {
-                try self.errors().addSpan(self.current_file.path, "Bough '{s}' is already declared", tok, b.name_token, .err, .{b.name});
+                try self.errors().addSpanWithHelp(self.current_file.path, "Bough '{s}' is already declared", tok, b.name_token, .err, .{b.name}, null, try self.previousDeclNote(path));
                 break :blk ir.AnchorRef{ .kind = .bough, .path = path, .uuid = b.id };
             },
             error.OutOfMemory => return error.OutOfMemory,
         };
+        try self.recordDeclToken(path, tok);
 
         try self.pushPath(b.name);
         defer self.popPath();
@@ -450,11 +459,12 @@ const Lowerer = struct {
             // sibling), produce an error but keep going with a non-anchored
             // representation.
             error.SymbolAlreadyDeclared => null_blk: {
-                try self.errors().addSpan(self.current_file.path, "'{s}' is already declared", tok, f.name_token, .err, .{f.name});
+                try self.errors().addSpanWithHelp(self.current_file.path, "'{s}' is already declared", tok, f.name_token, .err, .{f.name}, null, try self.previousDeclNote(path));
                 break :null_blk null;
             },
             error.OutOfMemory => return error.OutOfMemory,
         };
+        if (anchor != null) try self.recordDeclToken(path, tok);
 
         // Functions are reachable via their anchor path (load_const),
         // not via scope. Mirrors the AST compiler, which never adds
@@ -519,11 +529,12 @@ const Lowerer = struct {
         const path = try self.qualifyName(c.name);
         const anchor = self.registerAnchor(path, .class, UUID.Empty) catch |e| switch (e) {
             error.SymbolAlreadyDeclared => blk: {
-                try self.errors().addSpan(self.current_file.path, "'{s}' is already declared", tok, c.name_token, .err, .{c.name});
+                try self.errors().addSpanWithHelp(self.current_file.path, "'{s}' is already declared", tok, c.name_token, .err, .{c.name}, null, try self.previousDeclNote(path));
                 break :blk ir.AnchorRef{ .kind = .class, .path = path };
             },
             error.OutOfMemory => return error.OutOfMemory,
         };
+        try self.recordDeclToken(path, tok);
 
         const inits = try self.arena().alloc(ir.ExprRef, c.fields.len);
         for (c.fields, 0..) |*f_expr, i| inits[i] = try self.lowerExpression(f_expr);
@@ -556,11 +567,12 @@ const Lowerer = struct {
         const path = try self.qualifyName(e.name);
         const anchor = self.registerAnchor(path, .@"enum", UUID.Empty) catch |err| switch (err) {
             error.SymbolAlreadyDeclared => blk: {
-                try self.errors().addSpan(self.current_file.path, "'{s}' is already declared", tok, e.name_token, .err, .{e.name});
+                try self.errors().addSpanWithHelp(self.current_file.path, "'{s}' is already declared", tok, e.name_token, .err, .{e.name}, null, try self.previousDeclNote(path));
                 break :blk ir.AnchorRef{ .kind = .@"enum", .path = path };
             },
             error.OutOfMemory => return error.OutOfMemory,
         };
+        try self.recordDeclToken(path, tok);
 
         const values = try self.arena().alloc([]const u8, e.values.len);
         for (e.values, 0..) |v, i| values[i] = try self.arena().dupe(u8, v);
@@ -930,6 +942,24 @@ const Lowerer = struct {
         if (gop.found_existing) return error.SymbolAlreadyDeclared;
         gop.value_ptr.* = .{ .kind = kind, .path = path, .uuid = uuid };
         return gop.value_ptr.*;
+    }
+
+    /// "previous declaration at file:line" note for duplicate-decl
+    /// diagnostics. Caller transfers ownership to `addWithHelp`.
+    fn previousDeclNote(self: *Lowerer, path: []const u8) Error!?[]const u8 {
+        const tok = self.decl_tokens.get(path) orelse return null;
+        const alloc = self.errors().allocator;
+        const file_name = if (tok.file_index < self.program.files.len)
+            std.fs.path.basename(self.program.files[tok.file_index])
+        else
+            "?";
+        return try std.fmt.allocPrint(alloc, "previous declaration at {s}:{d}", .{ file_name, tok.line });
+    }
+
+    /// Record an anchor's first-declaration token so duplicate-decl
+    /// errors can point back to it.
+    fn recordDeclToken(self: *Lowerer, path: []const u8, tok: Token) Error!void {
+        try self.decl_tokens.put(self.scratchAlloc(), path, tok);
     }
 
     fn qualifyName(self: *Lowerer, name: []const u8) Error![]const u8 {
