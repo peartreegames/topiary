@@ -9,8 +9,11 @@ const Token = frontend.Token;
 const backend = @import("backend/index.zig");
 const Bytecode = backend.Bytecode;
 const Compiler = backend.Compiler;
+const Codegen = backend.Codegen;
 const CompilerErrors = backend.CompilerErrors;
 const suggest = backend.suggest;
+
+const ir = @import("ir/index.zig");
 
 const Io = std.Io;
 
@@ -113,14 +116,17 @@ pub const Module = struct {
         self.timings.parse_ns = @intCast(now - phase_start);
         phase_start = now;
 
-        // Phase 3: Compile
-        var compiler = try Compiler.init(allocator, self);
-        defer compiler.deinit();
-
-        compiler.compile() catch |e| {
-            return e;
+        // Phase 3: Compile (or codegen-from-IR behind the flag).
+        const result = if (backend.use_ir_codegen) blk: {
+            var program = try ir.lower(allocator, self);
+            defer program.deinit();
+            break :blk try Codegen.emit(allocator, self, &program);
+        } else blk: {
+            var compiler = try Compiler.init(allocator, self);
+            defer compiler.deinit();
+            compiler.compile() catch |e| return e;
+            break :blk try compiler.bytecode();
         };
-        const result = try compiler.bytecode();
         now = self.nowNs();
         self.timings.compile_ns = @intCast(now - phase_start);
         self.timings.total_ns = @intCast(now - total_start);

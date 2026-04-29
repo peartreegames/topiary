@@ -14,7 +14,15 @@ const Symbol = scope.Symbol;
 const compiler = @import("compiler.zig");
 pub const Compiler = compiler.Compiler;
 
+pub const emit = @import("emit.zig");
+pub const codegen = @import("codegen.zig");
+pub const Codegen = codegen.Codegen;
+
 const debug = @import("debug.zig");
 pub const DebugInfo = debug.DebugInfo;
 
 pub const suggest = @import("suggest.zig");
+
+/// Toggle between the AST-driven `Compiler` and the IR-driven `Codegen`
+/// during the migration. Off until codegen reaches byte-for-byte parity.
+pub const use_ir_codegen: bool = false;
