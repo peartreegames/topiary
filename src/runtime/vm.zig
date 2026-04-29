@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const backend = @import("../backend/index.zig");
-const Compiler = backend.Compiler;
 const Bytecode = backend.Bytecode;
 const OpCode = backend.OpCode;
 
@@ -104,7 +103,19 @@ pub const Vm = struct {
         BoughNotFound,
         InvalidChoice,
         Uninitialized,
-    } || Compiler.Error;
+        // VM-raised
+        SymbolNotFound,
+        InvalidArity,
+        AlreadySet,
+        InvalidOperation,
+        // Propagated from Module.generateBytecode
+        ParserError,
+        CompilerError,
+        SymbolAlreadyDeclared,
+        OutOfScope,
+        NotYetImplemented,
+        OutOfMemory,
+    };
 
     pub const Backup = struct {
         ip: C.JUMP,
