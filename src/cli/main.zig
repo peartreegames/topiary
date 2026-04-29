@@ -7,9 +7,6 @@ const State = topi.runtime.State;
 
 const Value = topi.types.Value;
 
-const Scope = topi.backend.Scope;
-const Compiler = topi.backend.Compiler;
-const Errors = topi.backend.CompilerErrors;
 
 const Locale = topi.locale.Locale;
 const Stamp = topi.stamp.Stamp;
