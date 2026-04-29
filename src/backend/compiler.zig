@@ -33,13 +33,14 @@ const Bytecode = @import("bytecode.zig").Bytecode;
 const OpCode = @import("opcode.zig").OpCode;
 const suggest = @import("suggest.zig");
 
-// Placeholder values for jump targets that get patched later.
-// Use values near maxInt(u32) to avoid collisions with real instruction addresses.
-const max_jump = std.math.maxInt(C.JUMP);
-const BREAK_HOLDER: C.JUMP = max_jump - 0;
-const CONTINUE_HOLDER: C.JUMP = max_jump - 1;
-const SWITCH_END_HOLDER: C.JUMP = max_jump - 2;
-const JUMP_HOLDER: C.JUMP = max_jump - 3;
+const emit = @import("emit.zig");
+const Emitter = emit.Emitter;
+const Chunk = emit.Chunk;
+const JumpPatch = emit.JumpPatch;
+const BREAK_HOLDER = emit.BREAK_HOLDER;
+const CONTINUE_HOLDER = emit.CONTINUE_HOLDER;
+const SWITCH_END_HOLDER = emit.SWITCH_END_HOLDER;
+const JUMP_HOLDER = emit.JUMP_HOLDER;
 
 fn arrayContains(comptime T: type, haystack: []const []const T, needle: []const T) bool {
     for (haystack) |element| {
@@ -56,14 +57,12 @@ pub const Compiler = struct {
     alloc: std.mem.Allocator,
     // `arena` owns transient bookkeeping: scopes, the hash maps below, duped
     // keys, path_stack backing. All bulk-freed by `arena.deinit()`.
-    // Call `self.tempAlloc()` to get the arena-backed allocator.
     arena: std.heap.ArenaAllocator,
-    constants: std.ArrayList(Value) = .empty,
-    constants_map: std.StringHashMapUnmanaged(C.CONSTANT) = .empty,
-    literal_cache: std.ArrayHashMapUnmanaged(Value, C.CONSTANT, Value.Adapter, true) = .empty,
+    /// Bytecode emission state — chunk, constant pool, literal cache.
+    /// Shared shape with the IR-driven `codegen.zig`.
+    emitter: Emitter,
     scope: *Scope,
     root_scope: *Scope,
-    chunk: *Chunk,
     locals_count: usize = 0,
 
     module: *Module,
@@ -71,103 +70,10 @@ pub const Compiler = struct {
     emitted_files: std.array_hash_map.String(void) = .empty,
     path_stack: std.ArrayList([]const u8) = .empty,
 
-    // Diagnostics tracking: keys are borrowed from `constants_map` keys.
+    // Diagnostics tracking: keys are borrowed from `constants_map` keys
+    // on the emitter.
     decl_tokens: std.StringHashMapUnmanaged(Token) = .empty,
     fn_arities: std.StringHashMapUnmanaged(u8) = .empty,
-
-    pub const Chunk = struct {
-        instructions: std.ArrayList(u8) = .empty,
-        debug_markers: std.ArrayList(Marker) = .empty,
-        parent: ?*Chunk,
-        module: *Module,
-        alloc: std.mem.Allocator,
-        last_op_pos: ?usize = null,
-
-        const Marker = struct {
-            file_index: u32,
-            line: u32,
-        };
-
-        pub fn init(allocator: std.mem.Allocator, parent: ?*Chunk, module: *Module) !*Chunk {
-            const chunk = try allocator.create(Chunk);
-            chunk.* = .{
-                .module = module,
-                .parent = parent,
-                .alloc = allocator,
-            };
-            // Root chunk ends up holding most of the bytecode. Pre-size from
-            // total source bytes to avoid ArrayList doubling reallocations.
-            if (parent == null) {
-                const estimate = module.timings.source_bytes / 4;
-                if (estimate > 0) {
-                    try chunk.instructions.ensureTotalCapacity(allocator, estimate);
-                    try chunk.debug_markers.ensureTotalCapacity(allocator, estimate);
-                }
-            }
-            return chunk;
-        }
-
-        pub fn debugInfo(self: *Chunk, allocator: std.mem.Allocator) ![]DebugInfo {
-            var infos: std.ArrayList(DebugInfo) = .empty;
-            // `infos.deinit` only frees the list backing — each DebugInfo
-            // owns its `file` dupe and `ranges`, so deinit them individually.
-            errdefer {
-                for (infos.items) |*di| di.deinit();
-                infos.deinit(allocator);
-            }
-            if (self.debug_markers.items.len == 0) {
-                infos.deinit(allocator);
-                return &.{};
-            }
-            var file_index = self.debug_markers.items[0].file_index;
-            var line = self.debug_markers.items[0].line;
-            var start: u32 = 0;
-            const initial_name = try allocator.dupe(u8, std.fs.path.basename(self.module.includes.keys()[file_index]));
-            {
-                errdefer allocator.free(initial_name);
-                try infos.append(allocator, DebugInfo.init(allocator, initial_name));
-            }
-            var info: *DebugInfo = &(infos.items[0]);
-            for (self.debug_markers.items, 0..) |d, ip| {
-                const end: u32 = @intCast(ip);
-                // file changed make a new debug info or find an existing one
-                if (file_index != d.file_index and d.file_index < self.module.includes.count()) {
-                    try info.ranges.append(allocator, .{ .start = start, .end = end, .line = line });
-                    line = d.line;
-                    start = end;
-
-                    file_index = d.file_index;
-                    const name = std.fs.path.basename(self.module.includes.keys()[file_index]);
-                    info = for (infos.items, 0..) |item, i| {
-                        if (!std.mem.eql(u8, name, item.file)) continue;
-                        break &(infos.items[i]);
-                    } else blk: {
-                        const new_file_name = try allocator.dupe(u8, name);
-                        {
-                            errdefer allocator.free(new_file_name);
-                            try infos.append(allocator, DebugInfo.init(allocator, new_file_name));
-                        }
-                        break :blk &(infos.items[infos.items.len - 1]);
-                    };
-                    continue;
-                }
-                // line changed, add new range to debug info
-                if (d.line != line) {
-                    try info.ranges.append(allocator, .{ .start = start, .end = end, .line = line });
-                    line = d.line;
-                    start = end;
-                }
-            }
-            try info.ranges.append(allocator, .{ .start = start, .end = @intCast(self.debug_markers.items.len), .line = line });
-            return try infos.toOwnedSlice(allocator);
-        }
-
-        pub fn deinit(self: *Chunk) void {
-            self.instructions.deinit(self.alloc);
-            self.debug_markers.deinit(self.alloc);
-            self.alloc.destroy(self);
-        }
-    };
 
     pub const Error = error{
         ParserError,
@@ -185,16 +91,18 @@ pub const Compiler = struct {
 
     pub fn init(alloc: std.mem.Allocator, module: *Module) !Compiler {
         if (module.entry.tree == null) return error.CompilerError;
-        // Root chunk lives on `alloc` — its instruction buffer becomes bytecode.
-        const root_chunk = try Compiler.Chunk.init(alloc, null, module);
-        errdefer root_chunk.deinit();
         var arena = std.heap.ArenaAllocator.init(alloc);
         errdefer arena.deinit();
         const root_scope = try Scope.create(arena.allocator(), null, .global);
+        // Root chunk + constants live on `alloc` so their backing
+        // outlives the compiler when `bytecode()` extracts via
+        // `toOwnedSlice`.
+        var emitter = try Emitter.init(alloc, module);
+        errdefer emitter.deinit();
         return .{
             .alloc = alloc,
             .arena = arena,
-            .chunk = root_chunk,
+            .emitter = emitter,
             .scope = root_scope,
             .root_scope = root_scope,
             .module = module,
@@ -203,22 +111,10 @@ pub const Compiler = struct {
     }
 
     pub fn deinit(self: *Compiler) void {
-        // Chunks live on `alloc` — their instruction buffers would have been
-        // consumed by bytecode()/compileFunctionObj() via toOwnedSlice on
-        // success. On error paths the buffers are still here; chunk.deinit
-        // frees them.
-        var chunk: ?*Chunk = self.chunk;
-        while (chunk) |c| {
-            chunk = c.parent;
-            c.deinit();
-        }
-        // Constants may hold Value.Obj pointers allocated on `alloc`. On
-        // success bytecode() transferred ownership out via toOwnedSlice, so
-        // items is empty here. On error paths we still own them.
-        for (self.constants.items) |item| {
-            item.destroy(self.alloc);
-        }
-        self.constants.deinit(self.alloc);
+        // Emitter owns chunks and the constants list; their buffers are
+        // emptied by `bytecode()` on success and freed here on error
+        // paths.
+        self.emitter.deinit();
         // Everything else — scopes, all bookkeeping hash maps, duped keys,
         // path_stack backing — is on the arena and freed in one shot.
         self.arena.deinit();
@@ -307,7 +203,7 @@ pub const Compiler = struct {
         }
         // Plus all top-level (unqualified) constants -- classes, enums,
         // functions, boughs with no path prefix.
-        var it = self.constants_map.keyIterator();
+        var it = self.emitter.constants_map.keyIterator();
         while (it.next()) |k| {
             if (std.mem.indexOfScalar(u8, k.*, '.') == null)
                 try names.append(self.alloc, k.*);
@@ -321,7 +217,7 @@ pub const Compiler = struct {
         // candidates for a typo. This avoids suggesting nested anchor paths.
         var names: std.ArrayList([]const u8) = .empty;
         defer names.deinit(self.alloc);
-        var it = self.constants_map.keyIterator();
+        var it = self.emitter.constants_map.keyIterator();
         while (it.next()) |k| {
             try names.append(self.alloc, k.*);
         }
@@ -389,15 +285,15 @@ pub const Compiler = struct {
         if (op_token.token_type != .dot) return;
         if (target.type != .identifier) return;
         if (index.type != .identifier) return;
-        if (self.constants_map.get(target.type.identifier) != null) return;
+        if (self.emitter.constants_map.get(target.type.identifier) != null) return;
 
         const sym = (try self.scope.resolve(self.arena.allocator(), target.type.identifier)) orelse return;
         const field = index.type.identifier;
 
         switch (sym.var_type) {
             .instance => |class_name| {
-                const const_idx = self.constants_map.get(class_name) orelse return;
-                const val = self.constants.items[const_idx];
+                const const_idx = self.emitter.constants_map.get(class_name) orelse return;
+                const val = self.emitter.constants.items[const_idx];
                 if (val != .obj or val.obj.data != .class) return;
                 const class_def = val.obj.data.class;
                 if (class_def.getFieldIndex(field) == null and class_def.getMethodIndex(field) == null) {
@@ -523,9 +419,9 @@ pub const Compiler = struct {
     fn suggestAnchor(self: *Compiler, path: []const u8) !?[]const u8 {
         var names: std.ArrayList([]const u8) = .empty;
         defer names.deinit(self.alloc);
-        var it = self.constants_map.iterator();
+        var it = self.emitter.constants_map.iterator();
         while (it.next()) |entry| {
-            const val = self.constants.items[entry.value_ptr.*];
+            const val = self.emitter.constants.items[entry.value_ptr.*];
             if (val == .obj and val.obj.data == .anchor) {
                 try names.append(self.alloc, entry.key_ptr.*);
             }
@@ -551,9 +447,9 @@ pub const Compiler = struct {
             filled = i + 1;
         }
         return .{
-            .instructions = try self.chunk.instructions.toOwnedSlice(self.alloc),
-            .debug_info = try self.chunk.debugInfo(self.alloc),
-            .constants = try self.constants.toOwnedSlice(self.alloc),
+            .instructions = try self.emitter.chunk.instructions.toOwnedSlice(self.alloc),
+            .debug_info = try self.emitter.chunk.debugInfo(self.alloc),
+            .constants = try self.emitter.constants.toOwnedSlice(self.alloc),
             .global_symbols = global_symbols,
             .locals_count = self.locals_count,
         };
@@ -587,23 +483,13 @@ pub const Compiler = struct {
         }
 
         // Add one final end at the end of file to grab the initial jump_request
-        if (self.chunk.debug_markers.items.len > 0) {
-            const dupe = self.chunk.debug_markers.items[self.chunk.debug_markers.items.len - 1];
-            try self.chunk.debug_markers.ensureTotalCapacity(self.alloc, self.chunk.debug_markers.items.len + 1);
-            self.chunk.debug_markers.appendAssumeCapacity(dupe);
-            try self.chunk.instructions.append(self.alloc, @intFromEnum(OpCode.end));
+        const chunk = self.emitter.chunk;
+        if (chunk.debug_markers.items.len > 0) {
+            const dupe = chunk.debug_markers.items[chunk.debug_markers.items.len - 1];
+            try chunk.debug_markers.ensureTotalCapacity(self.alloc, chunk.debug_markers.items.len + 1);
+            chunk.debug_markers.appendAssumeCapacity(dupe);
+            try chunk.instructions.append(self.alloc, @intFromEnum(OpCode.end));
         }
-    }
-
-    fn enterChunk(self: *Compiler) !void {
-        self.chunk = try Chunk.init(self.alloc, self.chunk, self.module);
-    }
-
-    // Caller owns memory and must deinit returned chunk
-    fn exitChunk(self: *Compiler) !*Chunk {
-        const old_chunk = self.chunk;
-        self.chunk = old_chunk.parent orelse return Error.OutOfScope;
-        return old_chunk;
     }
 
     fn enterScope(self: *Compiler, tag: Scope.Tag) !void {
@@ -699,11 +585,11 @@ pub const Compiler = struct {
                     else => return err,
                 };
                 // Track arity so call sites can validate argument counts.
-                if (self.constants_map.getKey(full_name)) |persistent_key| {
+                if (self.emitter.constants_map.getKey(full_name)) |persistent_key| {
                     try self.fn_arities.put(self.arena.allocator(), persistent_key, @intCast(f.parameters.len));
                 }
                 if (f.is_extern) {
-                    _ = try self.addConstant(.{ .obj = try self.compileExternFunctionObj(stmt) });
+                    _ = try self.emitter.addConstant(.{ .obj = try self.compileExternFunctionObj(stmt) });
                 }
             },
             .class => |c| {
@@ -798,20 +684,20 @@ pub const Compiler = struct {
             },
             .@"if" => |i| {
                 try self.compileExpression(i.condition);
-                const falseJp = try self.emitJump(.jump_if_false, token);
+                const falseJp = try self.emitter.emitJump(.jump_if_false, token);
                 try self.compileBlock(i.then_branch);
 
-                const endJp = try self.emitJump(.jump, token);
-                try self.patchJump(falseJp);
+                const endJp = try self.emitter.emitJump(.jump, token);
+                try self.emitter.patchJump(falseJp);
 
                 if (i.else_branch == null) {
-                    try self.writeOp(.nil, token);
-                    try self.writeOp(.pop, token);
-                    try self.patchJump(endJp);
+                    try self.emitter.writeOp(.nil, token);
+                    try self.emitter.writeOp(.pop, token);
+                    try self.emitter.patchJump(endJp);
                     return;
                 }
                 try self.compileBlock(i.else_branch.?);
-                try self.patchJump(endJp);
+                try self.emitter.patchJump(endJp);
             },
             .function => |f| {
                 if (self.scope.parent != null and f.is_extern)
@@ -822,7 +708,7 @@ pub const Compiler = struct {
                 try self.replaceConstant(full_name, .{ .obj = obj }, token);
             },
             .@"switch" => |s| {
-                const start = self.instructionPos();
+                const start = self.emitter.instructionPos();
                 try self.compileExpression(&s.capture);
                 var prong_jumps = try self.alloc.alloc(JumpPatch, s.prongs.len);
                 var inferred_else_jump: ?JumpPatch = null;
@@ -838,98 +724,98 @@ pub const Compiler = struct {
                     } else {
                         has_else = true;
                     }
-                    prong_jumps[i] = try self.emitJump(.prong, prong_stmt.token);
-                    _ = try self.writeInt(u8, @as(u8, @intCast(if (prong.values) |p| p.len else 0)), prong_stmt.token);
+                    prong_jumps[i] = try self.emitter.emitJump(.prong, prong_stmt.token);
+                    _ = try self.emitter.writeInt(u8, @as(u8, @intCast(if (prong.values) |p| p.len else 0)), prong_stmt.token);
                 }
                 // add an empty else if none found
                 if (!has_else) {
-                    const prong_jp = try self.emitJump(.prong, token);
-                    _ = try self.writeInt(u8, 0, token);
+                    const prong_jp = try self.emitter.emitJump(.prong, token);
+                    _ = try self.emitter.writeInt(u8, 0, token);
                     inferred_else_jump = prong_jp;
                 }
 
                 // replace jumps and compile body
                 for (s.prongs, 0..) |prong_stmt, i| {
                     const prong = prong_stmt.type.switch_prong;
-                    try self.patchJump(prong_jumps[i]);
+                    try self.emitter.patchJump(prong_jumps[i]);
                     try self.enterScope(.local);
                     try self.compileBlock(prong.body);
-                    try self.writeOp(.jump, prong_stmt.token);
-                    _ = try self.writeInt(C.JUMP, SWITCH_END_HOLDER, prong_stmt.token);
+                    try self.emitter.writeOp(.jump, prong_stmt.token);
+                    _ = try self.emitter.writeInt(C.JUMP, SWITCH_END_HOLDER, prong_stmt.token);
                     try self.exitScope();
                 }
 
                 if (inferred_else_jump) |jp| {
-                    try self.patchJump(jp);
+                    try self.emitter.patchJump(jp);
                     try self.enterScope(.local);
                     try self.compileBlock(&[_]Statement{});
-                    try self.writeOp(.jump, token);
-                    _ = try self.writeInt(C.JUMP, SWITCH_END_HOLDER, token);
+                    try self.emitter.writeOp(.jump, token);
+                    _ = try self.emitter.writeInt(C.JUMP, SWITCH_END_HOLDER, token);
                     try self.exitScope();
                 }
 
-                try replaceJumps(self.chunk.instructions.items[start..], SWITCH_END_HOLDER, self.instructionPos());
-                try self.writeOp(.pop, token);
+                try emit.replaceJumps(self.emitter.chunk.instructions.items[start..], SWITCH_END_HOLDER, self.emitter.instructionPos());
+                try self.emitter.writeOp(.pop, token);
             },
             .block => |b| try self.compileBlock(b),
             .expression => |exp| {
                 try self.compileExpression(&exp);
-                try self.writeOp(.pop, token);
+                try self.emitter.writeOp(.pop, token);
             },
             .@"break" => {
-                try self.writeOp(.jump, token);
-                _ = try self.writeInt(C.JUMP, BREAK_HOLDER, token);
+                try self.emitter.writeOp(.jump, token);
+                _ = try self.emitter.writeInt(C.JUMP, BREAK_HOLDER, token);
             },
             .@"continue" => {
-                try self.writeOp(.jump, token);
-                _ = try self.writeInt(C.JUMP, CONTINUE_HOLDER, token);
+                try self.emitter.writeOp(.jump, token);
+                _ = try self.emitter.writeInt(C.JUMP, CONTINUE_HOLDER, token);
             },
             .@"while" => |w| {
                 try self.enterScope(.local);
 
-                const start = self.instructionPos();
+                const start = self.emitter.instructionPos();
                 try self.compileExpression(&w.condition);
-                const exitJp = try self.emitJump(.jump_if_false, token);
+                const exitJp = try self.emitter.emitJump(.jump_if_false, token);
 
                 try self.compileBlock(w.body);
-                try self.writeOp(.jump, token);
-                _ = try self.writeInt(C.JUMP, start, token);
+                try self.emitter.writeOp(.jump, token);
+                _ = try self.emitter.writeInt(C.JUMP, start, token);
 
-                const end = self.instructionPos();
-                try self.patchJumpTo(exitJp, end);
+                const end = self.emitter.instructionPos();
+                try self.emitter.patchJumpTo(exitJp, end);
 
-                try replaceJumps(self.chunk.instructions.items[start..], BREAK_HOLDER, end);
-                try replaceJumps(self.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
+                try emit.replaceJumps(self.emitter.chunk.instructions.items[start..], BREAK_HOLDER, end);
+                try emit.replaceJumps(self.emitter.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
                 try self.exitScope();
             },
             .@"for" => |f| {
                 try self.compileExpression(&f.iterator);
-                try self.writeOp(.iter_start, token);
-                const start = self.instructionPos();
+                try self.emitter.writeOp(.iter_start, token);
+                const start = self.emitter.instructionPos();
 
-                try self.writeOp(.iter_next, token);
-                const exitJp = try self.emitJump(.jump_if_false, token);
+                try self.emitter.writeOp(.iter_next, token);
+                const exitJp = try self.emitter.emitJump(.jump_if_false, token);
 
                 try self.enterScope(.local);
                 const capture = try self.scope.define(self.arena.allocator(), f.capture, false);
-                try self.writeOp(.set_local, token);
-                _ = try self.writeInt(C.LOCAL, @as(C.LOCAL, @intCast(capture.index)), token);
+                try self.emitter.writeOp(.set_local, token);
+                _ = try self.emitter.writeInt(C.LOCAL, @as(C.LOCAL, @intCast(capture.index)), token);
 
                 try self.compileBlock(f.body);
-                try self.writeOp(.jump, token);
-                _ = try self.writeInt(C.JUMP, start, token);
+                try self.emitter.writeOp(.jump, token);
+                _ = try self.emitter.writeInt(C.JUMP, start, token);
 
-                const end = self.instructionPos();
-                try self.patchJumpTo(exitJp, end);
-                try replaceJumps(self.chunk.instructions.items[start..], BREAK_HOLDER, end);
-                try replaceJumps(self.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
+                const end = self.emitter.instructionPos();
+                try self.emitter.patchJumpTo(exitJp, end);
+                try emit.replaceJumps(self.emitter.chunk.instructions.items[start..], BREAK_HOLDER, end);
+                try emit.replaceJumps(self.emitter.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
 
                 try self.exitScope();
-                try self.writeOp(.pop, token);
+                try self.emitter.writeOp(.pop, token);
 
-                try self.writeOp(.iter_end, token);
+                try self.emitter.writeOp(.iter_end, token);
                 // pop item
-                try self.writeOp(.pop, token);
+                try self.emitter.writeOp(.pop, token);
             },
             .variable => |v| {
                 if (builtins.functions.has(v.name))
@@ -1061,10 +947,10 @@ pub const Compiler = struct {
                 try self.pushPathScope(fork_name);
                 defer self.popPathScope();
 
-                const start_pos = self.instructionPos();
+                const start_pos = self.emitter.instructionPos();
                 const anchor_idx = try self.resolveConstant(path);
                 if (anchor_idx) |idx| {
-                    self.constants.items[idx].obj.data.anchor.ip = start_pos;
+                    self.emitter.constants.items[idx].obj.data.anchor.ip = start_pos;
                     try self.compileVisit(idx, token);
                 } else {
                     const sr = try self.suggestAnchor(path);
@@ -1098,16 +984,16 @@ pub const Compiler = struct {
 
                 var backup_jp: ?JumpPatch = null;
                 if (f.is_backup) {
-                    backup_jp = try self.emitJump(.backup, token);
-                    _ = try self.writeInt(u8, 1, token); // 1 = fork backup
+                    backup_jp = try self.emitter.emitJump(.backup, token);
+                    _ = try self.emitter.writeInt(u8, 1, token); // 1 = fork backup
                 }
-                try self.writeOp(.fork, token);
-                const end_pos = self.instructionPos();
-                if (backup_jp) |jp| try self.patchJumpTo(jp, end_pos);
+                try self.emitter.writeOp(.fork, token);
+                const end_pos = self.emitter.instructionPos();
+                if (backup_jp) |jp| try self.emitter.patchJumpTo(jp, end_pos);
             },
             .choice => |c| {
                 for (c.tags) |tag| {
-                    try self.addIdentifierConstant(tag.name, token);
+                    try self.emitter.addIdentifierConstant(self.arena.allocator(),tag.name, token);
                 }
                 const name = c.name orelse &c.id;
                 const full_name = try self.getQualifiedName(name);
@@ -1116,14 +1002,14 @@ pub const Compiler = struct {
                 try self.path_stack.append(self.arena.allocator(), name);
                 defer _ = self.path_stack.pop();
 
-                const entry_ip = self.instructionPos();
+                const entry_ip = self.emitter.instructionPos();
                 const anchor_idx = try self.resolveConstant(full_name) orelse {
                     const sr = try self.suggestAnchor(full_name);
                     const hint = sr;
 
                     return self.fail("Could not find anchor '{s}'", token, .{full_name}, .{ .suggestion = hint });
                 };
-                self.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
+                self.emitter.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
 
                 const s = c.content.type.string;
                 for (s.expressions) |*item| {
@@ -1138,28 +1024,28 @@ pub const Compiler = struct {
                     },
                 };
 
-                const index = try self.addConstant(.{ .obj = obj });
+                const index = try self.emitter.addConstant(.{ .obj = obj });
 
-                try self.writeOp(.loc, token);
-                _ = try self.writeInt(C.CONSTANT, index, token);
-                _ = try self.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
+                try self.emitter.writeOp(.loc, token);
+                _ = try self.emitter.writeInt(C.CONSTANT, index, token);
+                _ = try self.emitter.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
 
-                const choiceJp = try self.emitJump(.choice, token);
-                _ = try self.writeInt(u8, if (c.is_unique) 1 else 0, token);
+                const choiceJp = try self.emitter.emitJump(.choice, token);
+                _ = try self.emitter.writeInt(u8, if (c.is_unique) 1 else 0, token);
 
-                _ = try self.writeInt(C.CONSTANT, anchor_idx, token);
-                _ = try self.writeInt(u8, @as(u8, @intCast(c.tags.len)), token);
+                _ = try self.emitter.writeInt(C.CONSTANT, anchor_idx, token);
+                _ = try self.emitter.writeInt(u8, @as(u8, @intCast(c.tags.len)), token);
 
-                const endJp = try self.emitJump(.jump, token);
-                try self.patchJump(choiceJp);
+                const endJp = try self.emitter.emitJump(.jump, token);
+                try self.emitter.patchJump(choiceJp);
 
                 try self.enterScope(.local);
 
                 try self.compileVisit(anchor_idx, token);
                 try self.compileBlock(c.body);
-                try self.writeOp(.end, token);
+                try self.emitter.writeOp(.end, token);
                 try self.exitScope();
-                try self.patchJump(endJp);
+                try self.emitter.patchJump(endJp);
             },
             .bough => |b| {
                 const full_name = try self.getQualifiedName(b.name);
@@ -1168,31 +1054,31 @@ pub const Compiler = struct {
                 try self.pushPathScope(b.name);
                 defer self.popPathScope();
 
-                const skipJp = try self.emitJump(.jump, token);
+                const skipJp = try self.emitter.emitJump(.jump, token);
 
                 try self.enterScope(.local);
                 errdefer self.exitScope() catch {};
 
-                const entry_ip = self.instructionPos();
+                const entry_ip = self.emitter.instructionPos();
                 const anchor_idx = try self.resolveConstant(full_name) orelse {
                     const sr = try self.suggestAnchor(full_name);
                     const hint = sr;
 
                     return self.fail("Could not find anchor '{s}'", token, .{full_name}, .{ .end = b.name_token, .suggestion = hint });
                 };
-                self.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
+                self.emitter.constants.items[anchor_idx].obj.data.anchor.ip = entry_ip;
                 try self.compileVisit(anchor_idx, token);
 
                 try self.compileBlock(b.body);
-                try self.writeOp(.end, token);
+                try self.emitter.writeOp(.end, token);
                 try self.exitScope();
 
-                const end = self.instructionPos();
-                try self.patchJumpTo(skipJp, end);
+                const end = self.emitter.instructionPos();
+                try self.emitter.patchJumpTo(skipJp, end);
             },
             .dialogue => |d| {
                 for (d.tags) |tag| {
-                    try self.addIdentifierConstant(tag.name, token);
+                    try self.emitter.addIdentifierConstant(self.arena.allocator(),tag.name, token);
                 }
 
                 const s = d.content.type.string;
@@ -1208,19 +1094,19 @@ pub const Compiler = struct {
                     },
                 };
 
-                const index = try self.addConstant(.{ .obj = obj });
+                const index = try self.emitter.addConstant(.{ .obj = obj });
 
-                try self.writeOp(.loc, token);
-                _ = try self.writeInt(C.CONSTANT, index, token);
-                _ = try self.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
+                try self.emitter.writeOp(.loc, token);
+                _ = try self.emitter.writeInt(C.CONSTANT, index, token);
+                _ = try self.emitter.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
 
                 if (d.speaker) |speaker| {
-                    try self.addIdentifierConstant(speaker, token);
+                    try self.emitter.addIdentifierConstant(self.arena.allocator(),speaker, token);
                 }
-                try self.writeOp(.dialogue, d.content.token);
+                try self.emitter.writeOp(.dialogue, d.content.token);
                 const has_speaker_value = if (d.speaker == null) @as(u8, 0) else @as(u8, 1);
-                _ = try self.writeInt(u8, has_speaker_value, token);
-                _ = try self.writeInt(u8, @as(u8, @intCast(d.tags.len)), token);
+                _ = try self.emitter.writeInt(u8, has_speaker_value, token);
+                _ = try self.emitter.writeInt(u8, @as(u8, @intCast(d.tags.len)), token);
             },
             .divert => |d| {
                 const anchor_idx = self.resolveAnchor(d.path) orelse {
@@ -1234,25 +1120,25 @@ pub const Compiler = struct {
                     return self.fail("Could not find path '{s}'", token, .{joined}, .{ .end = d.end_token, .suggestion = hint });
                 };
                 if (d.is_backup) {
-                    const backupJp = try self.emitJump(.backup, token);
-                    _ = try self.writeInt(u8, 0, token); // 0 = divert backup
-                    try self.writeOp(.divert, token);
-                    _ = try self.writeInt(C.CONSTANT, anchor_idx, token);
-                    try self.patchJump(backupJp);
+                    const backupJp = try self.emitter.emitJump(.backup, token);
+                    _ = try self.emitter.writeInt(u8, 0, token); // 0 = divert backup
+                    try self.emitter.writeOp(.divert, token);
+                    _ = try self.emitter.writeInt(C.CONSTANT, anchor_idx, token);
+                    try self.emitter.patchJump(backupJp);
                 } else {
-                    try self.writeOp(.divert, token);
-                    _ = try self.writeInt(C.CONSTANT, anchor_idx, token);
+                    try self.emitter.writeOp(.divert, token);
+                    _ = try self.emitter.writeInt(C.CONSTANT, anchor_idx, token);
                 }
             },
             .return_expression => |r| {
                 try self.compileExpression(&r);
-                try self.writeOp(.return_value, token);
+                try self.emitter.writeOp(.return_value, token);
             },
             .return_void => {
-                try self.writeOp(.return_void, token);
+                try self.emitter.writeOp(.return_void, token);
             },
             .fin => {
-                try self.writeOp(.fin, token);
+                try self.emitter.writeOp(.fin, token);
             },
             else => {},
         }
@@ -1297,8 +1183,8 @@ pub const Compiler = struct {
             },
             .identifier => |id| {
                 // Allow referencing other constants (like Enums or other Classes)
-                if (self.constants_map.get(id)) |idx| {
-                    return self.constants.items[idx];
+                if (self.emitter.constants_map.get(id)) |idx| {
+                    return self.emitter.constants.items[idx];
                 }
                 return self.fail("Identifier '{s}' cannot be resolved", token, .{id}, .{});
             },
@@ -1306,8 +1192,8 @@ pub const Compiler = struct {
                 // Handle Enum.Value references
                 if (idx.target.type == .identifier and token.token_type == .dot) {
                     const target_name = idx.target.type.identifier;
-                    if (self.constants_map.get(target_name)) |target_idx| {
-                        const target_val = self.constants.items[target_idx];
+                    if (self.emitter.constants_map.get(target_name)) |target_idx| {
+                        const target_val = self.emitter.constants.items[target_idx];
                         if (target_val == .obj and target_val.obj.data == .@"enum") {
                             const enum_obj = target_val.obj.data.@"enum";
                             const field_name = idx.index.type.identifier;
@@ -1346,8 +1232,8 @@ pub const Compiler = struct {
                     const target_name = idx.target.type.identifier;
                     const field_name = idx.index.type.identifier;
                     note = try std.fmt.allocPrint(self.alloc, "could not resolve '{s}.{s}' at compile time", .{ target_name, field_name });
-                    if (self.constants_map.get(target_name)) |target_idx| {
-                        const target_val = self.constants.items[target_idx];
+                    if (self.emitter.constants_map.get(target_name)) |target_idx| {
+                        const target_val = self.emitter.constants.items[target_idx];
                         const sr = if (target_val == .obj and target_val.obj.data == .class)
                             try self.suggestClassField(target_val.obj.data.class, field_name)
                         else if (target_val == .obj and target_val.obj.data == .@"enum")
@@ -1439,11 +1325,11 @@ pub const Compiler = struct {
         return obj;
     }
 
-    fn compileFunctionObj(self: *Compiler, stmt: *const Statement, token: Token) !*Value.Obj {
+    fn compileFunctionObj(self: *Compiler, stmt: *const Statement, token: Token) Error!*Value.Obj {
         const saved_locals_count = self.locals_count;
         self.locals_count = 0;
         try self.enterScope(.function);
-        try self.enterChunk();
+        try self.emitter.enterChunk();
         const f = stmt.type.function;
 
         var length = f.parameters.len;
@@ -1457,11 +1343,11 @@ pub const Compiler = struct {
         }
 
         try self.compileBlock(f.body);
-        if (!(try self.lastIs(.return_value)) and !(try self.lastIs(.return_void))) {
-            try self.writeOp(.return_void, token);
+        if (!(try self.emitter.lastIs(.return_value)) and !(try self.emitter.lastIs(.return_void))) {
+            try self.emitter.writeOp(.return_void, token);
         }
 
-        const chunk = try self.exitChunk();
+        const chunk = try self.emitter.exitChunk();
         defer chunk.deinit();
         // Use the high-water mark: the function scope's own count may not
         // include variables from nested local scopes (for/while/switch).
@@ -1495,20 +1381,6 @@ pub const Compiler = struct {
         const path = try std.mem.join(self.alloc, ".", self.path_stack.items);
         defer self.alloc.free(path);
         return try std.fmt.allocPrint(self.alloc, "{s}.{s}", .{ path, name });
-    }
-
-    fn lastIs(self: *Compiler, op: OpCode) !bool {
-        const pos = self.chunk.last_op_pos orelse return false;
-        return self.chunk.instructions.items[pos] == @intFromEnum(op);
-    }
-
-    fn removeLast(self: *Compiler, op: OpCode) !void {
-        if (try self.lastIs(op)) {
-            const pos = self.chunk.last_op_pos.?;
-            self.chunk.instructions.items.len = pos;
-            self.chunk.debug_markers.items.len = pos;
-            self.chunk.last_op_pos = null;
-        }
     }
 
     pub fn compileBlock(self: *Compiler, stmts: []const Statement) Error!void {
@@ -1587,7 +1459,7 @@ pub const Compiler = struct {
     fn registerAnchor(self: *Compiler, full_name: []const u8, uuid: UUID.ID, token: Token) !void {
         // Check for duplicate up-front so the visit symbol is not allocated on
         // failure (keeps error paths clean).
-        if (self.constants_map.contains(full_name)) return error.SymbolAlreadyDeclared;
+        if (self.emitter.constants_map.contains(full_name)) return error.SymbolAlreadyDeclared;
 
         const visit_sym = try self.root_scope.define(self.arena.allocator(), full_name, false);
         visit_sym.uuid = uuid;
@@ -1596,7 +1468,7 @@ pub const Compiler = struct {
         if (self.path_stack.items.len > 0) {
             const parent_path = try std.mem.join(self.alloc, ".", self.path_stack.items);
             defer self.alloc.free(parent_path);
-            parent_idx = self.constants_map.get(parent_path);
+            parent_idx = self.emitter.constants_map.get(parent_path);
         }
 
         const anchor_obj = try self.alloc.create(Value.Obj);
@@ -1621,8 +1493,8 @@ pub const Compiler = struct {
     }
 
     fn compileVisit(self: *Compiler, anchor_idx: C.CONSTANT, token: Token) !void {
-        try self.writeOp(.visit, token);
-        _ = try self.writeInt(C.CONSTANT, anchor_idx, token);
+        try self.emitter.writeOp(.visit, token);
+        _ = try self.emitter.writeInt(C.CONSTANT, anchor_idx, token);
     }
 
     pub fn compileExpression(self: *Compiler, expr: *const Expression) Error!void {
@@ -1632,7 +1504,7 @@ pub const Compiler = struct {
                 if (bin.operator == .less_than or bin.operator == .less_than_equal) {
                     try self.compileExpression(bin.right);
                     try self.compileExpression(bin.left);
-                    try self.writeOp(switch (bin.operator) {
+                    try self.emitter.writeOp(switch (bin.operator) {
                         .less_than => .greater_than,
                         .less_than_equal => .greater_than_equal,
                         else => unreachable,
@@ -1653,18 +1525,18 @@ pub const Compiler = struct {
                         },
                         .indexer => |idx| {
                             if (idx.target.type == .identifier) {
-                                if (self.constants_map.get(idx.target.type.identifier)) |i| {
-                                    const val = self.constants.items[i];
+                                if (self.emitter.constants_map.get(idx.target.type.identifier)) |i| {
+                                    const val = self.emitter.constants.items[i];
                                     return self.fail("Cannot reassign field on a {s}", idx.target.token, .{objKindName(val.obj.data)}, .{ .end = idx.index.token });
                                 } else {
                                     try self.validateDotAccess(idx.target, idx.index, bin.left.token, idx.target.token, idx.index.token);
                                 }
                             }
                             try self.compileExpression(bin.right);
-                            try self.writeOp(.dup, token);
+                            try self.emitter.writeOp(.dup, token);
                             try self.compileExpression(bin.left);
-                            try self.removeLast(.index);
-                            try self.writeOp(.set_property, token);
+                            try self.emitter.removeLast(.index);
+                            try self.emitter.writeOp(.set_property, token);
                             return;
                         },
                         else => return self.failAssignTarget(bin.left),
@@ -1694,7 +1566,7 @@ pub const Compiler = struct {
                         return self.fail("Unknown operation '{s}'", token, .{bin.operator.toString()}, .{ .err = Error.IllegalOperation });
                     },
                 };
-                try self.writeOp(op, token);
+                try self.emitter.writeOp(op, token);
 
                 switch (bin.operator) {
                     .assign_add, .assign_subtract, .assign_multiply, .assign_divide, .assign_modulus => {
@@ -1707,8 +1579,8 @@ pub const Compiler = struct {
                             },
                             .indexer => |idx| {
                                 if (idx.target.type == .identifier) {
-                                    if (self.constants_map.get(idx.target.type.identifier)) |i| {
-                                        const val = self.constants.items[i];
+                                    if (self.emitter.constants_map.get(idx.target.type.identifier)) |i| {
+                                        const val = self.emitter.constants.items[i];
                                         if (val == .obj and (val.obj.data == .class or val.obj.data == .@"enum" or val.obj.data == .function)) {
                                             return self.fail("Cannot assign to a {s} member", idx.target.token, .{objKindName(val.obj.data)}, .{ .end = idx.index.token });
                                         }
@@ -1716,10 +1588,10 @@ pub const Compiler = struct {
                                         try self.validateDotAccess(idx.target, idx.index, bin.left.token, idx.target.token, idx.index.token);
                                     }
                                 }
-                                try self.writeOp(.dup, token);
+                                try self.emitter.writeOp(.dup, token);
                                 try self.compileExpression(bin.left);
-                                try self.removeLast(.index);
-                                try self.writeOp(.set_property, token);
+                                try self.emitter.removeLast(.index);
+                                try self.emitter.writeOp(.set_property, token);
                                 return;
                             },
                             else => return self.failAssignTarget(bin.left),
@@ -1729,11 +1601,11 @@ pub const Compiler = struct {
                 }
             },
             .number => |n| {
-                const i = try self.addLiteralConstant(.{ .number = n });
-                try self.writeOp(.constant, token);
-                _ = try self.writeInt(C.CONSTANT, i, token);
+                const i = try self.emitter.addLiteralConstant(self.arena.allocator(),.{ .number = n });
+                try self.emitter.writeOp(.constant, token);
+                _ = try self.emitter.writeInt(C.CONSTANT, i, token);
             },
-            .boolean => |b| try self.writeOp(if (b) .true else .false, token),
+            .boolean => |b| try self.emitter.writeOp(if (b) .true else .false, token),
             .string => |s| {
                 for (s.expressions) |*item| {
                     try self.compileExpression(item);
@@ -1764,37 +1636,37 @@ pub const Compiler = struct {
 
                 const obj = try self.alloc.create(Value.Obj);
                 obj.* = .{ .data = .{ .string = try value.toOwnedSlice(self.alloc) } };
-                const index = try self.addConstant(.{ .obj = obj });
-                try self.writeOp(.string, token);
-                _ = try self.writeInt(C.CONSTANT, index, token);
-                _ = try self.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
+                const index = try self.emitter.addConstant(.{ .obj = obj });
+                try self.emitter.writeOp(.string, token);
+                _ = try self.emitter.writeInt(C.CONSTANT, index, token);
+                _ = try self.emitter.writeInt(u8, @as(u8, @intCast(s.expressions.len)), token);
             },
             .list => |l| {
                 for (l) |*item| {
                     try self.compileExpression(item);
                 }
-                try self.writeOp(.list, token);
+                try self.emitter.writeOp(.list, token);
                 const size = C.COLLECTION;
                 const length = @as(size, @intCast(l.len));
-                _ = try self.writeInt(size, length, token);
+                _ = try self.emitter.writeInt(size, length, token);
             },
             .map => |m| {
                 for (m) |*mp| {
                     try self.compileExpression(mp);
                 }
                 const size = C.COLLECTION;
-                try self.writeOp(.map, token);
+                try self.emitter.writeOp(.map, token);
                 const length = @as(size, @intCast(m.len));
-                _ = try self.writeInt(size, length, token);
+                _ = try self.emitter.writeInt(size, length, token);
             },
             .set => |s| {
                 for (s) |*item| {
                     try self.compileExpression(item);
                 }
                 const size = C.COLLECTION;
-                try self.writeOp(.set, token);
+                try self.emitter.writeOp(.set, token);
                 const length = @as(size, @intCast(s.len));
-                _ = try self.writeInt(size, length, token);
+                _ = try self.emitter.writeInt(size, length, token);
             },
             .map_pair => |mp| {
                 try self.compileExpression(mp.key);
@@ -1805,17 +1677,17 @@ pub const Compiler = struct {
                 defer parts.deinit(self.alloc);
                 if (try self.flattenIndexer(expr, &parts)) {
                     if (self.resolveAnchor(parts.items)) |i| {
-                        const anchor = self.constants.items[i].obj.data.anchor;
-                        try self.writeOp(.get_global, token);
-                        _ = try self.writeInt(C.GLOBAL, anchor.visit_index, token);
+                        const anchor = self.emitter.constants.items[i].obj.data.anchor;
+                        try self.emitter.writeOp(.get_global, token);
+                        _ = try self.emitter.writeInt(C.GLOBAL, anchor.visit_index, token);
                         return;
                     }
                 }
                 try self.compileExpression(idx.target);
                 if (token.token_type == .dot) {
                     if (idx.target.type == .identifier) {
-                        if (self.constants_map.get(idx.target.type.identifier)) |i| {
-                            const val = self.constants.items[i];
+                        if (self.emitter.constants_map.get(idx.target.type.identifier)) |i| {
+                            const val = self.emitter.constants.items[i];
                             if (val == .obj) {
                                 switch (val.obj.data) {
                                     .anchor => {
@@ -1825,10 +1697,10 @@ pub const Compiler = struct {
                                         defer nested_parts.deinit(self.alloc);
                                         if (try self.flattenIndexer(expr, &nested_parts)) {
                                             if (self.resolveAnchor(nested_parts.items)) |anchor_idx| {
-                                                try self.writeOp(.pop, token); // pop the target anchor
-                                                const anchor = self.constants.items[anchor_idx].obj.data.anchor;
-                                                try self.writeOp(.get_global, token);
-                                                _ = try self.writeInt(C.GLOBAL, anchor.visit_index, token);
+                                                try self.emitter.writeOp(.pop, token); // pop the target anchor
+                                                const anchor = self.emitter.constants.items[anchor_idx].obj.data.anchor;
+                                                try self.emitter.writeOp(.get_global, token);
+                                                _ = try self.emitter.writeInt(C.GLOBAL, anchor.visit_index, token);
                                                 return;
                                             }
                                         }
@@ -1868,23 +1740,23 @@ pub const Compiler = struct {
                             try self.validateDotAccess(idx.target, idx.index, token, idx.target.token, idx.index.token);
                         }
                     }
-                    try self.addIdentifierConstant(idx.index.type.identifier, token);
+                    try self.emitter.addIdentifierConstant(self.arena.allocator(),idx.index.type.identifier, token);
                 } else try self.compileExpression(idx.index);
-                try self.writeOp(.index, token);
+                try self.emitter.writeOp(.index, token);
             },
             .unary => |u| {
                 try self.compileExpression(u.value);
                 switch (u.operator) {
-                    .negate => try self.writeOp(.negate, token),
-                    .not => try self.writeOp(.not, token),
+                    .negate => try self.emitter.writeOp(.negate, token),
+                    .not => try self.emitter.writeOp(.not, token),
                 }
             },
             .identifier => |id| {
                 if (try self.resolveConstant(id)) |i| {
-                    const val = self.constants.items[i];
+                    const val = self.emitter.constants.items[i];
                     if (val == .obj and val.obj.data == .anchor) {
-                        try self.writeOp(.get_global, token);
-                        _ = try self.writeInt(C.GLOBAL, val.obj.data.anchor.visit_index, token);
+                        try self.emitter.writeOp(.get_global, token);
+                        _ = try self.emitter.writeInt(C.GLOBAL, val.obj.data.anchor.visit_index, token);
                         return;
                     }
                 }
@@ -1892,20 +1764,20 @@ pub const Compiler = struct {
             },
             .@"if" => |i| {
                 try self.compileExpression(i.condition);
-                const falseJp = try self.emitJump(.jump_if_false, token);
+                const falseJp = try self.emitter.emitJump(.jump_if_false, token);
                 try self.compileExpression(i.then_value);
 
-                const endJp = try self.emitJump(.jump, token);
-                try self.patchJump(falseJp);
+                const endJp = try self.emitter.emitJump(.jump, token);
+                try self.emitter.patchJump(falseJp);
 
                 try self.compileExpression(i.else_value);
-                try self.patchJump(endJp);
+                try self.emitter.patchJump(endJp);
             },
             .instance => |ins| {
-                const const_idx = self.constants_map.get(ins.name) orelse
+                const const_idx = self.emitter.constants_map.get(ins.name) orelse
                     return self.fail("Unknown class '{s}'", token, .{ins.name}, .{ .end = ins.name_token });
 
-                const class_val = self.constants.items[const_idx];
+                const class_val = self.emitter.constants.items[const_idx];
                 if (class_val != .obj or class_val.obj.data != .class)
                     return self.fail("'{s}' is not a class", token, .{ins.name}, .{ .end = ins.name_token });
 
@@ -1925,14 +1797,14 @@ pub const Compiler = struct {
 
                     try self.compileExpression(&field_expr);
                     // Push the name of the field so the VM knows which one we are setting
-                    try self.addIdentifierConstant(ins.field_names[i], token);
+                    try self.emitter.addIdentifierConstant(self.arena.allocator(),ins.field_names[i], token);
                 }
 
-                try self.writeOp(.constant, token);
-                _ = try self.writeInt(C.CONSTANT, const_idx, token);
+                try self.emitter.writeOp(.constant, token);
+                _ = try self.emitter.writeInt(C.CONSTANT, const_idx, token);
 
-                try self.writeOp(.instance, token);
-                _ = try self.writeInt(C.FIELDS, @as(C.FIELDS, @intCast(ins.fields.len)), token);
+                try self.emitter.writeOp(.instance, token);
+                _ = try self.emitter.writeInt(C.FIELDS, @as(C.FIELDS, @intCast(ins.fields.len)), token);
             },
             .call => |c| {
                 // Arity check for direct calls to known user functions. Skip
@@ -1956,17 +1828,17 @@ pub const Compiler = struct {
                 for (c.arguments) |*arg| {
                     try self.compileExpression(arg);
                 }
-                try self.writeOp(.call, token);
+                try self.emitter.writeOp(.call, token);
                 const size = C.ARGS;
                 std.debug.assert(c.arguments.len < std.math.maxInt(size));
                 var length = c.arguments.len;
                 if (c.target.type == .indexer) length += 1;
-                _ = try self.writeInt(size, @as(size, @intCast(length)), token);
+                _ = try self.emitter.writeInt(size, @as(size, @intCast(length)), token);
             },
             .range => |r| {
                 try self.compileExpression(r.right);
                 try self.compileExpression(r.left);
-                try self.writeOp(.range, token);
+                try self.emitter.writeOp(.range, token);
             },
             else => return Error.NotYetImplemented,
         }
@@ -1981,19 +1853,19 @@ pub const Compiler = struct {
             if (!is_decl and !s.is_mutable) return self.fail("Cannot assign to constant variable '{s}'", token, .{s.name}, .{});
             switch (s.tag) {
                 .global => {
-                    try self.writeOp(if (is_decl) .decl_global else .set_global, token);
-                    _ = try self.writeInt(C.GLOBAL, @as(C.GLOBAL, @intCast(s.index)), token);
+                    try self.emitter.writeOp(if (is_decl) .decl_global else .set_global, token);
+                    _ = try self.emitter.writeInt(C.GLOBAL, @as(C.GLOBAL, @intCast(s.index)), token);
                 },
                 .upvalue => {
                     std.debug.assert(is_decl == false);
-                    try self.writeOp(.set_upvalue, token);
+                    try self.emitter.writeOp(.set_upvalue, token);
                     const depth = self.calculateScopeDepth(s);
-                    _ = try self.writeInt(u8, @intCast(depth), token);
-                    _ = try self.writeInt(C.LOCAL, @as(C.LOCAL, @intCast(s.index)), token);
+                    _ = try self.emitter.writeInt(u8, @intCast(depth), token);
+                    _ = try self.emitter.writeInt(C.LOCAL, @as(C.LOCAL, @intCast(s.index)), token);
                 },
                 .local, .function => {
-                    try self.writeOp(.set_local, token);
-                    _ = try self.writeInt(C.LOCAL, @as(C.LOCAL, @intCast(s.index)), token);
+                    try self.emitter.writeOp(.set_local, token);
+                    _ = try self.emitter.writeInt(C.LOCAL, @as(C.LOCAL, @intCast(s.index)), token);
                 },
             }
         } else {
@@ -2009,28 +1881,28 @@ pub const Compiler = struct {
         if (symbol) |s| {
             switch (s.tag) {
                 .local, .function => {
-                    try self.writeOp(.get_local, token);
-                    _ = try self.writeInt(C.LOCAL, @intCast(s.index), token);
+                    try self.emitter.writeOp(.get_local, token);
+                    _ = try self.emitter.writeInt(C.LOCAL, @intCast(s.index), token);
                     return;
                 },
                 .upvalue => {
-                    try self.writeOp(.get_upvalue, token);
+                    try self.emitter.writeOp(.get_upvalue, token);
                     const depth = self.calculateScopeDepth(s);
-                    _ = try self.writeInt(u8, @intCast(depth), token);
-                    _ = try self.writeInt(C.LOCAL, @intCast(s.index), token);
+                    _ = try self.emitter.writeInt(u8, @intCast(depth), token);
+                    _ = try self.emitter.writeInt(C.LOCAL, @intCast(s.index), token);
                     return;
                 },
                 .global => {
-                    try self.writeOp(.get_global, token);
-                    _ = try self.writeInt(C.GLOBAL, @intCast(s.index), token);
+                    try self.emitter.writeOp(.get_global, token);
+                    _ = try self.emitter.writeInt(C.GLOBAL, @intCast(s.index), token);
                     return;
                 },
             }
         }
 
         if (try self.resolveConstant(name)) |i| {
-            try self.writeOp(.constant, token);
-            _ = try self.writeInt(C.CONSTANT, i, token);
+            try self.emitter.writeOp(.constant, token);
+            _ = try self.emitter.writeInt(C.CONSTANT, i, token);
             return;
         }
 
@@ -2059,80 +1931,19 @@ pub const Compiler = struct {
             defer self.alloc.free(path);
             const full_name = try std.fmt.allocPrint(self.alloc, "{s}.{s}", .{ path, name });
             defer self.alloc.free(full_name);
-            if (self.constants_map.get(full_name)) |idx| return idx;
+            if (self.emitter.constants_map.get(full_name)) |idx| return idx;
         }
 
-        return self.constants_map.get(name);
+        return self.emitter.constants_map.get(name);
     }
 
-    fn instructionPos(self: *Compiler) C.JUMP {
-        return @as(C.JUMP, @intCast(self.chunk.instructions.items.len));
-    }
-
-    fn writeOp(self: *Compiler, op: OpCode, token: Token) !void {
-        var chunk = self.chunk;
-        chunk.last_op_pos = chunk.instructions.items.len;
-        try chunk.debug_markers.append(self.alloc, .{ .file_index = @intCast(token.file_index), .line = @intCast(token.line) });
-        try chunk.instructions.append(self.alloc, @intFromEnum(op));
-    }
-
-    fn writeValue(self: *Compiler, buf: []const u8, token: Token) !void {
-        var chunk = self.chunk;
-        try chunk.debug_markers.appendNTimes(self.alloc, .{ .file_index = @intCast(token.file_index), .line = @intCast(token.line) }, buf.len);
-        try chunk.instructions.appendSlice(self.alloc, buf);
-    }
-
-    fn writeInt(self: *Compiler, comptime T: type, value: T, token: Token) !usize {
-        const chunk = self.chunk;
-        const start = chunk.instructions.items.len;
-        var buf: [@sizeOf(T)]u8 = undefined;
-        std.mem.writeInt(T, buf[0..], value, .little);
-        try self.writeValue(&buf, token);
-        return start;
-    }
-
-    const JumpPatch = struct { pos: usize };
-
-    fn emitJump(self: *Compiler, op: OpCode, token: Token) !JumpPatch {
-        try self.writeOp(op, token);
-        const pos = try self.writeInt(C.JUMP, JUMP_HOLDER, token);
-        return .{ .pos = pos };
-    }
-
-    fn patchJump(self: *Compiler, jp: JumpPatch) !void {
-        try self.replaceValue(jp.pos, C.JUMP, self.instructionPos());
-    }
-
-    fn patchJumpTo(self: *Compiler, jp: JumpPatch, target: C.JUMP) !void {
-        try self.replaceValue(jp.pos, C.JUMP, target);
-    }
-
-    pub fn replaceValue(self: *Compiler, pos: usize, comptime T: type, value: T) !void {
-        var buf: [@sizeOf(T)]u8 = undefined;
-        std.mem.writeInt(T, buf[0..], value, .little);
-        var chunk = self.chunk;
-        for (buf, 0..) |v, i| {
-            chunk.instructions.items[pos + i] = v;
-        }
-    }
-
-    pub fn replaceConstant(self: *Compiler, name: []const u8, value: Value, token: Token) !void {
-        const i = self.constants_map.get(name) orelse return self.fail("Constant {s} not found", token, .{name}, .{});
-        self.constants.items[i] = value;
-    }
-
-    pub fn replaceJumps(instructions: []u8, old_pos: C.JUMP, new_pos: C.JUMP) !void {
-        var i: usize = 0;
-        const jump = @intFromEnum(OpCode.jump);
-        while (i + 1 + @sizeOf(C.JUMP) <= instructions.len) : (i += 1) {
-            if (instructions[i] == jump and std.mem.readVarInt(C.JUMP, instructions[(i + 1)..(i + 1 + @sizeOf(C.JUMP))], .little) == old_pos) {
-                var buf: [@sizeOf(C.JUMP)]u8 = undefined;
-                std.mem.writeInt(C.JUMP, buf[0..], new_pos, .little);
-                for (buf, 0..) |v, index| {
-                    instructions[i + index + 1] = v;
-                }
-            }
-        }
+    /// Wrapper that emits a "Constant {s} not found" diagnostic on miss.
+    /// Codegen callers can drop this and use `self.emitter.replaceConstant`
+    /// directly since the path is always known to exist by construction.
+    fn replaceConstant(self: *Compiler, name: []const u8, value: Value, token: Token) Error!void {
+        self.emitter.replaceConstant(name, value) catch {
+            return self.fail("Constant {s} not found", token, .{name}, .{});
+        };
     }
 
     fn resolveAnchor(self: *Compiler, path_parts: [][]const u8) ?C.CONSTANT {
@@ -2141,7 +1952,7 @@ pub const Compiler = struct {
 
         const idx = self.resolveConstant(path) catch return null;
         if (idx) |i| {
-            const value = self.constants.items[i];
+            const value = self.emitter.constants.items[i];
             if (value == .obj and value.obj.data == .anchor) return i;
         }
 
@@ -2162,53 +1973,21 @@ pub const Compiler = struct {
         return true;
     }
 
-    pub fn addConstant(self: *Compiler, value: Value) !C.CONSTANT {
-        try self.constants.append(self.alloc, value);
-        return @intCast(self.constants.items.len - 1);
-    }
-
-    pub fn addNamedConstant(self: *Compiler, name: []const u8, value: Value) !void {
-        return self.addNamedConstantTok(name, value, null);
-    }
-
-    /// Register a named constant and optionally record the source token that
-    /// declared it. Returns `error.SymbolAlreadyDeclared` if a constant with
-    /// that name already exists. Atomic: either fully succeeds (value placed
-    /// in constants, key inserted everywhere) or leaves all state untouched.
-    pub fn addNamedConstantTok(self: *Compiler, name: []const u8, value: Value, token: ?Token) !void {
-        if (self.constants_map.contains(name)) return error.SymbolAlreadyDeclared;
-        // Reserve capacity for every write up front so post-`dupe` inserts
-        // cannot OOM.
+    /// Wrapper that records the declaration token in `decl_tokens` for
+    /// "previous declaration at" diagnostics. The Emitter's named-constant
+    /// add does the actual insert; we look up the duped key it stored
+    /// and reuse it as the decl_tokens key.
+    fn addNamedConstantTok(self: *Compiler, name: []const u8, value: Value, token: ?Token) !void {
         const aa = self.arena.allocator();
-        try self.constants.ensureUnusedCapacity(self.alloc, 1);
-        try self.constants_map.ensureUnusedCapacity(aa, 1);
-        if (token != null) try self.decl_tokens.ensureUnusedCapacity(aa, 1);
-        const key = try aa.dupe(u8, name);
-        const i: C.CONSTANT = @intCast(self.constants.items.len);
-        self.constants.appendAssumeCapacity(value);
-        self.constants_map.putAssumeCapacityNoClobber(key, i);
-        if (token) |t| self.decl_tokens.putAssumeCapacity(key, t);
-    }
-
-    pub fn addLiteralConstant(self: *Compiler, value: Value) !C.CONSTANT {
-        if (self.literal_cache.get(value)) |idx| return idx;
-
-        const i = try self.addConstant(value);
-        try self.literal_cache.put(self.arena.allocator(), value, i);
-        return i;
-    }
-
-    fn addIdentifierConstant(self: *Compiler, name: []const u8, token: Token) !void {
-        var i = self.constants_map.get(name);
-        if (i == null) {
-            const aa = self.arena.allocator();
-            try self.constants_map.ensureUnusedCapacity(aa, 1);
-            const key = try aa.dupe(u8, name);
-            i = try self.addConstant(.{ .const_string = name });
-            self.constants_map.putAssumeCapacityNoClobber(key, i.?);
+        try self.emitter.addNamedConstantTok(aa, name, value);
+        if (token) |t| {
+            try self.decl_tokens.ensureUnusedCapacity(aa, 1);
+            const persistent_key = self.emitter.constants_map.getKey(name).?;
+            self.decl_tokens.putAssumeCapacity(persistent_key, t);
         }
+    }
 
-        try self.writeOp(.constant, token);
-        _ = try self.writeInt(C.CONSTANT, i.?, token);
+    fn addNamedConstant(self: *Compiler, name: []const u8, value: Value) !void {
+        return self.addNamedConstantTok(name, value, null);
     }
 };
