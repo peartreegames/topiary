@@ -143,6 +143,58 @@ test "Codegen expressions parity" {
     }
 }
 
+test "Codegen if parity" {
+    const cases = [_][]const u8{
+        "if true { 10 }",
+        "if true { 10 } else { 20 }",
+        "if 1 == 1 { 5 } else { 6 }",
+    };
+    for (cases) |src| {
+        errdefer std.log.warn("case: {s}", .{src});
+        var pair = try compileBoth(src);
+        defer pair.deinit();
+        try expectByteParity(pair);
+    }
+}
+
+test "Codegen while parity" {
+    const cases = [_][]const u8{
+        "while false { }",
+        "while 1 > 2 { }",
+    };
+    for (cases) |src| {
+        errdefer std.log.warn("case: {s}", .{src});
+        var pair = try compileBoth(src);
+        defer pair.deinit();
+        try expectByteParity(pair);
+    }
+}
+
+test "Codegen for parity" {
+    const cases = [_][]const u8{
+        "for 0..5 |x| { 1 }",
+    };
+    for (cases) |src| {
+        errdefer std.log.warn("case: {s}", .{src});
+        var pair = try compileBoth(src);
+        defer pair.deinit();
+        try expectByteParity(pair);
+    }
+}
+
+test "Codegen switch parity" {
+    const cases = [_][]const u8{
+        "var n = 1 switch n { 1: 10, 2: 20, else: 30 }",
+        "var n = 2 switch n { 1, 2: 10, else: 20 }",
+    };
+    for (cases) |src| {
+        errdefer std.log.warn("case: {s}", .{src});
+        var pair = try compileBoth(src);
+        defer pair.deinit();
+        try expectByteParity(pair);
+    }
+}
+
 test "Codegen var_decl parity" {
     const cases = [_][]const u8{
         "const x = 5",

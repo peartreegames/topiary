@@ -34,12 +34,14 @@ const builtins = @import("../runtime/index.zig").builtins;
 const scope_mod = @import("../ir/scope.zig");
 const Scope = scope_mod.Scope;
 
-const emit = @import("emit.zig");
-const Emitter = emit.Emitter;
-const BREAK_HOLDER = emit.BREAK_HOLDER;
-const CONTINUE_HOLDER = emit.CONTINUE_HOLDER;
-const SWITCH_END_HOLDER = emit.SWITCH_END_HOLDER;
-const JUMP_HOLDER = emit.JUMP_HOLDER;
+const emit_mod = @import("emit.zig");
+const Emitter = emit_mod.Emitter;
+const JumpPatch = emit_mod.JumpPatch;
+const replaceJumps = emit_mod.replaceJumps;
+const BREAK_HOLDER = emit_mod.BREAK_HOLDER;
+const CONTINUE_HOLDER = emit_mod.CONTINUE_HOLDER;
+const SWITCH_END_HOLDER = emit_mod.SWITCH_END_HOLDER;
+const JUMP_HOLDER = emit_mod.JUMP_HOLDER;
 const OpCode = @import("opcode.zig").OpCode;
 
 const Token = @import("../frontend/token.zig").Token;
@@ -68,7 +70,8 @@ pub const Codegen = struct {
     /// plain `VarDecl` symbols, but the runtime layout reserves indices
     /// 0..N-1 for anchor visit symbols (registered during prepass) and
     /// N.. for vars. So `runtime_index = ir_index + global_offset`.
-    /// Set to `root_scope.count` after prepass completes.
+    /// Set to `root_scope.count` after prepass completes (= number of
+    /// anchor visit symbols, before any global var_decl is defined).
     global_offset: C.GLOBAL = 0,
 
     pub fn emit(
@@ -266,12 +269,121 @@ pub const Codegen = struct {
             .block => |b| {
                 for (b.body) |*s| try self.compileStmt(s);
             },
+            .@"if" => |i| try self.compileIf(i, token),
+            .@"while" => |w| try self.compileWhile(w, token),
+            .@"for" => |f| try self.compileFor(f, token),
+            .@"switch" => |s| try self.compileSwitch(s, token),
             .include => {
                 // Lowering inlined the included statements directly into
                 // body; the marker has nothing to emit.
             },
             else => return error.NotYetImplemented,
         }
+    }
+
+    fn compileIf(self: *Codegen, i: ir.IfStmt, token: Token) Error!void {
+        try self.compileExpr(i.condition);
+        const false_jp = try self.emitter.emitJump(.jump_if_false, token);
+        for (i.then_branch) |*s| try self.compileStmt(s);
+        const end_jp = try self.emitter.emitJump(.jump, token);
+        try self.emitter.patchJump(false_jp);
+        if (i.else_branch) |eb| {
+            for (eb) |*s| try self.compileStmt(s);
+            try self.emitter.patchJump(end_jp);
+        } else {
+            // Mirrors compiler.zig:693-697: when there's no else, push
+            // nil and pop so the if's stack effect matches an
+            // expression-style if.
+            try self.emitter.writeOp(.nil, token);
+            try self.emitter.writeOp(.pop, token);
+            try self.emitter.patchJump(end_jp);
+        }
+    }
+
+    fn compileWhile(self: *Codegen, w: ir.WhileStmt, token: Token) Error!void {
+        const start = self.emitter.instructionPos();
+        try self.compileExpr(w.condition);
+        const exit_jp = try self.emitter.emitJump(.jump_if_false, token);
+
+        for (w.body) |*s| try self.compileStmt(s);
+        try self.emitter.writeOp(.jump, token);
+        _ = try self.emitter.writeInt(C.JUMP, start, token);
+
+        const end = self.emitter.instructionPos();
+        try self.emitter.patchJumpTo(exit_jp, end);
+
+        try replaceJumps(self.emitter.chunk.instructions.items[start..], BREAK_HOLDER, end);
+        try replaceJumps(self.emitter.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
+    }
+
+    fn compileFor(self: *Codegen, f: ir.ForStmt, token: Token) Error!void {
+        try self.compileExpr(f.iterator);
+        try self.emitter.writeOp(.iter_start, token);
+        const start = self.emitter.instructionPos();
+
+        try self.emitter.writeOp(.iter_next, token);
+        const exit_jp = try self.emitter.emitJump(.jump_if_false, token);
+
+        // The capture binding's slot is already resolved by IR lowering.
+        try self.emitter.writeOp(.set_local, token);
+        _ = try self.emitter.writeInt(C.LOCAL, f.capture_slot.local.index, token);
+
+        for (f.body) |*s| try self.compileStmt(s);
+        try self.emitter.writeOp(.jump, token);
+        _ = try self.emitter.writeInt(C.JUMP, start, token);
+
+        const end = self.emitter.instructionPos();
+        try self.emitter.patchJumpTo(exit_jp, end);
+        try replaceJumps(self.emitter.chunk.instructions.items[start..], BREAK_HOLDER, end);
+        try replaceJumps(self.emitter.chunk.instructions.items[start..], CONTINUE_HOLDER, start);
+
+        try self.emitter.writeOp(.pop, token);
+        try self.emitter.writeOp(.iter_end, token);
+        // pop the iterator value
+        try self.emitter.writeOp(.pop, token);
+    }
+
+    fn compileSwitch(self: *Codegen, s: ir.SwitchStmt, token: Token) Error!void {
+        const start = self.emitter.instructionPos();
+        try self.compileExpr(s.capture);
+
+        var prong_jumps = try self.alloc.alloc(JumpPatch, s.prongs.len);
+        defer self.alloc.free(prong_jumps);
+        var inferred_else_jump: ?JumpPatch = null;
+
+        var has_else = false;
+        for (s.prongs, 0..) |prong, i| {
+            if (prong.values) |vals| {
+                for (vals) |v| try self.compileExpr(v);
+            } else {
+                has_else = true;
+            }
+            prong_jumps[i] = try self.emitter.emitJump(.prong, prong.loc.start);
+            const value_count: u8 = if (prong.values) |v| @intCast(v.len) else 0;
+            _ = try self.emitter.writeInt(u8, value_count, prong.loc.start);
+        }
+        if (!has_else) {
+            const jp = try self.emitter.emitJump(.prong, token);
+            _ = try self.emitter.writeInt(u8, 0, token);
+            inferred_else_jump = jp;
+        }
+
+        for (s.prongs, 0..) |prong, i| {
+            try self.emitter.patchJump(prong_jumps[i]);
+            for (prong.body) |*b| try self.compileStmt(b);
+            try self.emitter.writeOp(.jump, prong.loc.start);
+            _ = try self.emitter.writeInt(C.JUMP, SWITCH_END_HOLDER, prong.loc.start);
+        }
+
+        if (inferred_else_jump) |jp| {
+            try self.emitter.patchJump(jp);
+            // Empty inferred-else body — just jump straight to the end.
+            try self.emitter.writeOp(.jump, token);
+            _ = try self.emitter.writeInt(C.JUMP, SWITCH_END_HOLDER, token);
+        }
+
+        try replaceJumps(self.emitter.chunk.instructions.items[start..], SWITCH_END_HOLDER, self.emitter.instructionPos());
+        try self.emitter.writeOp(.pop, token);
     }
 
     fn compileVarDecl(self: *Codegen, v: ir.VarDecl, token: Token) Error!void {
@@ -419,10 +531,77 @@ pub const Codegen = struct {
             .debug_info = try self.emitter.chunk.debugInfo(self.alloc),
             .constants = try self.emitter.constants.toOwnedSlice(self.alloc),
             .global_symbols = global_symbols,
-            .locals_count = 0,
+            .locals_count = self.computeTopLevelLocalsCount(),
         };
     }
+
+    /// Returns the runtime stack-frame size for top-level code.
+    ///
+    /// Mirrors the AST compiler quirk: `Scope.create(.local)` inherits
+    /// `parent.count`, so a local scope nested under the global root
+    /// includes every global slot in its `count`. `exitScope` then
+    /// updates `locals_count = max(locals_count, old_scope.count)`.
+    /// This means an empty `for`/`while`/`switch`-prong nested at top
+    /// level still bumps `locals_count` to the number of globals seen
+    /// so far. We replicate that walk here so byte-parity holds.
+    ///
+    /// `current` starts at the number of anchor visit symbols
+    /// (root_scope.count after prepass) and grows by 1 per global
+    /// `var_decl` as we walk in source order.
+    fn computeTopLevelLocalsCount(self: *Codegen) usize {
+        var hi: usize = 0;
+        // Start at the post-prepass anchor count. Var_decls increment as
+        // we walk, mirroring the AST's incremental scope tracking. Using
+        // `root_scope.count` post-emission would double-count globals.
+        var current: usize = self.global_offset;
+        computeBodyLocals(self.program.body, &current, &hi);
+        return hi;
+    }
 };
+
+/// Walks `body` updating `current` and `hi` to mirror the AST
+/// compiler's scope-count tracking. Local-scope bodies (for/while/
+/// switch/etc.) save and restore `current` around the body — vars
+/// declared inside them go out of scope on exit. `if`/`block` do NOT
+/// open a new scope in the AST compiler, so their bodies extend the
+/// outer count.
+fn computeBodyLocals(body: []const ir.Stmt, current: *usize, hi: *usize) void {
+    for (body) |*s| {
+        switch (s.kind) {
+            .var_decl => current.* += 1,
+            .@"for" => |f| {
+                const saved = current.*;
+                current.* += 1; // capture binding
+                if (current.* > hi.*) hi.* = current.*;
+                computeBodyLocals(f.body, current, hi);
+                current.* = saved;
+            },
+            .@"while" => |w| {
+                const saved = current.*;
+                if (current.* > hi.*) hi.* = current.*;
+                computeBodyLocals(w.body, current, hi);
+                current.* = saved;
+            },
+            .@"switch" => |sw| for (sw.prongs) |p| {
+                const saved = current.*;
+                if (current.* > hi.*) hi.* = current.*;
+                computeBodyLocals(p.body, current, hi);
+                current.* = saved;
+            },
+            .@"if" => |i| {
+                computeBodyLocals(i.then_branch, current, hi);
+                if (i.else_branch) |eb| computeBodyLocals(eb, current, hi);
+            },
+            .block => |b| computeBodyLocals(b.body, current, hi),
+            .bough => |b| computeBodyLocals(b.body, current, hi),
+            .fork, .backup_fork => |f| computeBodyLocals(f.body, current, hi),
+            .choice => |c| computeBodyLocals(c.body, current, hi),
+            // Function bodies have their own frame, skip.
+            .function => {},
+            else => {},
+        }
+    }
+}
 
 fn isAssignOp(op: ast.BinaryOp) bool {
     return switch (op) {
