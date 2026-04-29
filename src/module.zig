@@ -8,7 +8,6 @@ const Token = frontend.Token;
 
 const backend = @import("backend/index.zig");
 const Bytecode = backend.Bytecode;
-const Compiler = backend.Compiler;
 const Codegen = backend.Codegen;
 const CompilerErrors = backend.CompilerErrors;
 const suggest = backend.suggest;
@@ -116,36 +115,29 @@ pub const Module = struct {
         self.timings.parse_ns = @intCast(now - phase_start);
         phase_start = now;
 
-        // Phase 3: Compile (or codegen-from-IR behind the flag).
-        const result = if (backend.use_ir_codegen) blk: {
-            // Parent the IR program's arena on the module's arena. The
-            // bytecode constants borrow strings from the IR (anchor
-            // paths, tag names, extern function names, identifier
-            // constants), so those buffers must outlive the bytecode.
-            // Module.arena outlives both, and ArenaAllocator.free is a
-            // no-op, so `program.deinit()` safely returns memory to the
-            // module's arena where it's reclaimed at module deinit.
-            const prev_err_count = self.errors.list.items.len;
-            var program = try ir.lower(self.arena.allocator(), self);
-            defer program.deinit();
-            // Module-level fatal-diagnostic gate. The IR collects errors
-            // on `module.errors` without short-circuiting, but tests
-            // (and the runtime contract) expect `error.CompilerError`
-            // when compilation isn't well-formed. Bridge: if lowering
-            // or validation appended any `.err` entries, refuse to emit
-            // bytecode. Future refactor: give the IR its own fatal vs.
-            // recoverable severity so lowering halts at the source
-            // instead of walking the whole tree before noticing.
-            for (self.errors.list.items[prev_err_count..]) |entry| {
-                if (entry.severity == .err) return error.CompilerError;
-            }
-            break :blk try Codegen.emit(allocator, self, &program);
-        } else blk: {
-            var compiler = try Compiler.init(allocator, self);
-            defer compiler.deinit();
-            compiler.compile() catch |e| return e;
-            break :blk try compiler.bytecode();
-        };
+        // Phase 3: Lower to IR and codegen to bytecode.
+        // Parent the IR program's arena on the module's arena. The
+        // bytecode constants borrow strings from the IR (anchor paths,
+        // tag names, extern function names, identifier constants), so
+        // those buffers must outlive the bytecode. Module.arena outlives
+        // both, and ArenaAllocator.free is a no-op, so `program.deinit()`
+        // safely returns memory to the module's arena where it's
+        // reclaimed at module deinit.
+        const prev_err_count = self.errors.list.items.len;
+        var program = try ir.lower(self.arena.allocator(), self);
+        defer program.deinit();
+        // Module-level fatal-diagnostic gate. The IR collects errors on
+        // `module.errors` without short-circuiting, but tests (and the
+        // runtime contract) expect `error.CompilerError` when compilation
+        // isn't well-formed. Bridge: if lowering or validation appended
+        // any `.err` entries, refuse to emit bytecode. Future refactor:
+        // give the IR its own fatal vs. recoverable severity so lowering
+        // halts at the source instead of walking the whole tree before
+        // noticing.
+        for (self.errors.list.items[prev_err_count..]) |entry| {
+            if (entry.severity == .err) return error.CompilerError;
+        }
+        const result = try Codegen.emit(allocator, self, &program);
         now = self.nowNs();
         self.timings.compile_ns = @intCast(now - phase_start);
         self.timings.total_ns = @intCast(now - total_start);
