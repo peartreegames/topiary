@@ -19,6 +19,7 @@ const Module = module_mod.Module;
 
 const error_mod = @import("../backend/error.zig");
 const CompilerErrors = error_mod.CompilerErrors;
+const suggest = @import("../backend/suggest.zig");
 
 const builtins = @import("../runtime/index.zig").builtins;
 
@@ -86,6 +87,24 @@ const Validator = struct {
     fn pathForTok(self: *Validator, tok: Token) []const u8 {
         if (tok.file_index < self.program.files.len) return self.program.files[tok.file_index];
         return self.module.entry.path;
+    }
+
+    /// "did you mean 'X'?" suggestion against a list of candidate names,
+    /// or null if nothing close enough. Returned slice is owned by the
+    /// errors allocator (matches `addWithHelp` ownership).
+    fn suggestFromList(self: *Validator, name: []const u8, haystack: []const []const u8) Error!?[]const u8 {
+        const alloc = self.errors().allocator;
+        const match = (suggest.closest(alloc, name, haystack) catch return null) orelse return null;
+        defer alloc.free(match);
+        return try std.fmt.allocPrint(alloc, "did you mean '{s}'?", .{match});
+    }
+
+    fn suggestClassMember(self: *Validator, class: *const ir.ClassDecl, name: []const u8) Error!?[]const u8 {
+        var names: std.ArrayList([]const u8) = .empty;
+        defer names.deinit(self.scratchAlloc());
+        for (class.field_names) |f| try names.append(self.scratchAlloc(), f);
+        for (class.methods) |m| try names.append(self.scratchAlloc(), m.name);
+        return self.suggestFromList(name, names.items);
     }
 
     /// Joins `prefix` and `suffix` segments with ".". Result lives in
@@ -374,12 +393,14 @@ const Validator = struct {
         const class = self.class_by_path.get(ins.class.path) orelse return;
         for (ins.field_names) |fname| {
             if (!classHasField(class, fname)) {
-                try self.errors().add(
+                try self.errors().addWithHelp(
                     self.pathForTok(tok),
                     "Class '{s}' has no field '{s}'",
                     tok,
                     .err,
                     .{ class.name, fname },
+                    try self.suggestClassMember(class, fname),
+                    null,
                 );
             }
         }
@@ -400,22 +421,26 @@ const Validator = struct {
                 const class = self.class_by_path.get(class_name) orelse return;
                 if (classHasField(class, f.name)) return;
                 if (classHasMethod(class, f.name)) return;
-                try self.errors().add(
+                try self.errors().addWithHelp(
                     self.pathForTok(tok),
                     "Class '{s}' does not contain a field '{s}'",
                     tok,
                     .err,
                     .{ class.name, f.name },
+                    try self.suggestClassMember(class, f.name),
+                    null,
                 );
             },
             .string => {
                 if (builtins.string_methods.has(f.name)) return;
-                try self.errors().add(
+                try self.errors().addWithHelp(
                     self.pathForTok(tok),
                     "Unknown method '{s}' on string",
                     tok,
                     .err,
                     .{f.name},
+                    try self.suggestFromList(f.name, builtins.string_methods.keys()),
+                    null,
                 );
             },
             .list, .set, .map => {
@@ -426,12 +451,14 @@ const Validator = struct {
                     .map => "map",
                     else => unreachable,
                 };
-                try self.errors().add(
+                try self.errors().addWithHelp(
                     self.pathForTok(tok),
                     "Unknown method '{s}' on {s}",
                     tok,
                     .err,
                     .{ f.name, type_name },
+                    try self.suggestFromList(f.name, builtins.collection_methods.keys()),
+                    null,
                 );
             },
             .number, .boolean, .nil => {
@@ -464,12 +491,14 @@ const Validator = struct {
                 const c = self.class_by_path.get(path) orelse return;
                 if (classHasField(c, f.name)) return;
                 if (classHasMethod(c, f.name)) return;
-                try self.errors().add(
+                try self.errors().addWithHelp(
                     self.pathForTok(tok),
                     "Class '{s}' does not contain a field '{s}'",
                     tok,
                     .err,
                     .{ c.name, f.name },
+                    try self.suggestClassMember(c, f.name),
+                    null,
                 );
             },
             .function_type => {

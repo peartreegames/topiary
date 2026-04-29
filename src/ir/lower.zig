@@ -36,6 +36,7 @@ const File = module_mod.File;
 
 const error_mod = @import("../backend/error.zig");
 const CompilerErrors = error_mod.CompilerErrors;
+const suggest = @import("../backend/suggest.zig");
 
 const builtins = @import("../runtime/index.zig").builtins;
 
@@ -1141,7 +1142,27 @@ const Lowerer = struct {
             return;
         }
 
-        try self.errors().add(self.pathForTok(tok), "Unknown name '{s}'", tok, .err, .{writer_path});
+        try self.errors().addWithHelp(
+            self.pathForTok(tok),
+            "Unknown name '{s}'",
+            tok,
+            .err,
+            .{writer_path},
+            try self.suggestAnchorName(writer_path),
+            null,
+        );
+    }
+
+    /// "did you mean 'X'?" suggestion across the program's anchor names,
+    /// used when a divert / call / load_const can't be resolved.
+    fn suggestAnchorName(self: *Lowerer, name: []const u8) Error!?[]const u8 {
+        const alloc = self.errors().allocator;
+        var names: std.ArrayList([]const u8) = .empty;
+        defer names.deinit(self.scratchAlloc());
+        for (self.program.anchors.keys()) |k| try names.append(self.scratchAlloc(), k);
+        const match = (suggest.closest(alloc, name, names.items) catch return null) orelse return null;
+        defer alloc.free(match);
+        return try std.fmt.allocPrint(alloc, "did you mean '{s}'?", .{match});
     }
 
     // =======================================================================
