@@ -25,4 +25,4 @@ pub const suggest = @import("suggest.zig");
 
 /// Toggle between the AST-driven `Compiler` and the IR-driven `Codegen`
 /// during the migration. Off until codegen reaches byte-for-byte parity.
-pub const use_ir_codegen: bool = false;
+pub const use_ir_codegen: bool = true;

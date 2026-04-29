@@ -704,7 +704,11 @@ pub const Codegen = struct {
                 obj.* = .{ .id = UUID.new(), .data = .{ .map = map } };
                 return .{ .obj = obj };
             },
-            else => unreachable,
+            // Static evaluation should be guarded by
+            // `validate.checkStaticInitializer`, but if a non-literal
+            // slips through we'd rather surface NotYetImplemented than
+            // hit `unreachable` in production.
+            else => return error.NotYetImplemented,
         }
     }
 
@@ -852,8 +856,19 @@ pub const Codegen = struct {
             .load_const => |lc| {
                 const idx = self.emitter.constants_map.get(lc.target.path) orelse
                     return error.NotYetImplemented;
-                try self.emitter.writeOp(.constant, token);
-                _ = try self.emitter.writeInt(C.CONSTANT, idx, token);
+                // Anchor references resolve to the visit count (a number)
+                // at runtime — load via get_global on the visit symbol's
+                // index. Mirrors compiler.zig:loadSymbol's identifier
+                // arm. Functions / classes / enums load as plain
+                // constants.
+                const v = self.emitter.constants.items[idx];
+                if (v == .obj and v.obj.data == .anchor) {
+                    try self.emitter.writeOp(.get_global, token);
+                    _ = try self.emitter.writeInt(C.GLOBAL, v.obj.data.anchor.visit_index, token);
+                } else {
+                    try self.emitter.writeOp(.constant, token);
+                    _ = try self.emitter.writeInt(C.CONSTANT, idx, token);
+                }
             },
             .un_op => |u| {
                 try self.compileExpr(u.operand);
@@ -1110,8 +1125,11 @@ pub const Codegen = struct {
             return;
         }
 
-        // Indexer assignment: LHS is a `.index` expression.
-        std.debug.assert(bin.left.kind == .index);
+        // Indexer/dot assignment: LHS is `.index` (`xs[0]`) or `.field`
+        // (`obj.x`). Both produce a trailing `.index` opcode in the
+        // compiled stream that we strip below before emitting
+        // `.set_property`.
+        std.debug.assert(bin.left.kind == .index or bin.left.kind == .field);
 
         if (arith_op) |op| {
             // Compound: load current value, add, dup, recompile lvalue
@@ -1226,7 +1244,13 @@ pub const Codegen = struct {
 fn computeBodyLocals(body: []const ir.Stmt, current: *usize, hi: *usize) void {
     for (body) |*s| {
         switch (s.kind) {
-            .var_decl => current.* += 1,
+            .var_decl => |v| {
+                current.* += 1;
+                // Only locals contribute to the runtime frame size;
+                // top-level globals advance `current` (because nested
+                // local scopes inherit the count) but don't bump hi.
+                if (v.slot == .local and current.* > hi.*) hi.* = current.*;
+            },
             .@"for" => |f| {
                 const saved = current.*;
                 current.* += 1; // capture binding

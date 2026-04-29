@@ -584,10 +584,9 @@ const Validator = struct {
                 try self.checkStaticInitializer(p.key);
                 try self.checkStaticInitializer(p.value);
             },
-            .range => |r| {
-                try self.checkStaticInitializer(r.left);
-                try self.checkStaticInitializer(r.right);
-            },
+            // Ranges aren't a permissible static value — the AST
+            // compiler's `evaluateLiteral` has no `.range` arm and falls
+            // through to its "Only literal values" rejection.
             .bin_op => |b| {
                 try self.checkStaticInitializer(b.left);
                 try self.checkStaticInitializer(b.right);
@@ -598,8 +597,8 @@ const Validator = struct {
             // `new C{...}` — recurse into each field.
             .instance => |ins| for (ins.fields) |fe| try self.checkStaticInitializer(fe),
             // Everything else is non-static: variable loads, calls,
-            // computed indexers, if-expressions, builtins.
-            .load, .if_expr, .index, .call, .builtin, .@"extern" => {
+            // computed indexers, if-expressions, builtins, ranges.
+            .load, .if_expr, .index, .call, .builtin, .@"extern", .range => {
                 try self.errors().addWithHelp(
                     self.pathForTok(expr.loc.start),
                     "Only literal values are allowed here",

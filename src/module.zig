@@ -120,6 +120,16 @@ pub const Module = struct {
         const result = if (backend.use_ir_codegen) blk: {
             var program = try ir.lower(allocator, self);
             defer program.deinit();
+            // TODO(step-12 cut-over): IR lowering / validation collect
+            // diagnostics on `module.errors` without short-circuiting,
+            // while the AST compiler raises `error.CompilerError`
+            // immediately on `fail()`. Tests that expect compile errors
+            // (e.g. "Cannot assign to constant") still need a way to
+            // surface those. Promoting `.err` diagnostics here works
+            // for fatal cases but spuriously fires for others, so
+            // proper resolution requires categorizing IR diagnostics
+            // into fatal vs. recoverable. Deferred to test-updating
+            // pass after compiler.zig is removed.
             break :blk try Codegen.emit(allocator, self, &program);
         } else blk: {
             var compiler = try Compiler.init(allocator, self);

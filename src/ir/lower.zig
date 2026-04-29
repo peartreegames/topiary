@@ -492,7 +492,10 @@ const Lowerer = struct {
         // own count still includes parameters / inner_self / top-level
         // var_decls in the body, while `self.locals_count` holds the
         // high-water mark from any nested local scopes inside the body.
-        const fn_locals_count = @max(self.scope.count, self.locals_count);
+        // Methods receive an implicit `self` as their first parameter
+        // at runtime; the IR scope doesn't track it, so add one.
+        var fn_locals_count = @max(self.scope.count, self.locals_count);
+        if (f.is_method) fn_locals_count += 1;
         self.exitScope();
         self.locals_count = saved_locals_count;
 
@@ -765,6 +768,17 @@ const Lowerer = struct {
     fn lowerIdentifier(self: *Lowerer, name: []const u8, tok: Token) Error!ir.Expr.Kind {
         _ = tok;
         if (try self.resolveSymbol(name)) |sym| return .{ .load = try self.slotFromSymbol(sym) };
+        // Builtin functions live in `constants_map` at runtime but are
+        // not registered as anchors. Surface them as an already-
+        // resolved `load_const` so `patchAnchor` doesn't flag them as
+        // unknown names.
+        if (builtins.functions.has(name)) {
+            return .{ .load_const = .{ .target = .{
+                .kind = .function,
+                .path = try self.arena().dupe(u8, name),
+                .uuid = UUID.Empty,
+            } } };
+        }
         // Could be a constant / anchor — single-segment path.
         const single = [_][]const u8{name};
         const anchor = try self.refByPath(&single);
