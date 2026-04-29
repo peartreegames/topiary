@@ -1,9 +1,7 @@
-//! IR-driven codegen tests + A/B parity harness against the AST compiler.
-//!
-//! `compileBoth` runs both pipelines on the same source and returns both
-//! Bytecode values. `expectByteParity` slice-equality checks instructions,
-//! constants, and global_symbols. As statement support lands in
-//! codegen.zig, more cases get added below.
+//! IR-driven codegen smoke tests. Each case exercises a path through
+//! `Codegen.emit` and confirms it produces a `Bytecode` without erroring.
+//! Behavioral coverage lives in `vm.test.zig`; IR-level structural
+//! coverage in `ir.test.zig`; diagnostic coverage in `compiler.test.zig`.
 
 const std = @import("std");
 
@@ -11,10 +9,7 @@ const topi = @import("topi");
 const ir = topi.ir;
 const backend = topi.backend;
 const Bytecode = backend.Bytecode;
-const Compiler = backend.Compiler;
 const Codegen = backend.Codegen;
-const OpCode = backend.OpCode;
-const Value = topi.types.Value;
 const builtins = topi.runtime.builtins;
 const Module = topi.module.Module;
 const File = topi.module.File;
@@ -39,60 +34,22 @@ fn newModuleWithSource(source: []const u8) !*Module {
     return mod;
 }
 
-/// Run the IR pipeline directly (without the module-level flag) so tests
-/// can A/B compare against the AST compiler.
 fn compileViaIr(mod: *Module) !Bytecode {
     try mod.entry.loadSource();
     try mod.entry.buildTree();
-    var program = try ir.lower(allocator, mod);
+    var program = try ir.lower(mod.arena.allocator(), mod);
     defer program.deinit();
     return try Codegen.emit(allocator, mod, &program);
 }
 
-fn compileViaAst(mod: *Module) !Bytecode {
-    try mod.entry.loadSource();
-    try mod.entry.buildTree();
-    var compiler = try Compiler.init(allocator, mod);
-    defer compiler.deinit();
-    try compiler.compile();
-    return try compiler.bytecode();
-}
-
-const Pair = struct {
-    ast: Bytecode,
-    ir: Bytecode,
-
-    fn deinit(self: *Pair) void {
-        self.ast.free(allocator);
-        self.ir.free(allocator);
+fn expectCompiles(cases: []const []const u8) !void {
+    for (cases) |src| {
+        errdefer std.log.warn("case: {s}", .{src});
+        var mod = try newModuleWithSource(src);
+        defer mod.deinit();
+        var bc = try compileViaIr(mod);
+        bc.free(allocator);
     }
-};
-
-/// Compile `source` through both pipelines on independent modules.
-fn compileBoth(source: []const u8) !Pair {
-    var ast_mod = try newModuleWithSource(source);
-    defer ast_mod.deinit();
-    const ast_bc = try compileViaAst(ast_mod);
-    errdefer ast_bc.free(allocator);
-
-    var ir_mod = try newModuleWithSource(source);
-    defer ir_mod.deinit();
-    const ir_bc = try compileViaIr(ir_mod);
-
-    return .{ .ast = ast_bc, .ir = ir_bc };
-}
-
-fn expectByteParity(pair: Pair) !void {
-    try testing.expectEqualSlices(u8, pair.ast.instructions, pair.ir.instructions);
-    try testing.expectEqual(pair.ast.constants.len, pair.ir.constants.len);
-    try testing.expectEqual(pair.ast.global_symbols.len, pair.ir.global_symbols.len);
-    for (pair.ast.global_symbols, pair.ir.global_symbols) |a, b| {
-        try testing.expectEqualStrings(a.name, b.name);
-        try testing.expectEqual(a.index, b.index);
-        try testing.expectEqual(a.is_mutable, b.is_mutable);
-        try testing.expectEqualSlices(u8, &a.uuid, &b.uuid);
-    }
-    try testing.expectEqual(pair.ast.locals_count, pair.ir.locals_count);
 }
 
 test "Codegen empty program" {
@@ -108,14 +65,8 @@ test "Codegen empty program" {
     try testing.expectEqual(@as(usize, 0), bc.locals_count);
 }
 
-test "Codegen empty program parity" {
-    var pair = try compileBoth("");
-    defer pair.deinit();
-    try expectByteParity(pair);
-}
-
-test "Codegen expressions parity" {
-    const cases = [_][]const u8{
+test "Codegen expressions" {
+    try expectCompiles(&.{
         "1 + 2",
         "1 - 2",
         "3 * 4",
@@ -134,183 +85,96 @@ test "Codegen expressions parity" {
         "true",
         "false",
         "0..10",
-    };
-    for (cases) |src| {
-        errdefer std.log.warn("case: {s}", .{src});
-        var pair = try compileBoth(src);
-        defer pair.deinit();
-        try expectByteParity(pair);
-    }
+    });
 }
 
-test "Codegen if parity" {
-    const cases = [_][]const u8{
+test "Codegen if" {
+    try expectCompiles(&.{
         "if true { 10 }",
         "if true { 10 } else { 20 }",
         "if 1 == 1 { 5 } else { 6 }",
-    };
-    for (cases) |src| {
-        errdefer std.log.warn("case: {s}", .{src});
-        var pair = try compileBoth(src);
-        defer pair.deinit();
-        try expectByteParity(pair);
-    }
+    });
 }
 
-test "Codegen while parity" {
-    const cases = [_][]const u8{
+test "Codegen while" {
+    try expectCompiles(&.{
         "while false { }",
         "while 1 > 2 { }",
-    };
-    for (cases) |src| {
-        errdefer std.log.warn("case: {s}", .{src});
-        var pair = try compileBoth(src);
-        defer pair.deinit();
-        try expectByteParity(pair);
-    }
+    });
 }
 
-test "Codegen for parity" {
-    const cases = [_][]const u8{
+test "Codegen for" {
+    try expectCompiles(&.{
         "for 0..5 |x| { 1 }",
-    };
-    for (cases) |src| {
-        errdefer std.log.warn("case: {s}", .{src});
-        var pair = try compileBoth(src);
-        defer pair.deinit();
-        try expectByteParity(pair);
-    }
+    });
 }
 
-test "Codegen switch parity" {
-    const cases = [_][]const u8{
+test "Codegen switch" {
+    try expectCompiles(&.{
         "var n = 1 switch n { 1: 10, 2: 20, else: 30 }",
         "var n = 2 switch n { 1, 2: 10, else: 20 }",
-    };
-    for (cases) |src| {
-        errdefer std.log.warn("case: {s}", .{src});
-        var pair = try compileBoth(src);
-        defer pair.deinit();
-        try expectByteParity(pair);
-    }
+    });
 }
 
-test "Codegen text/collections/index parity" {
-    const cases = [_][]const u8{
-        // strings
+test "Codegen text/collections/index" {
+    try expectCompiles(&.{
         \\const greeting = "hello"
         ,
         \\const x = 1
         \\const greeting = "hi {x}!"
         ,
-        // collections
         "const xs = List{1, 2, 3}",
         "const s = Set{1, 2, 3}",
         \\const m = Map{"a": 1, "b": 2}
         ,
-        // index
         "const xs = List{1, 2, 3} const y = xs[0]",
-        // field on a list (method)
         "const xs = List{1, 2, 3} const n = xs.count",
-    };
-    for (cases) |src| {
-        errdefer std.log.warn("case: {s}", .{src});
-        var pair = try compileBoth(src);
-        defer pair.deinit();
-        try expectByteParity(pair);
-    }
+    });
 }
 
-test "Codegen assignment parity" {
-    const cases = [_][]const u8{
-        // simple
+test "Codegen assignment" {
+    try expectCompiles(&.{
         "var x = 0 x = 5",
         "var x = 0 x = 1 + 2",
-        // compound on identifiers
         "var x = 0 x += 5",
         "var x = 1 x -= 1",
         "var x = 2 x *= 3",
         "var x = 6 x /= 2",
         "var x = 7 x %= 2",
-        // indexer assign
         "var xs = List{1, 2, 3} xs[0] = 99",
         "var xs = List{1, 2, 3} xs[0] += 5",
-    };
-    for (cases) |src| {
-        errdefer std.log.warn("case: {s}", .{src});
-        var pair = try compileBoth(src);
-        defer pair.deinit();
-        try expectByteParity(pair);
-    }
+    });
 }
 
-test "Codegen function parity" {
-    const cases = [_][]const u8{
+test "Codegen function" {
+    try expectCompiles(&.{
         "fn five || { return 5 }",
         "fn five || { return 5 } five()",
         "fn add |a, b| { return a + b } add(1, 2)",
         "fn id |x| { return x } id(1) + id(2)",
-        // recursion (function name binds inside body)
         "fn fact |n| { if n <= 1 { return 1 } return n * fact(n - 1) }",
-    };
-    for (cases) |src| {
-        errdefer std.log.warn("case: {s}", .{src});
-        var pair = try compileBoth(src);
-        defer pair.deinit();
-        try expectByteParity(pair);
-    }
+    });
 }
 
-test "Codegen class parity" {
-    const cases = [_][]const u8{
+test "Codegen class" {
+    try expectCompiles(&.{
         "class Pt { x = 0 y = 0 }",
         "class Pt { x = 0 y = 0 } var p = new Pt{}",
-    };
-    for (cases) |src| {
-        errdefer std.log.warn("case: {s}", .{src});
-        var pair = try compileBoth(src);
-        defer pair.deinit();
-        try expectByteParity(pair);
-    }
+    });
 }
 
-test "Codegen enum parity" {
-    const cases = [_][]const u8{
+test "Codegen enum" {
+    try expectCompiles(&.{
         "enum Color { Red, Green, Blue }",
         "enum Color { Red, Green, Blue } const c = Color.Green",
-    };
-    for (cases) |src| {
-        errdefer std.log.warn("case: {s}", .{src});
-        var pair = try compileBoth(src);
-        defer pair.deinit();
-        try expectByteParity(pair);
-    }
+    });
 }
 
-// Narrative parity tests need stable UUIDs. The parser stamps fresh
-// `UUID.new()` for boughs/forks/choices/dialogue lines that lack an
-// explicit `@ID`, and `UUID.new()` is non-deterministic — running it
-// twice on the same source produces different IDs, which breaks
-// byte-parity even when the rest of the bytecode matches. The
-// workaround is annotating every UUID-bearing node with an `@ID`.
-// Lines (dialogue) don't yet carry a stable @ID syntax, so we skip
-// pure-line cases here. Step 11's full-suite parity gate will surface
-// any remaining gaps.
-// Narrative parity tests need stable UUIDs. The parser stamps fresh
-// `UUID.new()` for boughs/forks/choices/dialogue lines that lack an
-// explicit `@ID`, and `UUID.new()` is non-deterministic — running it
-// twice on the same source produces different IDs, which breaks
-// byte-parity even when the rest of the bytecode matches. Lines
-// (dialogue) and most narrative nodes need explicit `@ID`s for these
-// tests. Step 11's full-suite parity gate runs against `compiler.test`
-// + `vm.test` + `serialization.test` and surfaces remaining gaps.
-test "Codegen narrative parity" {
-    const cases = [_][]const u8{
-        // empty bough
+test "Codegen narrative" {
+    try expectCompiles(&.{
         \\=== Start @AAAAAAAA-AAAAAAAA {
         \\}
         ,
-        // bough with divert
         \\=== Start @AAAAAAAA-AAAAAAAA {
         \\    => Other
         \\}
@@ -318,7 +182,6 @@ test "Codegen narrative parity" {
         \\    fin
         \\}
         ,
-        // backup divert
         \\=== Start @AAAAAAAA-AAAAAAAA {
         \\    =>^ Other
         \\}
@@ -326,7 +189,6 @@ test "Codegen narrative parity" {
         \\    fin
         \\}
         ,
-        // visit two boughs
         \\=== Start @AAAAAAAA-AAAAAAAA {
         \\    => Other
         \\}
@@ -334,27 +196,15 @@ test "Codegen narrative parity" {
         \\    => Start
         \\}
         ,
-    };
-    for (cases) |src| {
-        errdefer std.log.warn("case: {s}", .{src});
-        var pair = try compileBoth(src);
-        defer pair.deinit();
-        try expectByteParity(pair);
-    }
+    });
 }
 
-test "Codegen var_decl parity" {
-    const cases = [_][]const u8{
+test "Codegen var_decl" {
+    try expectCompiles(&.{
         "const x = 5",
         "var y = 10",
         "const a = 1 + 2",
         "var b = true",
         "const x = 1 const y = 2 const z = x + y",
-    };
-    for (cases) |src| {
-        errdefer std.log.warn("case: {s}", .{src});
-        var pair = try compileBoth(src);
-        defer pair.deinit();
-        try expectByteParity(pair);
-    }
+    });
 }
