@@ -36,6 +36,10 @@ const Scope = scope_mod.Scope;
 
 const emit = @import("emit.zig");
 const Emitter = emit.Emitter;
+const BREAK_HOLDER = emit.BREAK_HOLDER;
+const CONTINUE_HOLDER = emit.CONTINUE_HOLDER;
+const SWITCH_END_HOLDER = emit.SWITCH_END_HOLDER;
+const JUMP_HOLDER = emit.JUMP_HOLDER;
 const OpCode = @import("opcode.zig").OpCode;
 
 const Token = @import("../frontend/token.zig").Token;
@@ -59,6 +63,13 @@ pub const Codegen = struct {
     program: *const ir.Program,
     module: *Module,
     root_scope: *Scope,
+    /// Offset added to every IR-side `Slot.Global.index` to translate it
+    /// into the runtime global slot. The IR's lowering scope only counts
+    /// plain `VarDecl` symbols, but the runtime layout reserves indices
+    /// 0..N-1 for anchor visit symbols (registered during prepass) and
+    /// N.. for vars. So `runtime_index = ir_index + global_offset`.
+    /// Set to `root_scope.count` after prepass completes.
+    global_offset: C.GLOBAL = 0,
 
     pub fn emit(
         alloc: std.mem.Allocator,
@@ -108,6 +119,9 @@ pub const Codegen = struct {
         for (self.program.body) |*stmt| {
             try self.prepass(stmt);
         }
+        // Vars come after every anchor visit symbol in the runtime
+        // global layout. Lock the offset now that prepass is done.
+        self.global_offset = @intCast(self.root_scope.count);
 
         // Two-pass top-level emission: non-bough first (so that the
         // first `.jump` in the bytecode stream is the bough skip-over-
@@ -228,12 +242,56 @@ pub const Codegen = struct {
     // =======================================================================
 
     fn compileStmt(self: *Codegen, stmt: *const ir.Stmt) Error!void {
+        const token = stmt.loc.start;
         switch (stmt.kind) {
             .expr_stmt => |e| {
                 try self.compileExpr(e);
-                try self.emitter.writeOp(.pop, stmt.loc.start);
+                try self.emitter.writeOp(.pop, token);
+            },
+            .var_decl => |v| try self.compileVarDecl(v, token),
+            .return_value => |e| {
+                try self.compileExpr(e);
+                try self.emitter.writeOp(.return_value, token);
+            },
+            .return_void => try self.emitter.writeOp(.return_void, token),
+            .fin => try self.emitter.writeOp(.fin, token),
+            .@"break" => {
+                try self.emitter.writeOp(.jump, token);
+                _ = try self.emitter.writeInt(C.JUMP, BREAK_HOLDER, token);
+            },
+            .@"continue" => {
+                try self.emitter.writeOp(.jump, token);
+                _ = try self.emitter.writeInt(C.JUMP, CONTINUE_HOLDER, token);
+            },
+            .block => |b| {
+                for (b.body) |*s| try self.compileStmt(s);
+            },
+            .include => {
+                // Lowering inlined the included statements directly into
+                // body; the marker has nothing to emit.
             },
             else => return error.NotYetImplemented,
+        }
+    }
+
+    fn compileVarDecl(self: *Codegen, v: ir.VarDecl, token: Token) Error!void {
+        try self.compileExpr(v.initializer);
+        switch (v.slot) {
+            .global => {
+                // Define the symbol on root_scope so it appears in
+                // bytecode.global_symbols. Its index lands at the
+                // current root_scope.count, which equals
+                // global_offset + slot.global.index by construction.
+                const sym = self.root_scope.define(self.arena.allocator(), v.name, v.is_mutable) catch
+                    return error.SymbolAlreadyDeclared;
+                try self.emitter.writeOp(.decl_global, token);
+                _ = try self.emitter.writeInt(C.GLOBAL, sym.index, token);
+            },
+            .local => |l| {
+                try self.emitter.writeOp(.set_local, token);
+                _ = try self.emitter.writeInt(C.LOCAL, l.index, token);
+            },
+            .upvalue => unreachable, // upvalues are never declaration sites
         }
     }
 
@@ -331,7 +389,7 @@ pub const Codegen = struct {
             },
             .global => |g| {
                 try self.emitter.writeOp(.get_global, token);
-                _ = try self.emitter.writeInt(C.GLOBAL, g.index, token);
+                _ = try self.emitter.writeInt(C.GLOBAL, g.index + self.global_offset, token);
             },
         }
     }

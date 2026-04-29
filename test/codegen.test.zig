@@ -142,3 +142,19 @@ test "Codegen expressions parity" {
         try expectByteParity(pair);
     }
 }
+
+test "Codegen var_decl parity" {
+    const cases = [_][]const u8{
+        "const x = 5",
+        "var y = 10",
+        "const a = 1 + 2",
+        "var b = true",
+        "const x = 1 const y = 2 const z = x + y",
+    };
+    for (cases) |src| {
+        errdefer std.log.warn("case: {s}", .{src});
+        var pair = try compileBoth(src);
+        defer pair.deinit();
+        try expectByteParity(pair);
+    }
+}
