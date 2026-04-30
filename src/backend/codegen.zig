@@ -904,7 +904,7 @@ pub const Codegen = struct {
                 try self.compileExpr(idx.index);
                 try self.emitter.writeOp(.index, token);
             },
-            .field => |f| try self.compileField(expr, f, token),
+            .field => |f| try self.compileField(f, token),
             .instance => |ins| try self.compileInstance(ins, token),
             .call => |c| try self.compileCall(c, token),
             else => return error.NotYetImplemented,
@@ -971,16 +971,7 @@ pub const Codegen = struct {
         _ = try self.emitter.writeInt(C.COLLECTION, @intCast(pairs.len), token);
     }
 
-    fn compileField(self: *Codegen, expr: ir.ExprRef, f: ir.Field, token: Token) Error!void {
-        // Dot-access into a constant-pool entry can resolve to another
-        // anchor (e.g. `Parent.Child`) — emit get_global on its visit
-        // index instead of an `.index` lookup.
-        if (try self.resolveAnchorChain(expr)) |anchor_idx| {
-            const anchor = self.emitter.constants.items[anchor_idx].obj.data.anchor;
-            try self.emitter.writeOp(.get_global, token);
-            _ = try self.emitter.writeInt(C.GLOBAL, anchor.visit_index, token);
-            return;
-        }
+    fn compileField(self: *Codegen, f: ir.Field, token: Token) Error!void {
         try self.compileExpr(f.target);
         try self.emitter.addIdentifierConstant(self.arena.allocator(), f.name, token);
         try self.emitter.writeOp(.index, token);
@@ -1010,58 +1001,6 @@ pub const Codegen = struct {
         if (c.target.kind == .index or c.target.kind == .field) length += 1;
         std.debug.assert(c.arguments.len < std.math.maxInt(C.ARGS));
         _ = try self.emitter.writeInt(C.ARGS, @intCast(length), token);
-    }
-
-    /// Walk a `.field` chain and check whether the fully-qualified path
-    /// is a registered anchor. Returns its constant-pool index if so.
-    /// Mirrors `compiler.zig:flattenIndexer + resolveAnchor`.
-    fn resolveAnchorChain(self: *Codegen, expr: ir.ExprRef) Error!?C.CONSTANT {
-        var parts: std.ArrayList([]const u8) = .empty;
-        defer parts.deinit(self.alloc);
-
-        var cur: ir.ExprRef = expr;
-        while (true) {
-            switch (cur.kind) {
-                .field => |f| {
-                    try parts.append(self.alloc, f.name);
-                    cur = f.target;
-                },
-                .load_const => |lc| {
-                    // Reached the chain head: a constant-pool name.
-                    // The path so far is `lc.target.path . parts...`
-                    // but we accumulated suffixes only — split lc's path
-                    // and prepend so the lookup is the full path.
-                    try parts.append(self.alloc, lc.target.path);
-                    break;
-                },
-                .load => |slot| {
-                    // Reached an identifier load. Use the slot's name as
-                    // the chain head so e.g. `MyEnum.Value` works when
-                    // `MyEnum` was pulled in via load (not load_const).
-                    const name = switch (slot) {
-                        .local => |l| l.name,
-                        .upvalue => |u| u.name,
-                        .global => |g| g.name,
-                    };
-                    if (name.len == 0) return null;
-                    try parts.append(self.alloc, name);
-                    break;
-                },
-                else => return null,
-            }
-        }
-        // parts is in reverse order: [field_n ... field_1, head_path].
-        // The head may itself contain dots (anchor.path). Build the
-        // candidate path by reversing and joining.
-        std.mem.reverse([]const u8, parts.items);
-        const path = try std.mem.join(self.alloc, ".", parts.items);
-        defer self.alloc.free(path);
-
-        if (self.emitter.constants_map.get(path)) |i| {
-            const v = self.emitter.constants.items[i];
-            if (v == .obj and v.obj.data == .anchor) return i;
-        }
-        return null;
     }
 
     fn compileBinOp(self: *Codegen, bin: ir.BinOp, token: Token) Error!void {

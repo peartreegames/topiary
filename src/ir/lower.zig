@@ -1217,7 +1217,10 @@ const Lowerer = struct {
                 try self.validateExpr(i.target, stack);
                 try self.validateExpr(i.index, stack);
             },
-            .field => |*f| try self.validateExpr(f.target, stack),
+            .field => |*f| {
+                try self.validateExpr(f.target, stack);
+                try self.maybeRewriteAnchorChain(e);
+            },
             .call => |*c| {
                 try self.validateExpr(c.target, stack);
                 for (c.arguments) |a| try self.validateExpr(a, stack);
@@ -1267,6 +1270,41 @@ const Lowerer = struct {
             try self.suggestAnchorName(writer_path),
             null,
         );
+    }
+
+    /// If `e` is the outermost `.field` of an anchor chain (e.g.
+    /// `START.NAMED.ONE`) whose joined path resolves to a visit-tracked
+    /// anchor, collapse the chain into a single `.load_const`. Codegen
+    /// then emits `get_global visit_index` from the standard load_const
+    /// arm, with no chain re-walking.
+    fn maybeRewriteAnchorChain(self: *Lowerer, e: *ir.Expr) Error!void {
+        var parts: std.ArrayList([]const u8) = .empty;
+        defer parts.deinit(self.scratchAlloc());
+
+        var cur: *const ir.Expr = e;
+        while (true) {
+            switch (cur.kind) {
+                .field => |f| {
+                    try parts.append(self.scratchAlloc(), f.name);
+                    cur = f.target;
+                },
+                .load_const => |lc| {
+                    try parts.append(self.scratchAlloc(), lc.target.path);
+                    break;
+                },
+                else => return,
+            }
+        }
+        std.mem.reverse([]const u8, parts.items);
+        const joined = try std.mem.join(self.scratchAlloc(), ".", parts.items);
+        defer self.scratchAlloc().free(joined);
+
+        const anchor = self.program.anchors.get(joined) orelse return;
+        switch (anchor.kind orelse return) {
+            .bough, .fork, .choice => {},
+            else => return,
+        }
+        e.kind = .{ .load_const = .{ .target = anchor } };
     }
 
     /// "did you mean 'X'?" suggestion across the program's anchor names,
