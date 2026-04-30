@@ -164,6 +164,12 @@ pub const Program = struct {
     /// allocates `globals[globals_count]` before executing.
     globals_count: C.GLOBAL = 0,
 
+    /// High-water mark of locals reachable from top-level execution
+    /// (boughs / top-level forks / top-level if/block bodies / etc.).
+    /// Codegen writes this into `Bytecode.locals_count` for the
+    /// runtime to size the main frame's stack window.
+    top_level_locals_count: u32 = 0,
+
     /// Top-level statements: typically VarDecl, Function, Class, Enum,
     /// Bough — but any Stmt is legal here.
     body: []const Stmt = &.{},

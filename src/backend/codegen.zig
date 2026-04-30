@@ -68,14 +68,6 @@ pub const Codegen = struct {
     program: *const ir.Program,
     module: *Module,
     root_scope: *Scope,
-    /// Offset added to every IR-side `Slot.Global.index` to translate it
-    /// into the runtime global slot. The IR's lowering scope only counts
-    /// plain `VarDecl` symbols, but the runtime layout reserves indices
-    /// 0..N-1 for anchor visit symbols (registered during prepass) and
-    /// N.. for vars. So `runtime_index = ir_index + global_offset`.
-    /// Set to `root_scope.count` after prepass completes (= number of
-    /// anchor visit symbols, before any global var_decl is defined).
-    global_offset: C.GLOBAL = 0,
 
     pub fn emit(
         alloc: std.mem.Allocator,
@@ -130,13 +122,12 @@ pub const Codegen = struct {
 
         // Pre-walk: reserve constant-pool slots and visit symbols for
         // every declared anchor. Walks `program.body` in source order so
-        // constant indices match the AST compiler's prepass.
+        // visit indices align with what lowering pre-counted (lowering
+        // seeded `root_scope.count` with the same anchor total, so a
+        // var's IR slot index already lands at the right runtime slot).
         for (self.program.body) |*stmt| {
             try self.prepass(stmt);
         }
-        // Vars come after every anchor visit symbol in the runtime
-        // global layout. Lock the offset now that prepass is done.
-        self.global_offset = @intCast(self.root_scope.count);
 
         // Two-pass top-level emission: non-bough first (so that the
         // first `.jump` in the bytecode stream is the bough skip-over-
@@ -405,7 +396,9 @@ pub const Codegen = struct {
         const end_jp = try self.emitter.emitJump(.jump, token);
         try self.emitter.patchJump(choice_jp);
 
-        try self.compileVisit(anchor_idx, token);
+        // The IR injects `.visit` as the first stmt of every choice body
+        // (lower.zig:lowerChoiceStmt), so we don't auto-emit one here —
+        // descending into body covers it.
         for (c.body) |*s| try self.compileStmt(s);
         try self.emitter.writeOp(.end, token);
         try self.emitter.patchJump(end_jp);
@@ -829,15 +822,16 @@ pub const Codegen = struct {
     fn compileVarDecl(self: *Codegen, v: ir.VarDecl, token: Token) Error!void {
         try self.compileExpr(v.initializer);
         switch (v.slot) {
-            .global => {
+            .global => |g| {
                 // Define the symbol on root_scope so it appears in
-                // bytecode.global_symbols. Its index lands at the
-                // current root_scope.count, which equals
-                // global_offset + slot.global.index by construction.
-                const sym = self.root_scope.define(self.arena.allocator(), v.name, v.is_mutable) catch
+                // bytecode.global_symbols. The index lands at the
+                // current root_scope.count, which equals `g.index`
+                // because lowering seeded the count with the anchor
+                // visit-slot total before defining any var.
+                _ = self.root_scope.define(self.arena.allocator(), v.name, v.is_mutable) catch
                     return error.SymbolAlreadyDeclared;
                 try self.emitter.writeOp(.decl_global, token);
-                _ = try self.emitter.writeInt(C.GLOBAL, sym.index, token);
+                _ = try self.emitter.writeInt(C.GLOBAL, g.index, token);
             },
             .local => |l| {
                 try self.emitter.writeOp(.set_local, token);
@@ -1168,7 +1162,7 @@ pub const Codegen = struct {
             },
             .global => |g| {
                 try self.emitter.writeOp(.set_global, token);
-                _ = try self.emitter.writeInt(C.GLOBAL, g.index + self.global_offset, token);
+                _ = try self.emitter.writeInt(C.GLOBAL, g.index, token);
             },
         }
     }
@@ -1186,7 +1180,7 @@ pub const Codegen = struct {
             },
             .global => |g| {
                 try self.emitter.writeOp(.get_global, token);
-                _ = try self.emitter.writeInt(C.GLOBAL, g.index + self.global_offset, token);
+                _ = try self.emitter.writeInt(C.GLOBAL, g.index, token);
             },
         }
     }
@@ -1216,101 +1210,10 @@ pub const Codegen = struct {
             .debug_info = try self.emitter.chunk.debugInfo(self.alloc),
             .constants = try self.emitter.constants.toOwnedSlice(self.alloc),
             .global_symbols = global_symbols,
-            .locals_count = self.computeTopLevelLocalsCount(),
+            .locals_count = self.program.top_level_locals_count,
         };
     }
-
-    /// Returns the runtime stack-frame size for top-level code.
-    ///
-    /// Mirrors the AST compiler quirk: `Scope.create(.local)` inherits
-    /// `parent.count`, so a local scope nested under the global root
-    /// includes every global slot in its `count`. `exitScope` then
-    /// updates `locals_count = max(locals_count, old_scope.count)`.
-    /// This means an empty `for`/`while`/`switch`-prong nested at top
-    /// level still bumps `locals_count` to the number of globals seen
-    /// so far. We replicate that walk here so byte-parity holds.
-    ///
-    /// `current` starts at the number of anchor visit symbols
-    /// (root_scope.count after prepass) and grows by 1 per global
-    /// `var_decl` as we walk in source order.
-    fn computeTopLevelLocalsCount(self: *Codegen) usize {
-        var hi: usize = 0;
-        // Start at the post-prepass anchor count. Var_decls increment as
-        // we walk, mirroring the AST's incremental scope tracking. Using
-        // `root_scope.count` post-emission would double-count globals.
-        var current: usize = self.global_offset;
-        computeBodyLocals(self.program.body, &current, &hi);
-        return hi;
-    }
 };
-
-/// Walks `body` updating `current` and `hi` to mirror the AST
-/// compiler's scope-count tracking. Local-scope bodies (for/while/
-/// switch/etc.) save and restore `current` around the body — vars
-/// declared inside them go out of scope on exit. `if`/`block` do NOT
-/// open a new scope in the AST compiler, so their bodies extend the
-/// outer count.
-fn computeBodyLocals(body: []const ir.Stmt, current: *usize, hi: *usize) void {
-    for (body) |*s| {
-        switch (s.kind) {
-            .var_decl => |v| {
-                current.* += 1;
-                // Only locals contribute to the runtime frame size;
-                // top-level globals advance `current` (because nested
-                // local scopes inherit the count) but don't bump hi.
-                if (v.slot == .local and current.* > hi.*) hi.* = current.*;
-            },
-            .@"for" => |f| {
-                const saved = current.*;
-                current.* += 1; // capture binding
-                if (current.* > hi.*) hi.* = current.*;
-                computeBodyLocals(f.body, current, hi);
-                current.* = saved;
-            },
-            .@"while" => |w| {
-                const saved = current.*;
-                if (current.* > hi.*) hi.* = current.*;
-                computeBodyLocals(w.body, current, hi);
-                current.* = saved;
-            },
-            .@"switch" => |sw| for (sw.prongs) |p| {
-                const saved = current.*;
-                if (current.* > hi.*) hi.* = current.*;
-                computeBodyLocals(p.body, current, hi);
-                current.* = saved;
-            },
-            .@"if" => |i| {
-                computeBodyLocals(i.then_branch, current, hi);
-                if (i.else_branch) |eb| computeBodyLocals(eb, current, hi);
-            },
-            .block => |b| computeBodyLocals(b.body, current, hi),
-            // Bough/fork/choice enter their own local scope
-            // (compiler.zig:1042/963/1059), inheriting `current` as the
-            // starting frame size.
-            .bough => |b| {
-                const saved = current.*;
-                if (current.* > hi.*) hi.* = current.*;
-                computeBodyLocals(b.body, current, hi);
-                current.* = saved;
-            },
-            .fork, .backup_fork => |f| {
-                const saved = current.*;
-                if (current.* > hi.*) hi.* = current.*;
-                computeBodyLocals(f.body, current, hi);
-                current.* = saved;
-            },
-            .choice => |c| {
-                const saved = current.*;
-                if (current.* > hi.*) hi.* = current.*;
-                computeBodyLocals(c.body, current, hi);
-                current.* = saved;
-            },
-            // Function bodies have their own frame, skip.
-            .function => {},
-            else => {},
-        }
-    }
-}
 
 fn isAssignOp(op: ast.BinaryOp) bool {
     return switch (op) {

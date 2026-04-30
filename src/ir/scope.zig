@@ -30,12 +30,17 @@ pub const Scope = struct {
 
     pub fn create(allocator: std.mem.Allocator, parent: ?*Scope, tag: Tag) !*Scope {
         const scope = try allocator.create(Scope);
-        // Local scopes share the same stack frame as their parent, so they
-        // must start indexing after the parent's variables to avoid conflicts.
-        const initial_count: u32 = if (tag == .local)
-            if (parent) |p| p.count else 0
-        else
-            0;
+        // Local scopes share the same stack frame as their parent and
+        // continue its index counter so sibling locals don't collide.
+        // Globals live in a separate runtime array (`vm.globals[]`) and
+        // never share slots with locals, so a `.local` scope nested
+        // directly under `.global` resets to 0. New `.function` scopes
+        // start a fresh frame, so nested fn bodies also reset.
+        const initial_count: u32 = if (tag == .local) blk: {
+            const p = parent orelse break :blk 0;
+            if (p.tag == .local or p.tag == .function) break :blk p.count;
+            break :blk 0;
+        } else 0;
         scope.* = .{
             .parent = parent,
             .symbols = .empty,

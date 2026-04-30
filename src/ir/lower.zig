@@ -139,6 +139,16 @@ const Lowerer = struct {
     fn run(self: *Lowerer) Error!void {
         const tree = self.current_file.tree orelse return;
 
+        // Pre-count anchor visit slots (boughs / forks / choices). The
+        // runtime layout reserves globals[0..N-1] for these visit
+        // counters, then [N..] for plain var_decls. Seeding
+        // `root_scope.count = N` makes every subsequent `scope.define`
+        // for a var produce an index that already matches the runtime
+        // slot — codegen no longer needs a translation step.
+        const anchor_slots = try self.countAnchorVisitSlots(tree.root);
+        self.seen_files.clearRetainingCapacity();
+        self.root_scope.count = anchor_slots;
+
         // One walk: emit IR, registering anchors at their declaration sites.
         var body: std.ArrayList(ir.Stmt) = .empty;
         defer body.deinit(self.scratchAlloc());
@@ -146,6 +156,7 @@ const Lowerer = struct {
         self.program.body = try self.arena().dupe(ir.Stmt, body.items);
 
         self.program.globals_count = @intCast(self.root_scope.count);
+        self.program.top_level_locals_count = self.locals_count;
         try self.populateFilesTable();
 
         // Resolve forward references by walking the IR.
@@ -227,18 +238,8 @@ const Lowerer = struct {
             .bough => |b| try self.lowerBoughStmt(b, tok),
             .divert => |d| try self.lowerDivertStmt(d, tok),
             .fin => .{ .loc = locFrom(tok), .kind = .fin },
-            .block => |b| .{
-                .loc = locFrom(tok),
-                .kind = .{ .block = .{ .body = try self.lowerBody(b) } },
-            },
-            .@"if" => |i| .{
-                .loc = locFrom(tok),
-                .kind = .{ .@"if" = .{
-                    .condition = try self.lowerExpression(i.condition),
-                    .then_branch = try self.lowerBody(i.then_branch),
-                    .else_branch = if (i.else_branch) |eb| try self.lowerBody(eb) else null,
-                } },
-            },
+            .block => |b| try self.lowerBlockStmt(b, tok),
+            .@"if" => |i| try self.lowerIfStmt(i, tok),
             .@"while" => |w| try self.lowerWhileStmt(w, tok),
             .@"for" => |f| try self.lowerForStmt(f, tok),
             .@"switch" => |s| try self.lowerSwitchStmt(s, tok),
@@ -377,6 +378,37 @@ const Lowerer = struct {
         return .{
             .loc = locFromSpan(tok, d.end_token),
             .kind = if (d.is_backup) .{ .backup_divert = payload } else .{ .divert = payload },
+        };
+    }
+
+    fn lowerBlockStmt(self: *Lowerer, body: []const ast.Statement, tok: Token) Error!ir.Stmt {
+        try self.enterScope(.local);
+        defer self.exitScope();
+        return .{
+            .loc = locFrom(tok),
+            .kind = .{ .block = .{ .body = try self.lowerBody(body) } },
+        };
+    }
+
+    fn lowerIfStmt(self: *Lowerer, i: anytype, tok: Token) Error!ir.Stmt {
+        const condition = try self.lowerExpression(i.condition);
+        const then_branch = blk: {
+            try self.enterScope(.local);
+            defer self.exitScope();
+            break :blk try self.lowerBody(i.then_branch);
+        };
+        const else_branch = if (i.else_branch) |eb| blk: {
+            try self.enterScope(.local);
+            defer self.exitScope();
+            break :blk try self.lowerBody(eb);
+        } else null;
+        return .{
+            .loc = locFrom(tok),
+            .kind = .{ .@"if" = .{
+                .condition = condition,
+                .then_branch = then_branch,
+                .else_branch = else_branch,
+            } },
         };
     }
 
@@ -1026,6 +1058,14 @@ const Lowerer = struct {
         return try self.scratchAlloc().dupe(u8, &id);
     }
 
+    /// Last `.`-separated segment of an anchor path. Identifier names
+    /// and UUID bytes (`[0-9A-Z-]`) never contain `.`, so the last dot
+    /// is the exact parent/segment boundary that `qualifyName` wrote.
+    fn lastSegment(path: []const u8) []const u8 {
+        if (std.mem.lastIndexOfScalar(u8, path, '.')) |i| return path[i + 1 ..];
+        return path;
+    }
+
     // =======================================================================
     // Anchor validation pass — patches forward refs on the produced IR
     // =======================================================================
@@ -1062,13 +1102,13 @@ const Lowerer = struct {
             .choice => |*c| {
                 try self.patchAnchor(&c.anchor, stack, stmt.loc.start);
                 for (c.segments) |seg| try self.validateSegment(seg, stack);
-                try stack.append(self.scratchAlloc(), c.anchor.path);
+                try stack.append(self.scratchAlloc(), lastSegment(c.anchor.path));
                 defer _ = stack.pop();
                 try self.validateBody(c.body, stack);
             },
             .fork, .backup_fork => |*f| {
                 try self.patchAnchor(&f.anchor, stack, stmt.loc.start);
-                try stack.append(self.scratchAlloc(), f.anchor.path);
+                try stack.append(self.scratchAlloc(), lastSegment(f.anchor.path));
                 defer _ = stack.pop();
                 try self.validateBody(f.body, stack);
             },
@@ -1077,7 +1117,7 @@ const Lowerer = struct {
             },
             .bough => |*b| {
                 try self.patchAnchor(&b.anchor, stack, stmt.loc.start);
-                try stack.append(self.scratchAlloc(), b.anchor.path);
+                try stack.append(self.scratchAlloc(), lastSegment(b.anchor.path));
                 defer _ = stack.pop();
                 try self.validateBody(b.body, stack);
             },
@@ -1085,7 +1125,7 @@ const Lowerer = struct {
             .class => |*c| {
                 try self.patchAnchor(&c.anchor, stack, stmt.loc.start);
                 for (c.field_initializers) |e| try self.validateExpr(e, stack);
-                try stack.append(self.scratchAlloc(), c.anchor.path);
+                try stack.append(self.scratchAlloc(), lastSegment(c.anchor.path));
                 defer _ = stack.pop();
                 for (c.methods) |*m| try self.validateFunction(@constCast(m), stack, stmt.loc.start);
             },
@@ -1251,15 +1291,14 @@ const Lowerer = struct {
     fn exitScope(self: *Lowerer) void {
         const old = self.scope;
         self.scope = old.parent orelse old;
-        // Mirror compiler.zig:exitScope. Local scopes share a stack
-        // frame with their parent (count is inherited), so old.count is
-        // already the merged high-water; non-local scopes (function,
-        // global) count separately and need additive merging.
+        // Local scopes carry the high-water mark for the enclosing
+        // frame: their `count` is already the merged total since
+        // `Scope.create(.local)` inherits sibling-local count. Function
+        // scopes manage their own `locals_count` snapshot in
+        // `lowerFunctionStmt` and don't contribute here. Globals never
+        // exit during lowering.
         if (old.tag == .local) {
             if (old.count > self.locals_count) self.locals_count = old.count;
-        } else {
-            const merged = self.scope.count + old.count;
-            if (merged > self.locals_count) self.locals_count = merged;
         }
     }
 
@@ -1304,6 +1343,38 @@ const Lowerer = struct {
             if (s.symbols.get(sym.name) != null) return depth;
         }
         return depth;
+    }
+
+    // =======================================================================
+    // Anchor pre-count
+    // =======================================================================
+
+    /// Walk the AST counting anchors that take a runtime visit-count
+    /// slot (boughs, forks, choices). Mirrors `Codegen.prepass`'s
+    /// recursion shape so both arrive at the same total.
+    /// Reuses `seen_files` for include cycle detection; the caller
+    /// must reset that set before the lowering walk so includes get
+    /// re-traversed.
+    fn countAnchorVisitSlots(self: *Lowerer, stmts: []const ast.Statement) Error!u32 {
+        var n: u32 = 0;
+        for (stmts) |*s| n += try self.countAnchorVisitSlotsInStmt(s);
+        return n;
+    }
+
+    fn countAnchorVisitSlotsInStmt(self: *Lowerer, stmt: *const ast.Statement) Error!u32 {
+        return switch (stmt.type) {
+            .bough => |b| 1 + try self.countAnchorVisitSlots(b.body),
+            .fork => |f| 1 + try self.countAnchorVisitSlots(f.body),
+            .choice => |c| 1 + try self.countAnchorVisitSlots(c.body),
+            .include => |inc| blk: {
+                const result = (try self.resolveInclude(inc.path)) orelse break :blk 0;
+                const prev = self.current_file;
+                defer self.current_file = prev;
+                self.current_file = result.file;
+                break :blk try self.countAnchorVisitSlots(result.tree);
+            },
+            else => 0,
+        };
     }
 
     // =======================================================================
