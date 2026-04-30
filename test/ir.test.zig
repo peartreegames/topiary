@@ -4,9 +4,14 @@ const topi = @import("topi");
 const ir = topi.ir;
 const Module = topi.module.Module;
 const File = topi.module.File;
+const builtins = topi.runtime.builtins;
 
 const testing = std.testing;
 const allocator = testing.allocator;
+
+/// Number of anchors lowering pre-registers for builtin functions.
+/// Tests that assert anchor counts add this to their expected total.
+const builtin_anchors = builtins.functions.kvs.len;
 
 /// Parse a string of source into a Module with an empty include map and a
 /// single file. Caller owns the returned Module and must `deinit` it.
@@ -41,7 +46,7 @@ test "lower empty program" {
     defer program.deinit();
 
     try testing.expectEqual(@as(usize, 0), program.body.len);
-    try testing.expectEqual(@as(usize, 0), program.anchors.count());
+    try testing.expectEqual(builtin_anchors, program.anchors.count());
 }
 
 test "lower bough with fin emits visit" {
@@ -66,8 +71,8 @@ test "lower bough with fin emits visit" {
     try testing.expectEqualStrings("Intro", bough.body[0].kind.visit.target.path);
     try testing.expect(bough.body[1].kind == .fin);
 
-    // anchor table populated
-    try testing.expectEqual(@as(usize, 1), program.anchors.count());
+    // anchor table populated (1 user anchor + builtin pre-registrations)
+    try testing.expectEqual(builtin_anchors + 1, program.anchors.count());
 }
 
 test "lower var declaration sets type hint" {
@@ -261,6 +266,88 @@ test "diagnostic: ordinary variable does not trigger builtin shadow" {
     var program = result.program;
     defer program.deinit();
     try testing.expect(!hasError(result.mod, "is a builtin function", .err));
+}
+
+test "diagnostic: function declaration shadowing a builtin errors" {
+    var result = try lowerSource(
+        \\fn print || { }
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "'print' is already declared", .err));
+}
+
+test "diagnostic: class declaration shadowing a builtin errors" {
+    var result = try lowerSource(
+        \\class print {}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "'print' is already declared", .err));
+}
+
+test "diagnostic: enum declaration shadowing a builtin errors" {
+    var result = try lowerSource(
+        \\enum print { A, B }
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "'print' is already declared", .err));
+}
+
+test "diagnostic: duplicate class field errors" {
+    var result = try lowerSource(
+        \\class Foo {
+        \\    x = 1,
+        \\    x = 2
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "'x' is already declared", .err));
+}
+
+test "diagnostic: duplicate class method errors" {
+    var result = try lowerSource(
+        \\class Foo {
+        \\    fn bar || { return 1 }
+        \\    fn bar || { return 2 }
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "'bar' is already declared", .err));
+}
+
+test "diagnostic: class field and method with same name errors" {
+    var result = try lowerSource(
+        \\class Foo {
+        \\    bar = 1,
+        \\    fn bar || { return 2 }
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "'bar' is already declared", .err));
+}
+
+test "diagnostic: bare assignment to a builtin errors" {
+    var result = try lowerSource(
+        \\=== Main {
+        \\    print = 1
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Cannot assign to constant 'print'", .err));
 }
 
 test "diagnostic: assigning to a constant variable errors" {

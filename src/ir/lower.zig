@@ -139,6 +139,8 @@ const Lowerer = struct {
     fn run(self: *Lowerer) Error!void {
         const tree = self.current_file.tree orelse return;
 
+        try self.registerBuiltinAnchors();
+
         // Pre-count anchor visit slots (boughs / forks / choices). The
         // runtime layout reserves globals[0..N-1] for these visit
         // counters, then [N..] for plain var_decls. Seeding
@@ -481,22 +483,26 @@ const Lowerer = struct {
         const tok = stmt.token;
 
         // Register the function as an anchor in the current path scope —
-        // this mirrors `compiler.zig:prepass` which does the same. Top-level
-        // and class-method functions are reachable via path; nested functions
-        // also bind to a stack slot.
-        const path = try self.qualifyName(f.name);
-        const anchor_kind: ir.AnchorRef.Kind = if (f.is_extern) .extern_function else .function;
-        const anchor: ?ir.AnchorRef = self.registerAnchor(path, anchor_kind, UUID.Empty) catch |e| switch (e) {
-            // If the path was already claimed (e.g., a same-named class or
-            // sibling), produce an error but keep going with a non-anchored
-            // representation.
-            error.SymbolAlreadyDeclared => null_blk: {
-                try self.errors().addSpanWithHelp(self.current_file.path, "'{s}' is already declared", tok, f.name_token, .err, .{f.name}, null, try self.previousDeclNote(path));
-                break :null_blk null;
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-        };
-        if (anchor != null) try self.recordDeclToken(path, tok);
+        // top-level functions are reachable via path. Methods are looked
+        // up by name on their Class object at runtime, so they don't go
+        // in `program.anchors`; `lowerClassStmt` runs a per-class member
+        // dedup that handles duplicate-method diagnostics.
+        var anchor: ?ir.AnchorRef = null;
+        if (!f.is_method) {
+            const path = try self.qualifyName(f.name);
+            const anchor_kind: ir.AnchorRef.Kind = if (f.is_extern) .extern_function else .function;
+            anchor = self.registerAnchor(path, anchor_kind, UUID.Empty) catch |e| switch (e) {
+                // If the path was already claimed (e.g., a same-named class or
+                // sibling), produce an error but keep going with a non-anchored
+                // representation.
+                error.SymbolAlreadyDeclared => null_blk: {
+                    try self.errors().addSpanWithHelp(self.current_file.path, "'{s}' is already declared", tok, f.name_token, .err, .{f.name}, null, try self.previousDeclNote(path));
+                    break :null_blk null;
+                },
+                error.OutOfMemory => return error.OutOfMemory,
+            };
+            if (anchor != null) try self.recordDeclToken(path, tok);
+        }
 
         // Functions are reachable via their anchor path (load_const),
         // not via scope. Mirrors the AST compiler, which never adds
@@ -582,6 +588,31 @@ const Lowerer = struct {
 
         const field_names = try self.arena().alloc([]const u8, c.field_names.len);
         for (c.field_names, 0..) |fn_, i| field_names[i] = try self.arena().dupe(u8, fn_);
+
+        // Per-class member-name dedup: fields and methods share a single
+        // namespace at runtime (`instance.name` / `Class.name` finds either),
+        // so a field and method may not share a name, nor may two fields
+        // or two methods. Walk in source order and emit on the second
+        // occurrence pointing back to the first.
+        var members: std.array_hash_map.String(Token) = .empty;
+        defer members.deinit(self.scratchAlloc());
+        for (c.field_names, c.field_name_tokens) |fname, ftok| {
+            const gop = try members.getOrPut(self.scratchAlloc(), fname);
+            if (gop.found_existing) {
+                try self.errors().addWithHelp(self.current_file.path, "'{s}' is already declared", ftok, .err, .{fname}, null, try self.formatDeclNote(gop.value_ptr.*));
+            } else {
+                gop.value_ptr.* = ftok;
+            }
+        }
+        for (c.methods) |*m_stmt| {
+            const m = m_stmt.type.function;
+            const gop = try members.getOrPut(self.scratchAlloc(), m.name);
+            if (gop.found_existing) {
+                try self.errors().addWithHelp(self.current_file.path, "'{s}' is already declared", m.name_token, .err, .{m.name}, null, try self.formatDeclNote(gop.value_ptr.*));
+            } else {
+                gop.value_ptr.* = m.name_token;
+            }
+        }
 
         try self.pushPath(c.name);
         defer self.popPath();
@@ -859,17 +890,6 @@ const Lowerer = struct {
     fn lowerIdentifier(self: *Lowerer, name: []const u8, tok: Token) Error!ir.Expr.Kind {
         _ = tok;
         if (try self.resolveSymbol(name)) |sym| return .{ .load = try self.slotFromSymbol(sym) };
-        // Builtin functions live in `constants_map` at runtime but are
-        // not registered as anchors. Surface them as an already-
-        // resolved `load_const` so `patchAnchor` doesn't flag them as
-        // unknown names.
-        if (builtins.functions.has(name)) {
-            return .{ .load_const = .{ .target = .{
-                .kind = .function,
-                .path = try self.arena().dupe(u8, name),
-                .uuid = UUID.Empty,
-            } } };
-        }
         // Could be a constant / anchor — single-segment path.
         const single = [_][]const u8{name};
         const anchor = try self.refByPath(&single);
@@ -1007,6 +1027,21 @@ const Lowerer = struct {
         return try std.mem.join(self.scratchAlloc(), ".", all);
     }
 
+    /// Pre-register every builtin function as an anchor so name lookups
+    /// flow through the normal `refByPath` path. Codegen pre-populates
+    /// `constants_map` with the same names, so the standard `load_const`
+    /// arm resolves to the builtin's constant slot at runtime.
+    fn registerBuiltinAnchors(self: *Lowerer) Error!void {
+        for (builtins.functions.keys()) |name| {
+            const path = try self.arena().dupe(u8, name);
+            try self.program.anchors.put(self.arena(), path, .{
+                .kind = .function,
+                .path = path,
+                .uuid = UUID.Empty,
+            });
+        }
+    }
+
     /// Insert an anchor into `program.anchors`. Returns the canonical
     /// `AnchorRef`. Returns `error.SymbolAlreadyDeclared` if the path is
     /// already taken.
@@ -1026,6 +1061,13 @@ const Lowerer = struct {
     /// diagnostics. Caller transfers ownership to `addWithHelp`.
     fn previousDeclNote(self: *Lowerer, path: []const u8) Error!?[]const u8 {
         const tok = self.decl_tokens.get(path) orelse return null;
+        return try self.formatDeclNote(tok);
+    }
+
+    /// Format a "previous declaration at file:line" note from a token
+    /// directly. Used for per-class member dedup which doesn't go through
+    /// `decl_tokens`.
+    fn formatDeclNote(self: *Lowerer, tok: Token) Error![]const u8 {
         const alloc = self.errors().allocator;
         const file_name = if (tok.file_index < self.program.files.len)
             std.fs.path.basename(self.program.files[tok.file_index])
