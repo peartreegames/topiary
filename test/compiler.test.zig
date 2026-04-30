@@ -1333,6 +1333,26 @@ test "Unreachable Code Warning - Backup Divert Does Not Fire Warning" {
     }
 }
 
+test "Choice Nested In If Inside Fork Compiles" {
+    const input =
+        \\ === START {
+        \\   fork {
+        \\     if true {
+        \\       ~ "A" => START
+        \\       ~ "B" => START
+        \\     }
+        \\   }
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator, std.testing.io);
+    defer mod.deinit();
+    var bytecode = compileSource(input, mod) catch |err| {
+        for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+        return err;
+    };
+    defer bytecode.free(allocator);
+}
+
 test "Fork Without Backup - Choice With No Exit Warns" {
     const input =
         \\ === START {

@@ -204,6 +204,22 @@ pub const Codegen = struct {
                 try self.registerAnchor(c.anchor.path, c.uuid, stmt.loc.start);
                 for (c.body) |*s| try self.prepass(s);
             },
+            .@"if" => |i| {
+                for (i.then_branch) |*s| try self.prepass(s);
+                if (i.else_branch) |eb| for (eb) |*s| try self.prepass(s);
+            },
+            .@"while" => |w| {
+                for (w.body) |*s| try self.prepass(s);
+            },
+            .@"for" => |f| {
+                for (f.body) |*s| try self.prepass(s);
+            },
+            .@"switch" => |sw| {
+                for (sw.prongs) |p| for (p.body) |*s| try self.prepass(s);
+            },
+            .block => |b| {
+                for (b.body) |*s| try self.prepass(s);
+            },
             else => {},
         }
     }
