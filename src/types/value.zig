@@ -50,6 +50,28 @@ pub const Iterator = struct {
     index: usize,
 };
 
+/// One run of an interpolated string, computed once at codegen so the VM
+/// can walk instead of scanning for `{N}` markers. `literal` ranges are
+/// byte offsets into the parent `StringData.bytes`; `interp` carries the
+/// stack-relative arg index. Marker bytes (`{`, digits, `}`) live in the
+/// bytes blob for cat-readability but are *not* covered by any literal
+/// range — the walker emits literal slices and formatted args back-to-back
+/// so the markers are skipped naturally.
+pub const Segment = union(enum(u8)) {
+    literal: struct { start: u16, end: u16 },
+    interp: u8,
+};
+
+/// Backing for the `string` Value.Obj variant. Carries both the joined
+/// bytes (with `{N}` markers preserved) and the pre-computed segment
+/// table. `segments` defaults to empty for runtime-built strings (concat,
+/// substr, builtin results) — only codegen produces strings with
+/// non-empty segment tables.
+pub const StringData = struct {
+    bytes: []const u8,
+    segments: []const Segment = &.{},
+};
+
 pub const Value = union(Type) {
     void: void,
     nil: void,
@@ -93,7 +115,7 @@ pub const Value = union(Type) {
         };
 
         pub const Data = union(DataType) {
-            string: []const u8,
+            string: StringData,
             @"enum": Enum,
             list: std.ArrayList(Value),
             map: MapType,
@@ -112,7 +134,12 @@ pub const Value = union(Type) {
         pub fn deinit(obj: *Obj, allocator: std.mem.Allocator) void {
             switch (obj.data) {
                 .anchor => |a| allocator.free(a.name),
-                .string => |s| allocator.free(s),
+                .string => |s| {
+                    allocator.free(s.bytes);
+                    // Runtime-built strings (concat, builtins) leave segments
+                    // as the empty comptime literal; only free heap-owned ones.
+                    if (s.segments.len > 0) allocator.free(s.segments);
+                },
                 .@"enum" => |e| e.deinit(allocator),
                 .list => obj.data.list.deinit(allocator),
                 .map => obj.data.map.deinit(allocator),
@@ -215,7 +242,7 @@ pub const Value = union(Type) {
             .const_string => |s| s.len,
             .range => |r| @as(usize, @intCast(@abs(r.end - r.start))) + 1,
             .obj => |o| switch (o.data) {
-                .string => |s| s.len,
+                .string => |s| s.bytes.len,
                 .list => |l| l.items.len,
                 .map => |m| m.count(),
                 .set => |s| s.count(),
@@ -228,7 +255,7 @@ pub const Value = union(Type) {
     pub fn asString(self: Value) ?[]const u8 {
         return switch (self) {
             .const_string => |s| s,
-            .obj => |o| if (o.data == .string) o.data.string else null,
+            .obj => |o| if (o.data == .string) o.data.string.bytes else null,
             else => null,
         };
     }
@@ -279,6 +306,28 @@ pub const Value = union(Type) {
         try writer.writeByte(byte);
     }
 
+    fn writeSegment(writer: *std.Io.Writer, seg: Segment) !void {
+        try writer.writeByte(@intFromEnum(@as(std.meta.Tag(Segment), seg)));
+        switch (seg) {
+            .literal => |r| {
+                try writer.writeInt(u16, r.start, .little);
+                try writer.writeInt(u16, r.end, .little);
+            },
+            .interp => |i| try writer.writeByte(i),
+        }
+    }
+
+    fn readSegment(reader: *std.Io.Reader) !Segment {
+        const seg_tag: std.meta.Tag(Segment) = @enumFromInt(try reader.takeByte());
+        return switch (seg_tag) {
+            .literal => .{ .literal = .{
+                .start = try reader.takeInt(u16, .little),
+                .end = try reader.takeInt(u16, .little),
+            } },
+            .interp => .{ .interp = try reader.takeByte() },
+        };
+    }
+
     // used for constant values only
     pub fn serialize(self: Value, writer: *std.Io.Writer) !void {
         try writer.writeByte(@intFromEnum(@as(Type, self)));
@@ -318,8 +367,10 @@ pub const Value = union(Type) {
                         }
                     },
                     .string => |s| {
-                        try writer.writeInt(u16, @as(u16, @intCast(s.len)), .little);
-                        try writer.writeAll(s);
+                        try writer.writeInt(u16, @as(u16, @intCast(s.bytes.len)), .little);
+                        try writer.writeAll(s.bytes);
+                        try writeU8Len(writer, s.segments.len);
+                        for (s.segments) |seg| try writeSegment(writer, seg);
                     },
                     .builtin => |b| {
                         try writeU8Len(writer, b.name.len);
@@ -460,8 +511,15 @@ pub const Value = union(Type) {
                     .string => {
                         const length = try reader.takeInt(u16, .little);
                         const buf = try reader.readAlloc(allocator, length);
+                        const seg_count = try reader.takeByte();
+                        const segments = try allocator.alloc(Segment, seg_count);
+                        errdefer allocator.free(segments);
+                        for (segments) |*seg| seg.* = try readSegment(reader);
                         const obj = try allocator.create(Value.Obj);
-                        obj.* = .{ .id = id, .data = .{ .string = buf } };
+                        obj.* = .{ .id = id, .data = .{ .string = .{
+                            .bytes = buf,
+                            .segments = segments,
+                        } } };
                         return .{ .obj = obj };
                     },
                     .builtin => {
@@ -647,7 +705,7 @@ pub const Value = union(Type) {
                     .anchor => |a| {
                         try writer.print("[anchor] {s} {d} ({d})", .{ a.name, a.ip, a.visit_index });
                     },
-                    .string => |s| try writer.print("{s}", .{s}),
+                    .string => |s| try writer.print("{s}", .{s.bytes}),
                     .list => |l| {
                         try writer.print("List{{", .{});
                         for (l.items, 0..) |item, i| {
@@ -731,7 +789,7 @@ pub const Value = union(Type) {
                 .const_string => |s| hasher.update(s),
                 .obj => |o| {
                     switch (o.data) {
-                        .string => |s| hasher.update(s),
+                        .string => |s| hasher.update(s.bytes),
                         else => hashFn(&hasher, o.id),
                     }
                 },
@@ -765,7 +823,7 @@ pub const Value = union(Type) {
                     if (@intFromEnum(o.data) != @intFromEnum(b_data))
                         return false;
                     return switch (o.data) {
-                        .string => |s| std.mem.eql(u8, s, b_data.string),
+                        .string => |s| std.mem.eql(u8, s.bytes, b_data.string.bytes),
                         else => std.mem.eql(u8, &o.id, &b.obj.id),
                     };
                 },

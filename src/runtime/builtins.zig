@@ -234,7 +234,7 @@ fn has_method(_: *Vm, args: []Value) Value {
         .string => |s| blk: {
             const needle = getStr(item);
             if (needle.len == 0) break :blk false;
-            break :blk std.mem.indexOf(u8, s, needle) != null;
+            break :blk std.mem.indexOf(u8, s.bytes, needle) != null;
         },
         else => false,
     };
@@ -254,13 +254,13 @@ fn clear_method(vm: *Vm, args: []Value) Value {
 }
 
 fn length_method(_: *Vm, args: []Value) Value {
-    return .{ .number = @as(f32, @floatFromInt(args[0].obj.data.string.len)) };
+    return .{ .number = @as(f32, @floatFromInt(args[0].obj.data.string.bytes.len)) };
 }
 
 fn getStr(val: Value) []const u8 {
     return switch (val) {
         .const_string => |s| std.mem.trimEnd(u8, s, &[_]u8{0}),
-        .obj => |o| if (o.data == .string) o.data.string else "",
+        .obj => |o| if (o.data == .string) o.data.string.bytes else "",
         else => "",
     };
 }
@@ -271,7 +271,7 @@ fn upper_method(vm: *Vm, args: []Value) Value {
     for (s, 0..) |c, i| {
         buf[i] = std.ascii.toUpper(c);
     }
-    return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+    return vm.gc.create(vm, .{ .string = .{ .bytes = buf } }) catch .{ .nil = {} };
 }
 
 fn lower_method(vm: *Vm, args: []Value) Value {
@@ -280,7 +280,7 @@ fn lower_method(vm: *Vm, args: []Value) Value {
     for (s, 0..) |c, i| {
         buf[i] = std.ascii.toLower(c);
     }
-    return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+    return vm.gc.create(vm, .{ .string = .{ .bytes = buf } }) catch .{ .nil = {} };
 }
 
 fn replace_method(vm: *Vm, args: []Value) Value {
@@ -291,7 +291,7 @@ fn replace_method(vm: *Vm, args: []Value) Value {
     if (needle.len == 0) {
         // nothing to replace, return copy
         const buf = vm.alloc.dupe(u8, haystack) catch return .{ .nil = {} };
-        return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+        return vm.gc.create(vm, .{ .string = .{ .bytes = buf } }) catch .{ .nil = {} };
     }
 
     // count occurrences to calculate output size
@@ -308,7 +308,7 @@ fn replace_method(vm: *Vm, args: []Value) Value {
 
     if (count == 0) {
         const buf = vm.alloc.dupe(u8, haystack) catch return .{ .nil = {} };
-        return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+        return vm.gc.create(vm, .{ .string = .{ .bytes = buf } }) catch .{ .nil = {} };
     }
 
     const new_len = haystack.len - (count * needle.len) + (count * replacement.len);
@@ -334,7 +334,7 @@ fn replace_method(vm: *Vm, args: []Value) Value {
         src += 1;
     }
 
-    return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+    return vm.gc.create(vm, .{ .string = .{ .bytes = buf } }) catch .{ .nil = {} };
 }
 
 fn split_method(vm: *Vm, args: []Value) Value {
@@ -357,7 +357,7 @@ fn split_method(vm: *Vm, args: []Value) Value {
                 return .{ .nil = {} };
             };
             char_buf[0] = c;
-            const str_val = vm.gc.create(vm, .{ .string = char_buf }) catch {
+            const str_val = vm.gc.create(vm, .{ .string = .{ .bytes = char_buf } }) catch {
                 vm.stack.resize(protect_base);
                 return .{ .nil = {} };
             };
@@ -380,7 +380,7 @@ fn split_method(vm: *Vm, args: []Value) Value {
                     vm.stack.resize(protect_base);
                     return .{ .nil = {} };
                 };
-                const str_val = vm.gc.create(vm, .{ .string = part }) catch {
+                const str_val = vm.gc.create(vm, .{ .string = .{ .bytes = part } }) catch {
                     vm.stack.resize(protect_base);
                     return .{ .nil = {} };
                 };
@@ -395,7 +395,7 @@ fn split_method(vm: *Vm, args: []Value) Value {
                     vm.stack.resize(protect_base);
                     return .{ .nil = {} };
                 };
-                const str_val = vm.gc.create(vm, .{ .string = part }) catch {
+                const str_val = vm.gc.create(vm, .{ .string = .{ .bytes = part } }) catch {
                     vm.stack.resize(protect_base);
                     return .{ .nil = {} };
                 };
@@ -425,20 +425,20 @@ fn substr_method(vm: *Vm, args: []Value) Value {
 
     if (start >= s.len) {
         const buf = vm.alloc.alloc(u8, 0) catch return .{ .nil = {} };
-        return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+        return vm.gc.create(vm, .{ .string = .{ .bytes = buf } }) catch .{ .nil = {} };
     }
 
     const clamped_end = @min(end, s.len);
     const clamped_start = @min(start, clamped_end);
     const buf = vm.alloc.dupe(u8, s[clamped_start..clamped_end]) catch return .{ .nil = {} };
-    return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+    return vm.gc.create(vm, .{ .string = .{ .bytes = buf } }) catch .{ .nil = {} };
 }
 
 fn trim_method(vm: *Vm, args: []Value) Value {
     const s = getStr(args[0]);
     const trimmed = std.mem.trim(u8, s, " \t\n\r");
     const buf = vm.alloc.dupe(u8, trimmed) catch return .{ .nil = {} };
-    return vm.gc.create(vm, .{ .string = buf }) catch .{ .nil = {} };
+    return vm.gc.create(vm, .{ .string = .{ .bytes = buf } }) catch .{ .nil = {} };
 }
 
 fn contentHashList(items: []const Value) u32 {
@@ -451,7 +451,7 @@ fn contentHashList(items: []const Value) u32 {
             .timestamp => |t| std.hash.autoHash(&hasher, t),
             .const_string => |s| hasher.update(s),
             .obj => |o| switch (o.data) {
-                .string => |s| hasher.update(s),
+                .string => |s| hasher.update(s.bytes),
                 else => std.hash.autoHash(&hasher, o.id),
             },
             .range => |rng| {

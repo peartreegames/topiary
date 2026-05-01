@@ -180,6 +180,34 @@ test "Round-trip hand-built list/set/map values" {
     }
 }
 
+test "Round-trip string with segment table" {
+    // Reproduce a compile-time string constant with the layout codegen
+    // produces for `"hi {name}!"`: bytes = "hi {0}!", segments =
+    // [literal{0,3}, interp:0, literal{6,7}]. After serialize/deserialize
+    // the bytes and segment table must survive intact.
+    const Segment = topi.types.Segment;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const bytes = try a.dupe(u8, "hi {0}!");
+    const segments = try a.alloc(Segment, 3);
+    segments[0] = .{ .literal = .{ .start = 0, .end = 3 } };
+    segments[1] = .{ .interp = 0 };
+    segments[2] = .{ .literal = .{ .start = 6, .end = 7 } };
+
+    const obj = try a.create(Value.Obj);
+    obj.* = .{ .data = .{ .string = .{ .bytes = bytes, .segments = segments } } };
+    const v: Value = .{ .obj = obj };
+
+    const restored = try roundTrip(v, a);
+    try testing.expectEqualSlices(u8, bytes, restored.obj.data.string.bytes);
+    try testing.expectEqual(@as(usize, 3), restored.obj.data.string.segments.len);
+    try testing.expectEqual(Segment{ .literal = .{ .start = 0, .end = 3 } }, restored.obj.data.string.segments[0]);
+    try testing.expectEqual(Segment{ .interp = 0 }, restored.obj.data.string.segments[1]);
+    try testing.expectEqual(Segment{ .literal = .{ .start = 6, .end = 7 } }, restored.obj.data.string.segments[2]);
+}
+
 // ---------------------------------------------------------------------------
 // Bytecode round-trip — moved from compiler.test.zig
 // ---------------------------------------------------------------------------

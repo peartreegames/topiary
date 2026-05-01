@@ -605,7 +605,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                 var buffer: [128]u8 = undefined;
                 var writer = std.Io.File.stdout().writer(io, &buffer);
                 const stdout = &writer.interface;
-                Locale.exportFile(mod.entry, stdout, args.lang) catch |err| {
+                Locale.exportFile(mod.entry, stdout, args.lang, alloc) catch |err| {
                     if (err == error.MissingStamp) {
                         try print("Export failed: dialogue(s) missing @UUID stamps. Run `topi fmt --stamp-only {s}` first.\n", .{args.file.?});
                     } else if (args.verbose) return err;
@@ -645,7 +645,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                         return;
                     };
                 } else {
-                    Locale.exportFile(mod.entry, writer, args.lang) catch |err| {
+                    Locale.exportFile(mod.entry, writer, args.lang, alloc) catch |err| {
                         if (err == error.MissingStamp) {
                             try print("Export failed: dialogue(s) missing @UUID stamps. Run `topi fmt --stamp-only {s}` first.\n", .{args.file.?});
                         } else if (args.verbose) return err;

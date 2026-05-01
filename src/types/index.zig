@@ -9,6 +9,8 @@ pub const One = value.One;
 pub const Iterator = value.Iterator;
 pub const Type = value.Type;
 pub const OnValueChanged = value.OnValueChanged;
+pub const Segment = value.Segment;
+pub const StringData = value.StringData;
 
 pub const VarType = @import("var_type.zig").VarType;
 

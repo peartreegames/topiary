@@ -2256,7 +2256,7 @@ test "GC: split produces many strings under collection pressure" {
         return err;
     };
     const joined_idx = try vm.getGlobalsIndex("joined");
-    const joined = vm.globals[joined_idx].obj.data.string;
+    const joined = vm.globals[joined_idx].obj.data.string.bytes;
     try testing.expectEqualStrings("abcdefghij", joined);
 }
 
@@ -2335,11 +2335,11 @@ test "GC: state round-trip with nested containers under pressure" {
     try testing.expect(outer.items.len == 3);
     const first = outer.items[0].obj.data.list;
     try testing.expect(first.items.len == 2);
-    try testing.expectEqualStrings("a", first.items[0].obj.data.string);
-    try testing.expectEqualStrings("b", first.items[1].obj.data.string);
+    try testing.expectEqualStrings("a", first.items[0].obj.data.string.bytes);
+    try testing.expectEqualStrings("b", first.items[1].obj.data.string.bytes);
     const second = outer.items[1].obj.data.list;
     try testing.expect(second.items.len == 3);
-    try testing.expectEqualStrings("e", second.items[2].obj.data.string);
+    try testing.expectEqualStrings("e", second.items[2].obj.data.string.bytes);
 }
 
 test "GC: class instance with default list field under pressure" {
@@ -2402,14 +2402,14 @@ test "GC: class default string containers do not leak compile-time items" {
     const inst = vm.globals[t_idx].obj.data.instance;
     const names = inst.fields[0].obj.data.list;
     try testing.expect(names.items.len == 3);
-    try testing.expectEqualStrings("a", names.items[0].obj.data.string);
-    try testing.expectEqualStrings("c", names.items[2].obj.data.string);
+    try testing.expectEqualStrings("a", names.items[0].obj.data.string.bytes);
+    try testing.expectEqualStrings("c", names.items[2].obj.data.string.bytes);
     const tags = inst.fields[1].obj.data.set;
     try testing.expect(tags.keys().len == 2);
     const lookup = inst.fields[2].obj.data.map;
     try testing.expect(lookup.keys().len == 1);
-    try testing.expectEqualStrings("k", lookup.keys()[0].obj.data.string);
-    try testing.expectEqualStrings("v", lookup.values()[0].obj.data.string);
+    try testing.expectEqualStrings("k", lookup.keys()[0].obj.data.string.bytes);
+    try testing.expectEqualStrings("v", lookup.values()[0].obj.data.string.bytes);
 }
 
 test "GC: circular instance references under pressure" {
@@ -2474,10 +2474,10 @@ test "GC: string method chaining under pressure" {
     const s2_idx = try vm.getGlobalsIndex("s2");
     const s3_idx = try vm.getGlobalsIndex("s3");
     const s4_idx = try vm.getGlobalsIndex("s4");
-    try testing.expectEqualStrings("HELLO", vm.globals[s1_idx].obj.data.string);
-    try testing.expectEqualStrings("world", vm.globals[s2_idx].obj.data.string);
-    try testing.expectEqualStrings("xbcxbc", vm.globals[s3_idx].obj.data.string);
-    try testing.expectEqualStrings("HI WORLD", vm.globals[s4_idx].obj.data.string);
+    try testing.expectEqualStrings("HELLO", vm.globals[s1_idx].obj.data.string.bytes);
+    try testing.expectEqualStrings("world", vm.globals[s2_idx].obj.data.string.bytes);
+    try testing.expectEqualStrings("xbcxbc", vm.globals[s3_idx].obj.data.string.bytes);
+    try testing.expectEqualStrings("HI WORLD", vm.globals[s4_idx].obj.data.string.bytes);
 }
 
 test "GC: map construction with dynamic keys under pressure" {

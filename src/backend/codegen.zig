@@ -31,6 +31,8 @@ const Anchor = types.Anchor;
 const Function = types.Function;
 const Class = types.Class;
 const Enum = types.Enum;
+const Segment = types.Segment;
+const StringData = types.StringData;
 
 const builtins = @import("../runtime/index.zig").builtins;
 
@@ -53,6 +55,8 @@ pub const Error = error{
     OutOfScope,
     SymbolAlreadyDeclared,
     NotYetImplemented,
+    /// A single interpolated string exceeded the 254-interp wire limit.
+    TooManyInterpolations,
 };
 
 pub const Codegen = struct {
@@ -321,53 +325,75 @@ pub const Codegen = struct {
         _ = try self.emitter.writeInt(C.CONSTANT, anchor_idx, token);
     }
 
+    const TextLowering = struct {
+        bytes: []u8,
+        segments: []Segment,
+        interp_count: u8,
+    };
+
+    /// Single pass over IR text segments: emits the push opcode for each
+    /// interp expression in segment order, builds the joined string with
+    /// `{N}` markers (kept for cat-readability), and records the bytecode
+    /// `Segment` table the VM walks at runtime. Marker bytes are written
+    /// into the joined string but NOT covered by any literal range, so
+    /// the walker emits literal slices and formatted args back-to-back.
+    fn lowerText(self: *Codegen, segments: []const ir.TextSegment) Error!TextLowering {
+        var buf: std.ArrayList(u8) = .empty;
+        errdefer buf.deinit(self.alloc);
+        var seg_buf: std.ArrayList(Segment) = .empty;
+        errdefer seg_buf.deinit(self.alloc);
+
+        var idx: u8 = 0;
+        for (segments) |seg| switch (seg) {
+            .literal => |s| {
+                const start: u16 = @intCast(buf.items.len);
+                try buf.appendSlice(self.alloc, s);
+                const end: u16 = @intCast(buf.items.len);
+                if (start != end)
+                    try seg_buf.append(self.alloc, .{ .literal = .{ .start = start, .end = end } });
+            },
+            .interp => |e| {
+                if (idx == 254) return error.TooManyInterpolations;
+                try self.compileExpr(e);
+                try buf.append(self.alloc, '{');
+                var num_buf: [4]u8 = undefined;
+                const n = std.fmt.bufPrint(&num_buf, "{d}", .{idx}) catch unreachable;
+                try buf.appendSlice(self.alloc, n);
+                try buf.append(self.alloc, '}');
+                try seg_buf.append(self.alloc, .{ .interp = idx });
+                idx += 1;
+            },
+        };
+
+        return .{
+            .bytes = try buf.toOwnedSlice(self.alloc),
+            .segments = try seg_buf.toOwnedSlice(self.alloc),
+            .interp_count = idx,
+        };
+    }
+
     /// Common pattern for dialogue/choice text (carries a UUID). Pushes
-    /// each interp value, builds the joined `{N}`-marked string, and
-    /// emits `.string <const_idx> <interp_count>`. The Obj.id (UUID) is
-    /// the locale-lookup signal at runtime — non-dialogue text leaves
-    /// it `UUID.Empty` and skips the locale path.
+    /// each interp value, builds the joined `{N}`-marked string with its
+    /// segment table, and emits `.string <const_idx> <interp_count>`.
+    /// The Obj.id (UUID) is the locale-lookup signal at runtime —
+    /// non-dialogue text leaves it `UUID.Empty` and skips the locale path.
     fn emitLocString(
         self: *Codegen,
         segments: []const ir.TextSegment,
         uuid: UUID.ID,
         token: Token,
     ) Error!u8 {
-        var interp_count: u8 = 0;
-        for (segments) |seg| {
-            switch (seg) {
-                .interp => |e| {
-                    try self.compileExpr(e);
-                    interp_count += 1;
-                },
-                .literal => {},
-            }
-        }
-        var buf: std.ArrayList(u8) = .empty;
-        errdefer buf.deinit(self.alloc);
-        var idx: usize = 0;
-        for (segments) |seg| {
-            switch (seg) {
-                .literal => |s| try buf.appendSlice(self.alloc, s),
-                .interp => {
-                    var num_buf: [32]u8 = undefined;
-                    const n = std.fmt.bufPrint(&num_buf, "{d}", .{idx}) catch unreachable;
-                    try buf.append(self.alloc, '{');
-                    try buf.appendSlice(self.alloc, n);
-                    try buf.append(self.alloc, '}');
-                    idx += 1;
-                },
-            }
-        }
+        const lowered = try self.lowerText(segments);
         const obj = try self.alloc.create(Value.Obj);
         obj.* = .{
             .id = uuid,
-            .data = .{ .string = try buf.toOwnedSlice(self.alloc) },
+            .data = .{ .string = .{ .bytes = lowered.bytes, .segments = lowered.segments } },
         };
         const c_idx = try self.emitter.addConstant(.{ .obj = obj });
         try self.emitter.writeOp(.string, token);
         _ = try self.emitter.writeInt(C.CONSTANT, c_idx, token);
-        _ = try self.emitter.writeInt(u8, interp_count, token);
-        return interp_count;
+        _ = try self.emitter.writeInt(u8, lowered.interp_count, token);
+        return lowered.interp_count;
     }
 
     fn compileLine(self: *Codegen, line: ir.Line, token: Token) Error!void {
@@ -611,7 +637,7 @@ pub const Codegen = struct {
                 const buf = try self.alloc.dupe(u8, s);
                 errdefer self.alloc.free(buf);
                 const obj = try self.alloc.create(Value.Obj);
-                obj.* = .{ .data = .{ .string = buf } };
+                obj.* = .{ .data = .{ .string = .{ .bytes = buf } } };
                 return .{ .obj = obj };
             },
             .constant_ref => |path| {
@@ -859,43 +885,15 @@ pub const Codegen = struct {
     }
 
     fn compileText(self: *Codegen, segments: []const ir.TextSegment, token: Token) Error!void {
-        // Push interp values in segment order. The reconstructed string
-        // uses `{N}` to mark each interp by its position in the push
-        // sequence — same convention the runtime expects.
-        var interp_count: usize = 0;
-        for (segments) |seg| {
-            switch (seg) {
-                .interp => |e| {
-                    try self.compileExpr(e);
-                    interp_count += 1;
-                },
-                .literal => {},
-            }
-        }
-
-        // Reconstruct the joined string.
-        var buf: std.ArrayList(u8) = .empty;
-        errdefer buf.deinit(self.alloc);
-        var idx: usize = 0;
-        for (segments) |seg| {
-            switch (seg) {
-                .literal => |s| try buf.appendSlice(self.alloc, s),
-                .interp => {
-                    var num_buf: [32]u8 = undefined;
-                    const n = std.fmt.bufPrint(&num_buf, "{d}", .{idx}) catch unreachable;
-                    try buf.append(self.alloc, '{');
-                    try buf.appendSlice(self.alloc, n);
-                    try buf.append(self.alloc, '}');
-                    idx += 1;
-                },
-            }
-        }
+        // Expression-position string (no UUID) — same lowering as
+        // `emitLocString` minus the locale id.
+        const lowered = try self.lowerText(segments);
         const obj = try self.alloc.create(Value.Obj);
-        obj.* = .{ .data = .{ .string = try buf.toOwnedSlice(self.alloc) } };
+        obj.* = .{ .data = .{ .string = .{ .bytes = lowered.bytes, .segments = lowered.segments } } };
         const c_idx = try self.emitter.addConstant(.{ .obj = obj });
         try self.emitter.writeOp(.string, token);
         _ = try self.emitter.writeInt(C.CONSTANT, c_idx, token);
-        _ = try self.emitter.writeInt(u8, @intCast(interp_count), token);
+        _ = try self.emitter.writeInt(u8, lowered.interp_count, token);
     }
 
     fn compileCollection(

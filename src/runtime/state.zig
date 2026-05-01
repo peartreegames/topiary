@@ -238,7 +238,7 @@ pub const State = struct {
             .ref => |r| try stream.write(&r),
             .obj => |o| {
                 switch (o.data) {
-                    .string => |s| try stream.write(s),
+                    .string => |s| try stream.write(s.bytes),
                     else => {
                         try references.append(allocator, value);
                         try stream.write(&o.id);
@@ -314,7 +314,7 @@ pub const State = struct {
         if (entry.object.get("void") != null) return Void;
         if (entry.object.get("nil") != null) return Nil;
         if (entry.object.get("number")) |v| return .{ .number = @floatCast(v.float) };
-        if (entry.object.get("string")) |v| return try vm.gc.create(vm, .{ .string = try vm.alloc.dupe(u8, v.string) });
+        if (entry.object.get("string")) |v| return try vm.gc.create(vm, .{ .string = .{ .bytes = try vm.alloc.dupe(u8, v.string) } });
         if (entry.object.get("bool")) |v| return if (v.bool) True else False;
         if (entry.object.get("visit")) |v| return .{ .visit = @intCast(v.integer) };
         if (entry.object.get("ref")) |v| {

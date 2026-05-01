@@ -296,7 +296,7 @@ test "Compile Strings" {
             try testing.expectEqual(instruction, bytecode.instructions[i]);
         }
         for (case.constants, 0..) |constant, i| {
-            try testing.expectEqualStrings(constant, bytecode.constants[i + cl].obj.data.string);
+            try testing.expectEqualStrings(constant, bytecode.constants[i + cl].obj.data.string.bytes);
         }
     }
 }

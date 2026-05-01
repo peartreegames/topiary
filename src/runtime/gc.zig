@@ -1,6 +1,8 @@
 const std = @import("std");
 const Vm = @import("vm.zig").Vm;
-const Value = @import("../types/index.zig").Value;
+const types = @import("../types/index.zig");
+const Value = types.Value;
+const Segment = types.Segment;
 const UUID = @import("../utils/index.zig").UUID;
 
 const Obj = Value.Obj;
@@ -73,7 +75,7 @@ pub const Gc = struct {
 
     fn dataSize(data: Obj.Data) usize {
         return switch (data) {
-            .string => |s| s.len,
+            .string => |s| s.bytes.len + s.segments.len * @sizeOf(Segment),
             .list => |l| l.capacity * @sizeOf(Value),
             .map => |m| (m.capacity() + 1) * (@sizeOf(Value) * 2 + @sizeOf(u32)),
             .set => |s| (s.capacity() + 1) * (@sizeOf(Value) + @sizeOf(u32)),

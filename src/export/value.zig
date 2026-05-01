@@ -52,7 +52,7 @@ pub const ExportValue = extern struct {
                 .value = .{ .ptr = e.base.data.@"enum".values[e.index].ptr, .len = e.base.data.@"enum".values[e.index].len },
             } } },
             .obj => |o| switch (o.data) {
-                .string => |s| .{ .tag = Tag.string, .data = .{ .string = .{ .ptr = s.ptr, .len = s.len } } },
+                .string => |s| .{ .tag = Tag.string, .data = .{ .string = .{ .ptr = s.bytes.ptr, .len = s.bytes.len } } },
                 .list => |l| blk: {
                     const list = allocator.alloc(ExportValue, l.items.len) catch return Nil;
                     var i: usize = 0;
@@ -120,7 +120,7 @@ pub const ExportValue = extern struct {
             .string => {
                 const str = try vm.alloc.dupe(u8, self.data.string.ptr[0..self.data.string.len]);
                 free(@intFromPtr(self.data.string.ptr));
-                return vm.gc.create(vm, .{ .string = str });
+                return vm.gc.create(vm, .{ .string = .{ .bytes = str } });
             },
             .list => {
                 // Push-protect children: the ArrayList is not a GC root, and a

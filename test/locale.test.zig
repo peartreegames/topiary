@@ -109,7 +109,7 @@ const csv_output =
     \\"YPTY00G5-1WX98ONH","Drew","I'd love to stay and chat, but this is just a short demo.","I'd love to stay and chat, but this is just a short demo."
     \\"AEPZ4SNT-UFN9U9YW","CHOICE","Say nothing.","Say nothing."
     \\"S6MF4G1X-34IOPNOJ","NONE","The person acts as though they were addressing someone else.","The person acts as though they were addressing someone else."
-    \\"KPTQNK2P-69OMTGXF","NONE","They walk away... Counting down from {num}","They walk away... Counting down from {0}"
+    \\"KPTQNK2P-69OMTGXF","NONE","They walk away... Counting down from {num | 0}","They walk away... Counting down from {0}"
     \\
 ;
 
@@ -138,7 +138,7 @@ test "Localization Export CSV Tree" {
     const file = mod.entry;
     var output = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer output.deinit();
-    try Locale.exportFile(file, &output.writer, "en");
+    try Locale.exportFile(file, &output.writer, "en", std.testing.allocator);
 
     try std.testing.expectEqualSlices(u8, csv_output, output.written());
 }
@@ -182,7 +182,7 @@ test "Localization CSV with BOM" {
     const lp = try LocaleProvider.init(alloc, "en", written);
     defer lp.deinit(alloc);
 
-    try std.testing.expectEqualSlices(u8, "A person approaches.", lp.map.get(UUID.fromString("8R955KPX-2WI5R816")).?);
+    try std.testing.expectEqualSlices(u8, "A person approaches.", lp.map.get(UUID.fromString("8R955KPX-2WI5R816")).?.bytes);
 }
 
 test "Localization CSV with Embedded Newlines" {
@@ -203,8 +203,8 @@ test "Localization CSV with Embedded Newlines" {
     const lp = try LocaleProvider.init(alloc, "en", written);
     defer lp.deinit(alloc);
 
-    try std.testing.expectEqualSlices(u8, "Hello.", lp.map.get(UUID.fromString("8R955KPX-2WI5R816")).?);
-    try std.testing.expectEqualSlices(u8, "Line one.\nLine two.", lp.map.get(UUID.fromString("C5I6VN71-IP0HPJHE")).?);
+    try std.testing.expectEqualSlices(u8, "Hello.", lp.map.get(UUID.fromString("8R955KPX-2WI5R816")).?.bytes);
+    try std.testing.expectEqualSlices(u8, "Line one.\nLine two.", lp.map.get(UUID.fromString("C5I6VN71-IP0HPJHE")).?.bytes);
 }
 
 test "Localization Generate and Provider" {
@@ -223,7 +223,7 @@ test "Localization Generate and Provider" {
     defer lp.deinit(alloc);
 
     for (ids, 0..) |id, i| {
-        try std.testing.expectEqualSlices(u8, lp.map.get(UUID.fromString(id)).?, texts[i]);
+        try std.testing.expectEqualSlices(u8, lp.map.get(UUID.fromString(id)).?.bytes, texts[i]);
     }
 }
 
@@ -272,7 +272,7 @@ test "Localization Export CSV Merge Preserves Translations" {
         \\"YPTY00G5-1WX98ONH","Drew","I'd love to stay and chat, but this is just a short demo.","I'd love to stay and chat, but this is just a short demo.","J'adorerais rester discuter."
         \\"AEPZ4SNT-UFN9U9YW","CHOICE","Say nothing.","Say nothing.","Ne rien dire."
         \\"S6MF4G1X-34IOPNOJ","NONE","The person acts as though they were addressing someone else.","The person acts as though they were addressing someone else.","La personne fait comme si."
-        \\"KPTQNK2P-69OMTGXF","NONE","They walk away... Counting down from {num}","They walk away... Counting down from {0}","Ils s'eloignent... Decompte depuis {0}"
+        \\"KPTQNK2P-69OMTGXF","NONE","They walk away... Counting down from {num | 0}","They walk away... Counting down from {0}","Ils s'eloignent... Decompte depuis {0}"
         \\
     ;
 
@@ -355,6 +355,7 @@ test "Localization Overflow Count" {
     try w.writeAll(LocaleProvider.magic);
     try w.writeInt(u16, LocaleProvider.version, .little);
     try w.writeInt(C.CONSTANT, std.math.maxInt(C.CONSTANT), .little); // huge count
+    try w.writeInt(u32, 0, .little); // string_blob_size — must be present in v2 header
     const owned = try alloc.dupe(u8, output.written());
     try std.testing.expectError(error.CorruptLocaleFile, LocaleProvider.init(alloc, "en", owned));
     alloc.free(owned);
@@ -499,8 +500,8 @@ test "Localization Generate From Module Single File" {
     const lp = try LocaleProvider.init(alloc, "fr", topil_data);
     defer lp.deinit(alloc);
 
-    try std.testing.expectEqualSlices(u8, "Bonjour le monde.", lp.map.get(UUID.fromString("AAAAAAAA-BBBBBBBB")).?);
-    try std.testing.expectEqualSlices(u8, "Au revoir.", lp.map.get(UUID.fromString("CCCCCCCC-DDDDDDDD")).?);
+    try std.testing.expectEqualSlices(u8, "Bonjour le monde.", lp.map.get(UUID.fromString("AAAAAAAA-BBBBBBBB")).?.bytes);
+    try std.testing.expectEqualSlices(u8, "Au revoir.", lp.map.get(UUID.fromString("CCCCCCCC-DDDDDDDD")).?.bytes);
 }
 
 test "Localization Generate From Module With Include" {
@@ -558,8 +559,8 @@ test "Localization Generate From Module With Include" {
     const lp = try LocaleProvider.init(alloc, "fr", topil_data);
     defer lp.deinit(alloc);
 
-    try std.testing.expectEqualSlices(u8, "Dialogue principal.", lp.map.get(UUID.fromString("AAAAAAAA-BBBBBBBB")).?);
-    try std.testing.expectEqualSlices(u8, "Dialogue partage.", lp.map.get(UUID.fromString("CCCCCCCC-DDDDDDDD")).?);
+    try std.testing.expectEqualSlices(u8, "Dialogue principal.", lp.map.get(UUID.fromString("AAAAAAAA-BBBBBBBB")).?.bytes);
+    try std.testing.expectEqualSlices(u8, "Dialogue partage.", lp.map.get(UUID.fromString("CCCCCCCC-DDDDDDDD")).?.bytes);
 }
 
 test "Localization Generate From Module Missing CSV Warning" {
@@ -735,4 +736,89 @@ test "Localization Runtime Translates Tagged Dialogue" {
     const greet_idx = try vm.getGlobalsIndex("greet");
     const greet_str = vm.globals[greet_idx].asString() orelse return error.NotAString;
     try std.testing.expectEqualStrings("ignored 3", greet_str);
+}
+
+test "Localization Raw Column Dedups Repeated Identifiers" {
+    // Both `{bob}` references should share index 0 — the translator only
+    // needs `{0}` and a single arg slot.
+    const input =
+        \\ === START {
+        \\     :: "Hi {bob}, are you {bob}?"@AAAAAAAA-BBBBBBBB
+        \\ }
+    ;
+    const expected =
+        \\"id","speaker","raw","en"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Hi {bob | 0}, are you {bob | 0}?","Hi {0}, are you {1}?"
+        \\
+    ;
+
+    const mod = try parser_test.parseSource(input);
+    defer mod.deinit();
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try Locale.exportFile(mod.entry, &output.writer, "en", std.testing.allocator);
+    try std.testing.expectEqualSlices(u8, expected, output.written());
+}
+
+test "Localization Translator Index Out Of Range" {
+    // Raw has 1 interp ({n}), so translator may only use {0}. {1} must
+    // be rejected by `generate` before the .topil is written.
+    const alloc = std.testing.allocator;
+    const csv =
+        \\"id","speaker","raw","en"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Hello {n}.","Bad {1}."
+        \\
+    ;
+    var allocating = std.Io.Writer.Allocating.init(alloc);
+    defer allocating.deinit();
+    try std.testing.expectError(
+        error.TranslatorIndexOutOfRange,
+        Locale.generate(alloc, csv, 3, &allocating.writer, null),
+    );
+}
+
+test "Localization Translator Strips Echoed Name" {
+    // A translator that copy-pasted the source format `{name | 0}` should
+    // still work — the importer parses the trailing integer and ignores
+    // the name.
+    const alloc = std.testing.allocator;
+    const csv =
+        \\"id","speaker","raw","en"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Hi {name | 0}!","Bonjour {name | 0}!"
+        \\
+    ;
+    var allocating = std.Io.Writer.Allocating.init(alloc);
+    defer allocating.deinit();
+    try Locale.generate(alloc, csv, 3, &allocating.writer, null);
+    const topil = try allocating.toOwnedSlice();
+    // LocaleProvider.deinit frees the buffer — don't double-free.
+    const lp = try LocaleProvider.init(alloc, "en", topil);
+    defer lp.deinit(alloc);
+
+    const sd = lp.map.get(UUID.fromString("AAAAAAAA-BBBBBBBB")).?;
+    try std.testing.expectEqualSlices(u8, "Bonjour {0}!", sd.bytes);
+    // Three segments: literal "Bonjour " | interp 0 | literal "!"
+    try std.testing.expectEqual(@as(usize, 3), sd.segments.len);
+    try std.testing.expect(sd.segments[0] == .literal);
+    try std.testing.expect(sd.segments[1] == .interp);
+    try std.testing.expectEqual(@as(u8, 0), sd.segments[1].interp);
+    try std.testing.expect(sd.segments[2] == .literal);
+}
+
+test "Localization v1 File Rejected" {
+    // A v1 .topil file must surface as UnsupportedLocaleVersion, not
+    // crash, when fed to a v2 provider. Hand-build the smallest valid
+    // v1 prelude (magic + version=1 + count=0).
+    const alloc = std.testing.allocator;
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(alloc);
+    try buf.appendSlice(alloc, LocaleProvider.magic);
+    var int_buf: [4]u8 = undefined;
+    std.mem.writeInt(u16, int_buf[0..2], 1, .little);
+    try buf.appendSlice(alloc, int_buf[0..2]);
+    std.mem.writeInt(C.CONSTANT, int_buf[0..@sizeOf(C.CONSTANT)], 0, .little);
+    try buf.appendSlice(alloc, int_buf[0..@sizeOf(C.CONSTANT)]);
+    const owned = try buf.toOwnedSlice(alloc);
+    try std.testing.expectError(error.UnsupportedLocaleVersion, LocaleProvider.init(alloc, "en", owned));
+    alloc.free(owned);
 }

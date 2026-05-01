@@ -7,6 +7,7 @@ const OpCode = backend.OpCode;
 const types = @import("../types/index.zig");
 const Class = types.Class;
 const Value = types.Value;
+const StringData = types.StringData;
 const Nil = types.Nil;
 const True = types.True;
 const False = types.False;
@@ -602,20 +603,24 @@ pub const Vm = struct {
                         const value: f32 = @floatFromInt(left.visit);
                         left = .{ .number = value };
                     }
-                    if (left == .obj and left.obj.data == .string) {
-                        const str = left.obj.data.string;
-                        left = .{ .const_string = str };
+                    if (left == .obj) {
+                        if (left.obj.data == .string) {
+                            const sd = left.obj.data.string;
+                            left = .{ .const_string = sd.bytes };
+                        }
                     }
-                    if (right == .obj and right.obj.data == .string) {
-                        const str = right.obj.data.string;
-                        right = .{ .const_string = str };
+                    if (right == .obj) {
+                        if (right.obj.data == .string) {
+                            const sd = right.obj.data.string;
+                            right = .{ .const_string = sd.bytes };
+                        }
                     }
 
                     if (@intFromEnum(right) != @intFromEnum(left)) {
                         return self.fail("Cannot add types {s} and {s}: {f} {f}", .{ left.typeName(), right.typeName(), left, right });
                     }
                     switch (right) {
-                        .const_string => |s| try self.pushAlloc(.{ .string = try std.mem.concat(self.alloc, u8, &.{ std.mem.trimEnd(u8, left.const_string, &[_]u8{0}), s }) }),
+                        .const_string => |s| try self.pushAlloc(.{ .string = .{ .bytes = try std.mem.concat(self.alloc, u8, &.{ std.mem.trimEnd(u8, left.const_string, &[_]u8{0}), s }) } }),
                         .number => try self.push(.{ .number = right.number + left.number }),
                         .obj => |o| {
                             switch (o.data) {
@@ -803,17 +808,20 @@ pub const Vm = struct {
                 .string => {
                     const index = self.takeInt(C.CONSTANT);
                     const string_obj = self.bytecode.constants[index].obj;
-                    var str: []const u8 = string_obj.data.string;
-
+                    // Default to the bytecode constant; if a locale provider
+                    // has a translation for this UUID, use that StringData
+                    // instead — its segment table is computed at .topil
+                    // load time so we don't re-scan the translated string.
+                    var src: StringData = string_obj.data.string;
                     if (!UUID.isEmpty(string_obj.id)) {
                         if (self.loc_provider) |lp| {
-                            str = lp.map.get(string_obj.id) orelse str;
+                            if (lp.map.get(string_obj.id)) |hit| src = hit;
                         }
                     }
 
                     var count = self.takeInt(u8);
                     if (count == 0) {
-                        try self.push(.{ .const_string = str });
+                        try self.push(.{ .const_string = src.bytes });
                         continue;
                     }
 
@@ -825,30 +833,16 @@ pub const Vm = struct {
                     var allocating_writer: std.Io.Writer.Allocating = .init(self.alloc);
                     defer allocating_writer.deinit();
                     const writer = &allocating_writer.writer;
-                    // index
-                    var i: usize = 0;
-                    // start
-                    var s: usize = 0;
-                    // need to implement our own formatter due to runtime values
-                    while (i < str.len) : (i += 1) {
-                        var c = str[i];
-                        if (c == '{') {
-                            try writer.writeAll(str[s..i]);
-                            const open = i + 1;
-                            var close = open;
-                            while (c != '}') : (i += 1) {
-                                c = str[i];
-                                close = i;
-                            }
-                            const arg_index = try std.fmt.parseInt(u8, str[open..close], 10);
-                            const val = args[arg_index];
+
+                    for (src.segments) |seg| switch (seg) {
+                        .literal => |r| try writer.writeAll(src.bytes[r.start..r.end]),
+                        .interp => |arg_idx| {
+                            if (arg_idx >= args.len)
+                                return self.fail("interp arg index {d} out of range for '{s}'", .{ arg_idx, src.bytes });
+                            const val = args[arg_idx];
                             switch (val) {
-                                .number => |n| {
-                                    try writer.print("{d}", .{n});
-                                },
-                                .timestamp => |t| {
-                                    try writer.print("{d}", .{t});
-                                },
+                                .number => |n| try writer.print("{d}", .{n}),
+                                .timestamp => |t| try writer.print("{d}", .{t}),
                                 .bool => |b| try writer.writeAll(if (b) "true" else "false"),
                                 .enum_value => |e| {
                                     if (e.index >= e.base.data.@"enum".values.len)
@@ -856,21 +850,16 @@ pub const Vm = struct {
                                     try writer.writeAll(e.base.data.@"enum".values[e.index]);
                                 },
                                 .const_string => |cs| try writer.writeAll(std.mem.trimEnd(u8, cs, &[_]u8{0})),
-                                .obj => |o| {
-                                    switch (o.data) {
-                                        // remove final 0
-                                        .string => try writer.writeAll(std.mem.trimEnd(u8, o.data.string, &[_]u8{0})),
-                                        else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), str }),
-                                    }
+                                .obj => |o| switch (o.data) {
+                                    .string => try writer.writeAll(std.mem.trimEnd(u8, o.data.string.bytes, &[_]u8{0})),
+                                    else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), src.bytes }),
                                 },
                                 .visit => |v| try writer.print("{}", .{v}),
-                                else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), str }),
+                                else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), src.bytes }),
                             }
-                            s = i;
-                        }
-                    }
-                    try writer.writeAll(str[s..]);
-                    try self.pushAlloc(.{ .string = try allocating_writer.toOwnedSlice() });
+                        },
+                    };
+                    try self.pushAlloc(.{ .string = .{ .bytes = try allocating_writer.toOwnedSlice() } });
                 },
                 .list => {
                     var count = self.takeInt(C.COLLECTION);
@@ -975,7 +964,7 @@ pub const Vm = struct {
                     // Normalize const_string to obj.string so method dispatch
                     // only needs to handle one string representation
                     const target = if (raw_target == .const_string)
-                        try self.gc.create(self, .{ .string = try self.alloc.dupe(u8, std.mem.trimEnd(u8, raw_target.const_string, &[_]u8{0})) })
+                        try self.gc.create(self, .{ .string = .{ .bytes = try self.alloc.dupe(u8, std.mem.trimEnd(u8, raw_target.const_string, &[_]u8{0})) } })
                     else
                         raw_target;
 
