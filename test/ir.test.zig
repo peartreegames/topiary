@@ -518,7 +518,12 @@ test "diagnostic: class field referencing variable errors" {
     try testing.expect(hasError(result.mod, "Only literal values are allowed here", .err));
 }
 
-test "diagnostic: class field referencing another class instance is accepted" {
+test "diagnostic: class field instance constructor is rejected" {
+    // `new C{}` isn't statically evaluable — class field defaults must
+    // be plain literals or references to existing constants. The IR
+    // validator rejects up-front with the same "Only literal values"
+    // message used for other non-static forms (previously the AST
+    // codegen surfaced this as a confusing NotYetImplemented error).
     var result = try lowerSource(
         \\class Inner { v = 1 }
         \\class Outer {
@@ -528,7 +533,7 @@ test "diagnostic: class field referencing another class instance is accepted" {
     defer result.mod.deinit();
     var program = result.program;
     defer program.deinit();
-    try testing.expect(!hasError(result.mod, "Only literal values", .err));
+    try testing.expect(hasError(result.mod, "Only literal values are allowed here", .err));
 }
 
 test "diagnostic: class field with non-literal inside list errors" {

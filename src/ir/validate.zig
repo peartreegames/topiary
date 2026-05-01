@@ -28,7 +28,7 @@ pub const Error = error{OutOfMemory};
 pub fn validate(
     parent_alloc: std.mem.Allocator,
     module: *Module,
-    program: *const ir.Program,
+    program: *ir.Program,
 ) Error!void {
     var v = try Validator.init(parent_alloc, module, program);
     defer v.deinit();
@@ -38,14 +38,15 @@ pub fn validate(
 const Validator = struct {
     scratch: std.heap.ArenaAllocator,
     module: *Module,
-    program: *const ir.Program,
+    program: *ir.Program,
 
     /// Function arity by canonical anchor path. Built up-front from the
     /// resolved IR; consumed by the arity-mismatch check.
     arity_by_path: std.array_hash_map.String(u8),
     /// Class metadata by canonical anchor path. Same lifecycle as
-    /// arity_by_path.
-    class_by_path: std.array_hash_map.String(*const ir.ClassDecl),
+    /// arity_by_path. Mutable so `evaluateLiteral` can publish
+    /// `field_values` onto each class as it walks them in source order.
+    class_by_path: std.array_hash_map.String(*ir.ClassDecl),
     /// Enum metadata by canonical anchor path. Same lifecycle as
     /// arity_by_path.
     enum_by_path: std.array_hash_map.String(*const ir.EnumDecl),
@@ -53,7 +54,7 @@ const Validator = struct {
     fn init(
         parent_alloc: std.mem.Allocator,
         module: *Module,
-        program: *const ir.Program,
+        program: *ir.Program,
     ) !Validator {
         var scratch = std.heap.ArenaAllocator.init(parent_alloc);
         errdefer scratch.deinit();
@@ -138,7 +139,15 @@ const Validator = struct {
                 try self.collectMetadata(f.body);
             },
             .class => |*c| {
-                if (c.anchor.kind != null) try self.class_by_path.put(a, c.anchor.path, c);
+                if (c.anchor.kind != null) {
+                    // `evaluateLiteral` writes back to `c.field_values`,
+                    // so we cast away the const we got from walking
+                    // `*const ir.Stmt`. Body slices stay `const` to all
+                    // other consumers; this is the one place that
+                    // publishes results onto the IR.
+                    const c_mut: *ir.ClassDecl = @constCast(c);
+                    try self.class_by_path.put(a, c.anchor.path, c_mut);
+                }
                 for (c.methods) |*m| {
                     if (m.anchor) |anc| {
                         if (anc.kind != null) try self.arity_by_path.put(a, anc.path, @intCast(m.parameters.len));
@@ -234,10 +243,20 @@ const Validator = struct {
                 try self.semBody(b.body, stack);
             },
             .class => |*c| {
+                // Track whether every initializer passed structural
+                // checks. If any failed we skip evaluation — the class's
+                // `field_values` stays empty and codegen has already
+                // been short-circuited by the module-level `.err` gate.
+                var all_static = true;
                 for (c.field_initializers) |e| {
+                    const before = self.errors().list.items.len;
                     try self.checkNotFunctionRef(e, e.loc.start);
                     try self.checkStaticInitializer(e);
                     try self.semExpr(e, stack);
+                    if (self.errors().list.items.len != before) all_static = false;
+                }
+                if (all_static and c.anchor.kind != null) {
+                    try self.evaluateClassFieldValues(c.anchor.path, c.field_initializers);
                 }
                 try stack.append(a, c.anchor.path);
                 defer _ = stack.pop();
@@ -626,11 +645,12 @@ const Validator = struct {
             .un_op => |u| try self.checkStaticInitializer(u.operand),
             // `Enum.Value` / `Class.field` — recurse into target.
             .field => |f| try self.checkStaticInitializer(f.target),
-            // `new C{...}` — recurse into each field.
-            .instance => |ins| for (ins.fields) |fe| try self.checkStaticInitializer(fe),
             // Everything else is non-static: variable loads, calls,
-            // computed indexers, if-expressions, builtins, ranges.
-            .load, .if_expr, .index, .call, .builtin, .@"extern", .range => {
+            // computed indexers, if-expressions, builtins, ranges,
+            // `new C{...}` (writers' instance constructors aren't
+            // statically evaluable — class field defaults can reference
+            // existing classes via bare-name `load_const` instead).
+            .instance, .load, .if_expr, .index, .call, .builtin, .@"extern", .range => {
                 try self.errors().addWithHelp(
                     self.pathForTok(expr.loc.start),
                     "Only literal values are allowed here",
@@ -642,6 +662,140 @@ const Validator = struct {
                 );
             },
         }
+    }
+
+    /// Walk a class's already-validated `field_initializers` and
+    /// publish their statically-evaluated `LiteralValue`s onto the
+    /// matching `ClassDecl.field_values`. Caller has confirmed every
+    /// initializer passed `checkStaticInitializer` + `checkNotFunctionRef`
+    /// + `semExpr` without errors.
+    ///
+    /// Forward references between classes (A's default reads from B,
+    /// where B is declared later) leave A's `field_values` empty —
+    /// codegen would have hit `unreachable` on the same input under
+    /// the old `evaluateLiteral`, so the gap is preserved, just
+    /// expressed as a no-op rather than a panic.
+    fn evaluateClassFieldValues(
+        self: *Validator,
+        class_path: []const u8,
+        inits: []const ir.ExprRef,
+    ) Error!void {
+        const class = self.class_by_path.get(class_path) orelse return;
+        const arena = self.program.allocator();
+        const values = try arena.alloc(ir.LiteralValue, inits.len);
+        for (inits, 0..) |init_expr, i| {
+            const lv = self.evaluateLiteral(init_expr) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.ForwardClassRef => return,
+            };
+            values[i] = lv;
+        }
+        class.field_values = values;
+    }
+
+    const EvalError = Error || error{ForwardClassRef};
+
+    /// Pure walker: ExprRef → LiteralValue. Trusts `checkStaticInitializer`
+    /// to have rejected anything outside the literal-shape grammar.
+    /// Strings and recursive containers are allocated in the program
+    /// arena.
+    fn evaluateLiteral(self: *Validator, expr: ir.ExprRef) EvalError!ir.LiteralValue {
+        const arena = self.program.allocator();
+        switch (expr.kind) {
+            .number => |n| return .{ .number = n },
+            .bool => |b| return .{ .bool = b },
+            .nil => return .nil,
+            .text => |segs| {
+                var len: usize = 0;
+                for (segs) |s| switch (s) {
+                    .literal => |l| len += l.len,
+                    .interp => unreachable,
+                };
+                const buf = try arena.alloc(u8, len);
+                var pos: usize = 0;
+                for (segs) |s| switch (s) {
+                    .literal => |l| {
+                        @memcpy(buf[pos .. pos + l.len], l);
+                        pos += l.len;
+                    },
+                    .interp => unreachable,
+                };
+                return .{ .string = buf };
+            },
+            .un_op => |u| {
+                const inner = try self.evaluateLiteral(u.operand);
+                return switch (u.op) {
+                    .negate => .{ .number = -inner.number },
+                    .not => .{ .bool = !inner.bool },
+                };
+            },
+            .bin_op => |bin| {
+                const left = try self.evaluateLiteral(bin.left);
+                const right = try self.evaluateLiteral(bin.right);
+                return .{ .number = switch (bin.op) {
+                    .add => left.number + right.number,
+                    .subtract => left.number - right.number,
+                    .multiply => left.number * right.number,
+                    .divide => left.number / right.number,
+                    else => unreachable,
+                } };
+            },
+            .load_const => |lc| return .{ .constant_ref = lc.target.path },
+            .field => |*f| return try self.evaluateField(f),
+            .list => |items| {
+                const xs = try arena.alloc(ir.LiteralValue, items.len);
+                for (items, 0..) |item, i| xs[i] = try self.evaluateLiteral(item);
+                return .{ .list = xs };
+            },
+            .set => |items| {
+                const xs = try arena.alloc(ir.LiteralValue, items.len);
+                for (items, 0..) |item, i| xs[i] = try self.evaluateLiteral(item);
+                return .{ .set = xs };
+            },
+            .map => |pairs| {
+                const xs = try arena.alloc(ir.LiteralMapPair, pairs.len);
+                for (pairs, 0..) |p, i| {
+                    xs[i] = .{
+                        .key = try self.evaluateLiteral(p.key),
+                        .value = try self.evaluateLiteral(p.value),
+                    };
+                }
+                return .{ .map = xs };
+            },
+            else => unreachable,
+        }
+    }
+
+    /// Resolve `Enum.Value` / `Class.field` static accesses. Reads
+    /// `enum_by_path` / `class_by_path` rather than introspecting a
+    /// runtime `Value.Obj` (the old codegen path).
+    fn evaluateField(self: *Validator, f: *const ir.Field) EvalError!ir.LiteralValue {
+        // checkStaticInitializer guarantees the target chain bottoms
+        // out at a `.load_const`. Anything else would have been
+        // rejected.
+        const target_path = switch (f.target.kind) {
+            .load_const => |lc| lc.target.path,
+            else => unreachable,
+        };
+        if (self.enum_by_path.get(target_path)) |e| {
+            for (e.values, 0..) |v, idx| {
+                if (std.mem.eql(u8, v, f.name)) return .{ .number = @floatFromInt(idx) };
+            }
+            unreachable; // checkFieldAccess would have rejected
+        }
+        if (self.class_by_path.get(target_path)) |class| {
+            // Forward ref — class hasn't been visited yet, so its
+            // field_values is still empty. Bail; the caller skips
+            // publishing for this class.
+            if (class.field_values.len == 0 and class.field_names.len > 0) {
+                return error.ForwardClassRef;
+            }
+            for (class.field_names, 0..) |name, idx| {
+                if (std.mem.eql(u8, name, f.name)) return class.field_values[idx];
+            }
+            unreachable; // checkFieldAccess would have rejected
+        }
+        unreachable; // anchor isn't an enum or class — rejected upstream
     }
 
     fn checkUnreachable(self: *Validator, stmts: []const ir.Stmt) Error!void {

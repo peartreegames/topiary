@@ -536,8 +536,8 @@ pub const Codegen = struct {
                 m.value.destroyStatic(self.alloc);
             }
         }
-        for (c.field_names, c.field_initializers, 0..) |name, init_expr, i| {
-            const value = try self.evaluateLiteral(init_expr);
+        for (c.field_names, c.field_values, 0..) |name, lv, i| {
+            const value = try self.compileLiteralValue(lv);
             errdefer value.destroyStatic(self.alloc);
             const dup_name = try self.alloc.dupe(u8, name);
             fields[i] = .{ .name = dup_name, .value = value };
@@ -599,82 +599,28 @@ pub const Codegen = struct {
         self.emitter.replaceConstant(e.anchor.path, .{ .obj = obj }) catch {};
     }
 
-    /// Static evaluation of literal-shape IR expressions to a `Value`.
-    /// `validate.zig:checkStaticInitializer` already verified the input
-    /// is a permissible literal-shape, so this function trusts its
-    /// inputs and only handles the legal cases.
-    fn evaluateLiteral(self: *Codegen, expr: ir.ExprRef) Error!Value {
-        switch (expr.kind) {
+    /// Translate an IR `LiteralValue` (already evaluated by
+    /// `validate.evaluateClassFieldValues`) into a runtime `Value`.
+    /// Only the `.constant_ref` arm reads emitter state; every other
+    /// arm is a pure structural translation.
+    fn compileLiteralValue(self: *Codegen, lv: ir.LiteralValue) Error!Value {
+        switch (lv) {
             .number => |n| return .{ .number = n },
             .bool => |b| return .{ .bool = b },
             .nil => return .nil,
-            .text => |segs| {
-                // checkStaticInitializer rejects interpolated text, so
-                // segments are guaranteed all-literal here.
-                var len: usize = 0;
-                for (segs) |s| switch (s) {
-                    .literal => |l| len += l.len,
-                    .interp => unreachable,
-                };
-                const buf = try self.alloc.alloc(u8, len);
+            .string => |s| {
+                const buf = try self.alloc.dupe(u8, s);
                 errdefer self.alloc.free(buf);
-                var pos: usize = 0;
-                for (segs) |s| switch (s) {
-                    .literal => |l| {
-                        @memcpy(buf[pos .. pos + l.len], l);
-                        pos += l.len;
-                    },
-                    .interp => unreachable,
-                };
                 const obj = try self.alloc.create(Value.Obj);
                 obj.* = .{ .data = .{ .string = buf } };
                 return .{ .obj = obj };
             },
-            .un_op => |u| {
-                const inner = try self.evaluateLiteral(u.operand);
-                return switch (u.op) {
-                    .negate => .{ .number = -inner.number },
-                    .not => .{ .bool = !inner.bool },
-                };
-            },
-            .bin_op => |bin| {
-                const left = try self.evaluateLiteral(bin.left);
-                errdefer left.destroyStatic(self.alloc);
-                const right = try self.evaluateLiteral(bin.right);
-                return .{
-                    .number = switch (bin.op) {
-                        .add => left.number + right.number,
-                        .subtract => left.number - right.number,
-                        .multiply => left.number * right.number,
-                        .divide => left.number / right.number,
-                        else => unreachable,
-                    },
-                };
-            },
-            .load_const => |lc| {
-                const idx = self.emitter.constants_map.get(lc.target.path).?;
+            .constant_ref => |path| {
+                // The IR has already verified this points at an
+                // emitted enum / class / anchor. Codegen's prepass
+                // reserved a slot for it; lookup is total.
+                const idx = self.emitter.constants_map.get(path).?;
                 return self.emitter.constants.items[idx];
-            },
-            .field => |f| {
-                // Enum or class static value access — validated to point
-                // at an existing member.
-                const target = try self.evaluateLiteral(f.target);
-                if (target == .obj) switch (target.obj.data) {
-                    .@"enum" => |e| {
-                        for (e.values, 0..) |v, i| {
-                            if (std.mem.eql(u8, v, f.name)) return .{ .number = @floatFromInt(i) };
-                        }
-                        unreachable;
-                    },
-                    .class => |cls| {
-                        for (cls.fields) |m| {
-                            if (std.mem.eql(u8, m.name, f.name)) return m.value;
-                        }
-                        unreachable;
-                    },
-                    else => unreachable,
-                };
-                unreachable;
             },
             .list => |items| {
                 var list = try std.ArrayList(Value).initCapacity(self.alloc, items.len);
@@ -683,7 +629,7 @@ pub const Codegen = struct {
                     list.deinit(self.alloc);
                 }
                 for (items) |item| {
-                    list.appendAssumeCapacity(try self.evaluateLiteral(item));
+                    list.appendAssumeCapacity(try self.compileLiteralValue(item));
                 }
                 const obj = try self.alloc.create(Value.Obj);
                 obj.* = .{ .id = UUID.new(), .data = .{ .list = list } };
@@ -696,7 +642,7 @@ pub const Codegen = struct {
                     set.deinit(self.alloc);
                 }
                 for (items) |item| {
-                    try set.put(self.alloc, try self.evaluateLiteral(item), {});
+                    try set.put(self.alloc, try self.compileLiteralValue(item), {});
                 }
                 const obj = try self.alloc.create(Value.Obj);
                 obj.* = .{ .id = UUID.new(), .data = .{ .set = set } };
@@ -713,20 +659,15 @@ pub const Codegen = struct {
                     map.deinit(self.alloc);
                 }
                 for (pairs) |p| {
-                    const k = try self.evaluateLiteral(p.key);
+                    const k = try self.compileLiteralValue(p.key);
                     errdefer k.destroyStatic(self.alloc);
-                    const v = try self.evaluateLiteral(p.value);
+                    const v = try self.compileLiteralValue(p.value);
                     try map.put(self.alloc, k, v);
                 }
                 const obj = try self.alloc.create(Value.Obj);
                 obj.* = .{ .id = UUID.new(), .data = .{ .map = map } };
                 return .{ .obj = obj };
             },
-            // Static evaluation should be guarded by
-            // `validate.checkStaticInitializer`, but if a non-literal
-            // slips through we'd rather surface NotYetImplemented than
-            // hit `unreachable` in production.
-            else => return error.NotYetImplemented,
         }
     }
 

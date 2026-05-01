@@ -367,9 +367,38 @@ pub const ClassDecl = struct {
     field_names: []const []const u8 = &.{},
     /// Field initializers, parallel to `field_names`.
     field_initializers: []const ExprRef = &.{},
+    /// Statically-evaluated field values, parallel to `field_names`.
+    /// Populated by IR validation; codegen translates these into runtime
+    /// `Value`s without re-walking `field_initializers`.
+    field_values: []const LiteralValue = &.{},
     /// Methods declared inside the class body. Each method's `anchor`
     /// is set to a path under this class's path.
     methods: []const FunctionDecl = &.{},
+};
+
+/// Result of static evaluation of a class field initializer. Owned by
+/// the IR program arena. Mirrors the cases `checkStaticInitializer`
+/// accepts. Codegen translates each `LiteralValue` to a runtime `Value`.
+pub const LiteralValue = union(enum) {
+    number: f32,
+    bool: bool,
+    nil,
+    /// Concatenated text from a `text` literal (interpolation rejected
+    /// by `checkStaticInitializer`). Slice owned by program arena.
+    string: []const u8,
+    list: []const LiteralValue,
+    set: []const LiteralValue,
+    map: []const LiteralMapPair,
+    /// Reference to a class/enum/anchor whose runtime constant is
+    /// emitted during codegen. Resolved via `emitter.constants_map`
+    /// at translation time. Path slice borrowed from the IR (anchor
+    /// path lifetime is the program arena).
+    constant_ref: []const u8,
+};
+
+pub const LiteralMapPair = struct {
+    key: LiteralValue,
+    value: LiteralValue,
 };
 
 pub const EnumDecl = struct {

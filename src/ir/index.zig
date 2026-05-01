@@ -44,6 +44,8 @@ pub const Field = program.Field;
 pub const Call = program.Call;
 pub const Instance = program.Instance;
 pub const BuiltinExpr = program.BuiltinExpr;
+pub const LiteralValue = program.LiteralValue;
+pub const LiteralMapPair = program.LiteralMapPair;
 
 pub const dump = @import("dump.zig").dump;
 pub const lower = @import("lower.zig").lower;
