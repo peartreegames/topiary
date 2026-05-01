@@ -92,7 +92,7 @@ fn createBytecode(mod: *Module, logger: ExportLogger, allocator: std.mem.Allocat
 }
 
 // Compile-then-discard: arena batches all transient allocations
-// (module, parser, compiler bookkeeping, Value.Obj constants, bytecode
+// (module, parser, lowering, codegen, Value.Obj constants, bytecode
 // arrays). Only the serialized bytes escape via the writer.
 fn writeBytecode(path: []const u8, writer: *std.Io.Writer, logger: ExportLogger) usize {
     var arena = std.heap.ArenaAllocator.init(alloc);

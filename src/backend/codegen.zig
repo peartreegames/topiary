@@ -997,7 +997,6 @@ pub const Codegen = struct {
         };
 
         if (bin.target_slot) |slot| {
-            // identifier = ... | identifier op= ...
             if (arith_op) |op| {
                 try self.compileExpr(bin.left);
                 try self.compileExpr(bin.right);

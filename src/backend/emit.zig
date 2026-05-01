@@ -95,7 +95,7 @@ pub const Chunk = struct {
         var info: *DebugInfo = &(infos.items[0]);
         for (self.debug_markers.items, 0..) |d, ip| {
             const end: u32 = @intCast(ip);
-            // file changed make a new debug info or find an existing one
+            // File change: find or create DebugInfo for the new file.
             if (file_index != d.file_index and d.file_index < self.module.includes.count()) {
                 try info.ranges.append(allocator, .{ .start = start, .end = end, .line = line });
                 line = d.line;
@@ -116,7 +116,7 @@ pub const Chunk = struct {
                 };
                 continue;
             }
-            // line changed, add new range to debug info
+            // Line change: append the prior range and start a new one.
             if (d.line != line) {
                 try info.ranges.append(allocator, .{ .start = start, .end = end, .line = line });
                 line = d.line;

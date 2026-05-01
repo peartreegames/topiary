@@ -499,7 +499,6 @@ pub const Parser = struct {
                 },
             },
             .@"if" => try self.ifExpression(),
-            // group
             .left_paren => blk: {
                 self.next();
                 const exp = try self.expression(.lowest);
@@ -581,7 +580,7 @@ pub const Parser = struct {
         return left;
     }
 
-    // if no braces used will parse a single statement into a list
+    /// If no braces are used, parses a single statement into a list.
     fn block(self: *Parser) Error![]const Statement {
         var list = std.ArrayList(Statement).empty;
         const has_brace = self.currentIs(.left_brace);

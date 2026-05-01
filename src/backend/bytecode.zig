@@ -105,7 +105,6 @@ pub const Bytecode = struct {
     }
 
     pub fn deserialize(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Bytecode {
-        // validate magic + version
         var file_magic: [magic.len]u8 = undefined;
         try reader.readSliceAll(&file_magic);
         if (!std.mem.eql(u8, &file_magic, magic)) return error.InvalidBytecodeFormat;
@@ -181,8 +180,6 @@ pub const Bytecode = struct {
             try value.print(writer, std.mem.Allocator.failing, null);
             try writer.print("\n", .{});
         }
-        // try writer.print("\n==DEBUG==\n", .{});
-        // try printDebugInfo(writer, code.debug_info);
         try writer.flush();
     }
 

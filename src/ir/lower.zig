@@ -575,7 +575,7 @@ const Lowerer = struct {
 
         // Save and reset locals_count around the function body — local
         // counts inside this function shouldn't leak to the outer
-        // function or to top-level. Mirrors compiler.zig:1329-1357.
+        // function or to top-level.
         const saved_locals_count = self.locals_count;
         self.locals_count = 0;
 

@@ -78,7 +78,6 @@ pub const Vm = struct {
     current_choices: []Choice = undefined,
     choices_freed: bool = true,
     /// Determines if the vm is waiting on input
-    /// hopefully will remove with async?
     is_waiting: bool = false,
     can_continue: bool = false,
 
@@ -131,7 +130,6 @@ pub const Vm = struct {
         for (bytecode.constants) |c| {
             if (c != .obj) continue;
             switch (c.obj.data) {
-                // init visit
                 .anchor => globals[c.obj.data.anchor.visit_index] = .{ .visit = 0 },
                 else => {},
             }
@@ -164,7 +162,7 @@ pub const Vm = struct {
 
         // Initialize the entire operand stack backing to .void. Local slots
         // are reserved by `resize` (here and at function-call sites) without
-        // being explicitly written; the compiler emits set_local before any
+        // being explicitly written; codegen emits set_local before any
         // get_local in normal execution, but snapshot capture and GC root
         // marking iterate `stack.items[0..count]` unconditionally and would
         // otherwise observe uninitialized memory.
