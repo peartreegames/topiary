@@ -51,6 +51,10 @@ const Validator = struct {
     /// Enum metadata by canonical anchor path. Same lifecycle as
     /// arity_by_path.
     enum_by_path: std.array_hash_map.String(*const ir.EnumDecl),
+    /// Nesting depth for `function` / method bodies. Non-zero means
+    /// any further `function` declaration encountered is nested and
+    /// must be rejected — codegen has no closure path.
+    function_depth: u32,
 
     fn init(
         parent_alloc: std.mem.Allocator,
@@ -67,6 +71,7 @@ const Validator = struct {
             .arity_by_path = .empty,
             .class_by_path = .empty,
             .enum_by_path = .empty,
+            .function_depth = 0,
         };
         try v.collectMetadata(program.body);
         return v;
@@ -261,9 +266,28 @@ const Validator = struct {
                 }
                 try stack.append(a, c.anchor.path);
                 defer _ = stack.pop();
-                for (c.methods) |*m| try self.semBody(m.body, stack);
+                for (c.methods) |*m| {
+                    self.function_depth += 1;
+                    defer self.function_depth -= 1;
+                    try self.semBody(m.body, stack);
+                }
             },
-            .function => |*f| try self.semBody(f.body, stack),
+            .function => |*f| {
+                if (self.function_depth > 0) {
+                    try self.errors().addWithHelp(
+                        self.pathForTok(stmt.loc.start),
+                        "Nested function declarations are not supported",
+                        stmt.loc.start,
+                        .err,
+                        .{},
+                        try self.errors().allocator.dupe(u8, "declare functions at the top level"),
+                        null,
+                    );
+                }
+                self.function_depth += 1;
+                defer self.function_depth -= 1;
+                try self.semBody(f.body, stack);
+            },
             .block => |*b| try self.semBody(b.body, stack),
             .@"if" => |*i| {
                 try self.semExpr(i.condition, stack);

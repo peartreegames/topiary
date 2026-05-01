@@ -1,7 +1,7 @@
 //! IR → bytecode codegen.
 //!
 //! Walks an `ir.Program` and produces a `Bytecode` value via the shared
-//! `Emitter`. Replaces the AST-driven `compiler.zig` end state.
+//! `Emitter`.
 //!
 //! The pipeline at this point has already run:
 //!   - parser → AST per file
@@ -103,8 +103,8 @@ pub const Codegen = struct {
     }
 
     fn run(self: *Codegen) Error!void {
-        // Builtins are added first (mirrors compiler.zig:564-569). Their
-        // constant indices are fixed by builtins.functions iteration order.
+        // Builtins are added first; their constant indices are fixed by
+        // `builtins.functions` iteration order.
         for (builtins.functions.keys()) |name| {
             const obj = try self.alloc.create(Value.Obj);
             errdefer self.alloc.destroy(obj);
@@ -465,16 +465,13 @@ pub const Codegen = struct {
         // Value.Obj for FFI dispatch. The named slot still gets a
         // compiled function obj (whose body is whatever the writer
         // wrote — typically a stub the FFI override replaces).
+        //
+        // Top-level function statements always carry an anchor; nested
+        // function declarations are rejected by `ir.validate` and never
+        // reach codegen, so the orphan-leak path is unreachable.
+        const a = f.anchor orelse unreachable;
         const obj = try self.compileFunctionToObj(f, token);
-        if (f.anchor) |a| {
-            self.emitter.replaceConstant(a.path, .{ .obj = obj }) catch {};
-        }
-        // Nested-function bindings (name_slot != null) are not yet
-        // supported in this codegen — they require an explicit closure
-        // emission path. Leaving the obj orphaned would leak; the
-        // current AST compiler also doesn't emit closures, so we mirror
-        // that gap. If the IR ever lowers a true nested function, this
-        // path will need extending.
+        self.emitter.replaceConstant(a.path, .{ .obj = obj }) catch {};
     }
 
     fn compileFunctionToObj(self: *Codegen, f: ir.FunctionDecl, token: Token) Error!*Value.Obj {
@@ -482,8 +479,8 @@ pub const Codegen = struct {
 
         for (f.body) |*s| try self.compileStmt(s);
 
-        // Ensure every function ends with a return — matches the AST
-        // compiler at compiler.zig:1346.
+        // Every function must end with a return op so the VM's frame
+        // teardown is uniform.
         if (!(try self.emitter.lastIs(.return_value)) and !(try self.emitter.lastIs(.return_void))) {
             try self.emitter.writeOp(.return_void, token);
         }
@@ -672,9 +669,8 @@ pub const Codegen = struct {
             for (eb) |*s| try self.compileStmt(s);
             try self.emitter.patchJump(end_jp);
         } else {
-            // Mirrors compiler.zig:693-697: when there's no else, push
-            // nil and pop so the if's stack effect matches an
-            // expression-style if.
+            // No else branch: push nil and pop so the if's stack effect
+            // matches an expression-style if.
             try self.emitter.writeOp(.nil, token);
             try self.emitter.writeOp(.pop, token);
             try self.emitter.patchJump(end_jp);
@@ -802,8 +798,7 @@ pub const Codegen = struct {
                     return error.NotYetImplemented;
                 // Anchor references resolve to the visit count (a number)
                 // at runtime — load via get_global on the visit symbol's
-                // index. Mirrors compiler.zig:loadSymbol's identifier
-                // arm. Functions / classes / enums load as plain
+                // index. Functions / classes / enums load as plain
                 // constants.
                 const v = self.emitter.constants.items[idx];
                 if (v == .obj and v.obj.data == .anchor) {
@@ -946,7 +941,7 @@ pub const Codegen = struct {
 
     fn compileBinOp(self: *Codegen, bin: ir.BinOp, token: Token) Error!void {
         // `<` / `<=` are emitted as `>` / `>=` with operands swapped, to
-        // keep the runtime opcode set small (mirrors compiler.zig:1504).
+        // keep the runtime opcode set small.
         if (bin.op == .less_than or bin.op == .less_than_equal) {
             try self.compileExpr(bin.right);
             try self.compileExpr(bin.left);
@@ -980,7 +975,7 @@ pub const Codegen = struct {
     /// Lvalue-aware emission for `=` / `+=` / `-=` / `*=` / `/=` / `%=`.
     /// IR sets `bin.target_slot` when the LHS resolves to a slot;
     /// otherwise the LHS is an `.index` expression and we go through
-    /// `set_property`. Mirrors compiler.zig's two assignment paths.
+    /// `set_property`.
     fn compileAssign(self: *Codegen, bin: ir.BinOp, token: Token) Error!void {
         const arith_op: ?OpCode = switch (bin.op) {
             .assign_add => .add,

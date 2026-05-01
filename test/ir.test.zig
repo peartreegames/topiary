@@ -280,6 +280,33 @@ test "diagnostic: function declaration shadowing a builtin errors" {
     try testing.expect(hasError(result.mod, "'print' is already declared", .err));
 }
 
+test "diagnostic: nested function declaration is rejected" {
+    var result = try lowerSource(
+        \\fn outer || {
+        \\    fn inner || { return 1 }
+        \\    return inner()
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Nested function declarations are not supported", .err));
+}
+
+test "diagnostic: nested function declaration inside a method is rejected" {
+    var result = try lowerSource(
+        \\class Foo {
+        \\    fn bar || {
+        \\        fn nested || { return 0 }
+        \\    }
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Nested function declarations are not supported", .err));
+}
+
 test "diagnostic: class declaration shadowing a builtin errors" {
     var result = try lowerSource(
         \\class print {}

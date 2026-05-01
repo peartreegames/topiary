@@ -1,13 +1,12 @@
-//! Bytecode emission machinery shared by the AST-driven `compiler.zig`
-//! and the IR-driven `codegen.zig`.
+//! Bytecode emission machinery used by `codegen.zig`.
 //!
 //! `Emitter` owns the active chunk and the constant pool. It exposes the
-//! primitives both compilers need to write opcodes, integers, values, and
+//! primitives codegen needs to write opcodes, integers, values, and
 //! placeholder jumps; manage chunk enter/exit; and register constants.
 //!
 //! `Emitter` is purely about producing bytecode bytes. It does NOT emit
-//! diagnostics, walk an AST, walk an IR, resolve scopes, or know about
-//! anchor paths. Diagnostic emission stays on the consumer.
+//! diagnostics, walk an IR, resolve scopes, or know about anchor paths.
+//! Diagnostic emission stays on the consumer.
 //!
 //! Memory contract:
 //!   - `alloc` outlives the emitter and owns the chunk instruction

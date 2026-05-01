@@ -271,6 +271,14 @@ pub const Value = union(Type) {
         };
     }
 
+    /// Writes a u8 length prefix, returning `error.NameTooLong` if the
+    /// value doesn't fit. Used for class/enum/builtin/extern names and
+    /// counts that the on-disk format encodes in one byte.
+    fn writeU8Len(writer: *std.Io.Writer, value: usize) !void {
+        const byte = std.math.cast(u8, value) orelse return error.NameTooLong;
+        try writer.writeByte(byte);
+    }
+
     // used for constant values only
     pub fn serialize(self: Value, writer: *std.Io.Writer) !void {
         try writer.writeByte(@intFromEnum(@as(Type, self)));
@@ -314,23 +322,23 @@ pub const Value = union(Type) {
                         try writer.writeAll(s);
                     },
                     .builtin => |b| {
-                        try writer.writeByte(@intCast(b.name.len));
+                        try writeU8Len(writer, b.name.len);
                         try writer.writeAll(b.name);
                     },
                     .class => |c| {
-                        try writer.writeByte(@intCast(c.name.len));
+                        try writeU8Len(writer, c.name.len);
                         try writer.writeAll(c.name);
 
-                        try writer.writeByte(@intCast(c.fields.len));
+                        try writeU8Len(writer, c.fields.len);
                         for (c.fields) |f| {
-                            try writer.writeByte(@intCast(f.name.len));
+                            try writeU8Len(writer, f.name.len);
                             try writer.writeAll(f.name);
                             try f.value.serialize(writer);
                         }
 
-                        try writer.writeByte(@intCast(c.methods.len));
+                        try writeU8Len(writer, c.methods.len);
                         for (c.methods) |m| {
-                            try writer.writeByte(@intCast(m.name.len));
+                            try writeU8Len(writer, m.name.len);
                             try writer.writeAll(m.name);
                             try m.value.serialize(writer);
                         }
@@ -351,17 +359,17 @@ pub const Value = union(Type) {
                         for (f.debug_info) |d| try d.serialize(writer);
                     },
                     .@"extern" => |e| {
-                        try writer.writeByte(@intCast(e.name.len));
+                        try writeU8Len(writer, e.name.len);
                         try writer.writeAll(e.name);
                         try writer.writeByte(e.arity);
                     },
                     .@"enum" => |e| {
-                        try writer.writeByte(@intCast(e.name.len));
+                        try writeU8Len(writer, e.name.len);
                         try writer.writeAll(e.name);
                         try writer.writeByte(if (e.is_seq) 1 else 0);
-                        try writer.writeByte(@intCast(e.values.len));
+                        try writeU8Len(writer, e.values.len);
                         for (e.values) |value| {
-                            try writer.writeByte(@intCast(value.len));
+                            try writeU8Len(writer, value.len);
                             try writer.writeAll(value);
                         }
                     },
