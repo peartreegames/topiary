@@ -336,7 +336,7 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
 
     var cli_runner = CliRunner.init(args.auto);
     var vm = Vm.init(alloc, io, &bytecode, &cli_runner.runner) catch |err| {
-        try print("Could not initialize Vm\n", .{});
+        try print("Could not start the dialogue runtime\n", .{});
         return if (args.verbose) err else {};
     };
     if (args.rewind) vm.history_capacity = 16;
@@ -415,7 +415,7 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
     var buf: [128]u8 = undefined;
     var file_writer = file.writer(io, &buf);
     _ = bytecode.serialize(alloc, &file_writer.interface) catch |err| {
-        try print("Could not serialize bytecode\n", .{});
+        try print("Could not write compiled bytecode to file\n", .{});
         return if (args.verbose) err else {};
     };
 }
@@ -467,7 +467,7 @@ fn fmtCommand(args: FmtArgs, alloc: std.mem.Allocator) !void {
         return if (args.verbose) err else {};
     };
     mod.entry.buildTree() catch |err| {
-        try print("Could not parse file\n", .{});
+        try print("Could not read .topi file\n", .{});
         try writeErrors(mod);
         return if (args.verbose) err else {};
     };

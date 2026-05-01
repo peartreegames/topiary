@@ -574,7 +574,7 @@ pub const Vm = struct {
                 .constant => {
                     const index = self.takeInt(C.CONSTANT);
                     if (index >= self.bytecode.constants.len)
-                        return self.fail("Constant index {d} outside of bounds length {d}", .{ index, self.bytecode.constants.len });
+                        return self.fail("Internal error: bytecode constant index {d} out of range (max {d})", .{ index, self.bytecode.constants.len });
                     const value = self.bytecode.constants[index];
                     if (value == .obj and value.obj.data == .function and index < self.bytecode.constants.len - 1) {
                         const ext = self.bytecode.constants[index + 1];
@@ -647,7 +647,7 @@ pub const Vm = struct {
                     const right = try self.pop();
                     const left = try self.pop();
                     if (right != .bool or left != .bool) {
-                        return self.fail("Conditionals must be of type bool not types {s} and {s}", .{ left.typeName(), right.typeName() });
+                        return self.fail("Condition must be true or false, found {s} and {s}", .{ left.typeName(), right.typeName() });
                     }
                     try self.push(.{ .bool = right.bool or left.bool });
                 },
@@ -655,7 +655,7 @@ pub const Vm = struct {
                     const right = try self.pop();
                     const left = try self.pop();
                     if (right != .bool or left != .bool) {
-                        return self.fail("Conditionals must be of type bool not types {s} and {s}", .{ left.typeName(), right.typeName() });
+                        return self.fail("Condition must be true or false, found {s} and {s}", .{ left.typeName(), right.typeName() });
                     }
                     try self.push(.{ .bool = right.bool and left.bool });
                 },
@@ -700,7 +700,7 @@ pub const Vm = struct {
                 },
                 .decl_global => {
                     const index = self.takeInt(C.GLOBAL);
-                    if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{index});
+                    if (index > globals_size) return self.fail("Internal error: global slot {} out of range (max {})", .{ index, globals_size });
                     const value = try self.pop();
                     // global already set from loaded state
                     if (self.globals[index] != .void) {
@@ -712,9 +712,9 @@ pub const Vm = struct {
                 },
                 .set_global => {
                     const index = self.takeInt(C.GLOBAL);
-                    if (index > globals_size) return self.fail("Globals index {} is out of bounds of max size", .{index});
+                    if (index > globals_size) return self.fail("Internal error: global slot {} out of range (max {})", .{ index, globals_size });
 
-                    if (index >= self.globals.len) return self.fail("Globals index {} is out of bounds of current size {}", .{ index, self.globals.len });
+                    if (index >= self.globals.len) return self.fail("Internal error: global slot {} out of range (current size {})", .{ index, self.globals.len });
                     var value = try self.pop();
                     const current = self.globals[index];
                     if (current == .enum_value and value == .enum_value and current.enum_value.base == value.enum_value.base and current.enum_value.base.data.@"enum".is_seq) {
@@ -775,7 +775,7 @@ pub const Vm = struct {
                             }
                         },
                         // todo add string indexing
-                        else => return self.fail("Cannot index '{s}' into type {s}", .{ field_value.typeName(), instance_value.typeName() }),
+                        else => return self.fail("Cannot use '{s}' to access {s}", .{ field_value.typeName(), instance_value.typeName() }),
                     }
                 },
                 .get_upvalue => {
@@ -784,7 +784,7 @@ pub const Vm = struct {
                     const frame_count = self.frames.items.len;
 
                     if (frame_count < frames_to_skip) {
-                        return self.fail("Cannot read captured variable: its frame has already returned", .{});
+                        return self.fail("Cannot use variable from a function that has already finished", .{});
                     }
 
                     const target_frame = self.frames.items[frame_count - 1 - frames_to_skip];
@@ -797,7 +797,7 @@ pub const Vm = struct {
                     const frame_count = self.frames.items.len;
 
                     if (frame_count < frames_to_skip) {
-                        return self.fail("Cannot write captured variable: its frame has already returned", .{});
+                        return self.fail("Cannot assign to variable from a function that has already finished", .{});
                     }
 
                     const target_frame = self.frames.items[frame_count - frames_to_skip];
@@ -836,7 +836,7 @@ pub const Vm = struct {
                         .literal => |r| try writer.writeAll(src.bytes[r.start..r.end]),
                         .interp => |arg_idx| {
                             if (arg_idx >= args.len)
-                                return self.fail("interp arg index {d} out of range for '{s}'", .{ arg_idx, src.bytes });
+                                return self.fail("Internal error: text placeholder {d} has no matching value in '{s}'", .{ arg_idx, src.bytes });
                             const val = args[arg_idx];
                             switch (val) {
                                 .number => |n| try writer.print("{d}", .{n}),
@@ -850,10 +850,10 @@ pub const Vm = struct {
                                 .const_string => |cs| try writer.writeAll(std.mem.trimEnd(u8, cs, &[_]u8{0})),
                                 .obj => |o| switch (o.data) {
                                     .string => try writer.writeAll(std.mem.trimEnd(u8, o.data.string.bytes, &[_]u8{0})),
-                                    else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), src.bytes }),
+                                    else => return self.fail("Cannot insert {s} into text in '{s}'", .{ val.typeName(), src.bytes }),
                                 },
                                 .visit => |v| try writer.print("{}", .{v}),
-                                else => return self.fail("Unsupported interpolated type '{s}' for '{s}'", .{ val.typeName(), src.bytes }),
+                                else => return self.fail("Cannot insert {s} into text in '{s}'", .{ val.typeName(), src.bytes }),
                             }
                         },
                     };
@@ -895,7 +895,7 @@ pub const Vm = struct {
                 },
                 .iter_start => {
                     var value = try self.pop();
-                    if (self.iterators.count >= iterator_size) return self.fail("Iterator overflow: too many nested iterators (max {d})", .{iterator_size});
+                    if (self.iterators.count >= iterator_size) return self.fail("Too many nested loops (max {d})", .{iterator_size});
                     self.iterators.push(.{
                         .value = value,
                         .index = 0,
@@ -947,7 +947,7 @@ pub const Vm = struct {
                     const right = try self.pop();
 
                     if (left != .number or right != .number)
-                        return self.fail("Range must be two number, found '{s}' and '{s}'", .{ left.typeName(), right.typeName() });
+                        return self.fail("Range must be two numbers, found '{s}' and '{s}'", .{ left.typeName(), right.typeName() });
                     try self.push(.{
                         .range = .{
                             .start = @as(i32, @intFromFloat(left.number)),
@@ -1125,7 +1125,7 @@ pub const Vm = struct {
                                 );
                             }
                             const frame = try Frame.create(value.obj, self.stack.count - arg_count);
-                            if (self.frames.count >= frame_size) return self.fail("Stack overflow: too many nested function calls (max {d})", .{frame_size});
+                            if (self.frames.count >= frame_size) return self.fail("Too many nested function calls (max {d})", .{frame_size});
                             self.frames.push(frame);
                             const locals_start = frame.bp + arg_count;
                             self.stack.resize(frame.bp + f.locals_count);
@@ -1140,7 +1140,7 @@ pub const Vm = struct {
                                 const result = e.backing(ptr, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
                                 self.stack.count -= arg_count + 1;
                                 try self.push(result);
-                            } else return self.fail("Extern function {s} not set", .{e.name});
+                            } else return self.fail("External function '{s}' has not been set by the host", .{e.name});
                         },
                         .builtin => |b| {
                             if (b.arity != arg_count)

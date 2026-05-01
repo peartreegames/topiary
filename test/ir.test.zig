@@ -518,7 +518,7 @@ test "diagnostic: class field interpolated string errors" {
     defer result.mod.deinit();
     var program = result.program;
     defer program.deinit();
-    try testing.expect(hasError(result.mod, "Interpolated strings are not allowed as static default values", .err));
+    try testing.expect(hasError(result.mod, "Class field defaults cannot contain '{...}' values", .err));
 }
 
 test "diagnostic: class field with function call errors" {
@@ -797,7 +797,7 @@ test "diagnostic: class-as-constant valid method called directly is silent" {
     var program = result.program;
     defer program.deinit();
     try testing.expect(!hasError(result.mod, "does not contain", .err));
-    try testing.expect(!hasError(result.mod, "Cannot store", .err));
+    try testing.expect(!hasError(result.mod, "can only be called", .err));
 }
 
 test "diagnostic: storing top-level function as value errors" {
@@ -811,7 +811,7 @@ test "diagnostic: storing top-level function as value errors" {
     defer result.mod.deinit();
     var program = result.program;
     defer program.deinit();
-    try testing.expect(hasError(result.mod, "Cannot store function 'sum' as a value", .err));
+    try testing.expect(hasError(result.mod, "Functions can only be called, not assigned to a variable: 'sum'", .err));
 }
 
 test "diagnostic: reassigning a variable to a function errors" {
@@ -827,7 +827,7 @@ test "diagnostic: reassigning a variable to a function errors" {
     defer result.mod.deinit();
     var program = result.program;
     defer program.deinit();
-    try testing.expect(hasError(result.mod, "Cannot store function 'product' as a value", .err));
+    try testing.expect(hasError(result.mod, "Functions can only be called, not assigned to a variable: 'product'", .err));
 }
 
 test "diagnostic: storing class method as value errors" {
@@ -844,7 +844,7 @@ test "diagnostic: storing class method as value errors" {
     defer result.mod.deinit();
     var program = result.program;
     defer program.deinit();
-    try testing.expect(hasError(result.mod, "Cannot store method 'foo' as a value", .err));
+    try testing.expect(hasError(result.mod, "Methods can only be called, not assigned to a variable: 'foo'", .err));
 }
 
 test "diagnostic: storing instance method as value errors" {
@@ -862,7 +862,7 @@ test "diagnostic: storing instance method as value errors" {
     defer result.mod.deinit();
     var program = result.program;
     defer program.deinit();
-    try testing.expect(hasError(result.mod, "Cannot store method 'foo' as a value", .err));
+    try testing.expect(hasError(result.mod, "Methods can only be called, not assigned to a variable: 'foo'", .err));
 }
 
 test "diagnostic: function as call argument is silent" {
@@ -877,7 +877,7 @@ test "diagnostic: function as call argument is silent" {
     defer result.mod.deinit();
     var program = result.program;
     defer program.deinit();
-    try testing.expect(!hasError(result.mod, "Cannot store", .err));
+    try testing.expect(!hasError(result.mod, "can only be called", .err));
 }
 
 test "diagnostic: function in list literal errors" {
@@ -891,7 +891,7 @@ test "diagnostic: function in list literal errors" {
     defer result.mod.deinit();
     var program = result.program;
     defer program.deinit();
-    try testing.expect(hasError(result.mod, "Cannot store function 'sum' as a value", .err));
+    try testing.expect(hasError(result.mod, "Functions can only be called, not assigned to a variable: 'sum'", .err));
 }
 
 test "returning a function value is allowed (used for currying)" {
@@ -904,7 +904,7 @@ test "returning a function value is allowed (used for currying)" {
     defer result.mod.deinit();
     var program = result.program;
     defer program.deinit();
-    try testing.expect(!hasError(result.mod, "Cannot store function 'sum' as a value", .err));
+    try testing.expect(!hasError(result.mod, "Functions can only be called, not assigned to a variable: 'sum'", .err));
 }
 
 test "diagnostic: dot-access on unknown type is silent" {

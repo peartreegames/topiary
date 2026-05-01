@@ -70,7 +70,7 @@ fn createModule(path: []const u8, logger: ExportLogger, allocator: std.mem.Alloc
             logger.log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
             return null;
         };
-        logger.log("Could not parse file '{s}': {s}\n{s}", .{ mod.entry.path, @errorName(err), output_log.written() }, .err);
+        logger.log("Could not read .topi file '{s}': {s}\n{s}", .{ mod.entry.path, @errorName(err), output_log.written() }, .err);
         return null;
     };
     return mod;
@@ -103,7 +103,7 @@ fn writeBytecode(path: []const u8, writer: *std.Io.Writer, logger: ExportLogger)
     var bytecode = createBytecode(mod, logger, aa) orelse return 0;
 
     return bytecode.serialize(aa, writer) catch |err| {
-        logger.log("Could not serialize bytecode: {s}", .{@errorName(err)}, .err);
+        logger.log("Could not write compiled bytecode: {s}", .{@errorName(err)}, .err);
         return 0;
     };
 }
@@ -237,9 +237,9 @@ pub export fn createVm(
         bytecode.free(alloc);
         return null;
     };
-    logger.log("Initializing Vm, globals: {}", .{bytecode.global_symbols.len}, .info);
+    logger.log("Starting dialogue runtime, globals: {}", .{bytecode.global_symbols.len}, .info);
     vm.* = Vm.init(alloc, io, &bytecode, &extern_runner.runner) catch {
-        logger.log("Could not initialize Vm", .{}, .err);
+        logger.log("Could not start the dialogue runtime", .{}, .err);
         alloc.destroy(vm);
         alloc.destroy(extern_runner);
         bytecode.free(alloc);
@@ -395,7 +395,7 @@ fn formatInternal(path: []const u8, indent_width: u8, logger: ExportLogger) ?[]c
     };
 
     mod.entry.buildTree() catch |err| {
-        logger.log("Could not parse file: {s}", .{@errorName(err)}, .err);
+        logger.log("Could not read .topi file: {s}", .{@errorName(err)}, .err);
         return null;
     };
 

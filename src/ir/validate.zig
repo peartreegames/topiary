@@ -588,7 +588,7 @@ const Validator = struct {
         switch (expr.kind) {
             .load_const => |lc| try self.errors().addWithHelp(
                 self.pathForTok(tok),
-                "Cannot store function '{s}' as a value",
+                "Functions can only be called, not assigned to a variable: '{s}'",
                 tok,
                 .err,
                 .{lc.target.path},
@@ -603,7 +603,7 @@ const Validator = struct {
                 };
                 try self.errors().addWithHelp(
                     self.pathForTok(tok),
-                    "Cannot store function '{s}' as a value",
+                    "Functions can only be called, not assigned to a variable: '{s}'",
                     tok,
                     .err,
                     .{name},
@@ -615,7 +615,7 @@ const Validator = struct {
                 self.errors().allocator.free(fn_note);
                 try self.errors().addWithHelp(
                     self.pathForTok(tok),
-                    "Cannot store method '{s}' as a value",
+                    "Methods can only be called, not assigned to a variable: '{s}'",
                     tok,
                     .err,
                     .{f.name},
@@ -645,7 +645,7 @@ const Validator = struct {
                 .interp => {
                     try self.errors().add(
                         self.pathForTok(expr.loc.start),
-                        "Interpolated strings are not allowed as static default values",
+                        "Class field defaults cannot contain '{{...}}' values — use a plain text value instead",
                         expr.loc.start,
                         .err,
                         .{},
