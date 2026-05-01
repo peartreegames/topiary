@@ -34,9 +34,6 @@ const Enum = types.Enum;
 
 const builtins = @import("../runtime/index.zig").builtins;
 
-const scope_mod = @import("../ir/scope.zig");
-const Scope = scope_mod.Scope;
-
 const emit_mod = @import("emit.zig");
 const Emitter = emit_mod.Emitter;
 const JumpPatch = emit_mod.JumpPatch;
@@ -62,12 +59,12 @@ pub const Codegen = struct {
     /// Long-lived: backs constants and chunk buffers (drained into
     /// Bytecode via toOwnedSlice).
     alloc: std.mem.Allocator,
-    /// Transient state — root scope, path_stack backing.
+    /// Transient scratch storage for codegen-internal allocations
+    /// (e.g. anchor name dupes for the constants pool).
     arena: std.heap.ArenaAllocator,
     emitter: Emitter,
     program: *const ir.Program,
     module: *Module,
-    root_scope: *Scope,
 
     pub fn emit(
         alloc: std.mem.Allocator,
@@ -79,10 +76,6 @@ pub const Codegen = struct {
         // deferred yet. Once cg owns arena+emitter, defer cg.deinit() is
         // the sole owner — using errdefer here would double-free with the
         // defer on the error path.
-        const root_scope = Scope.create(arena.allocator(), null, .global) catch |e| {
-            arena.deinit();
-            return e;
-        };
         const emitter = Emitter.init(alloc, module) catch |e| {
             arena.deinit();
             return e;
@@ -94,7 +87,6 @@ pub const Codegen = struct {
             .emitter = emitter,
             .program = program,
             .module = module,
-            .root_scope = root_scope,
         };
         // After bytecode() drains the chunk and constants via toOwnedSlice,
         // emitter.deinit() still has to free the *Chunk allocation itself
@@ -120,11 +112,11 @@ pub const Codegen = struct {
             try self.emitter.addNamedConstant(self.arena.allocator(), name, .{ .obj = obj });
         }
 
-        // Pre-walk: reserve constant-pool slots and visit symbols for
-        // every declared anchor. Walks `program.body` in source order so
-        // visit indices align with what lowering pre-counted (lowering
-        // seeded `root_scope.count` with the same anchor total, so a
-        // var's IR slot index already lands at the right runtime slot).
+        // Pre-walk: reserve constant-pool slots for every declared
+        // anchor. Visit-tracked anchors carry their global slot index
+        // in `AnchorRef.visit_index` (assigned by lowering); parent
+        // anchors must land in the constants pool before children, so
+        // we descend in source order.
         for (self.program.body) |*stmt| {
             try self.prepass(stmt);
         }
@@ -193,15 +185,15 @@ pub const Codegen = struct {
                 try self.emitter.addNamedConstantTok(self.arena.allocator(), e.anchor.path, .nil);
             },
             .bough => |b| {
-                try self.registerAnchor(b.anchor.path, b.uuid, stmt.loc.start);
+                try self.registerAnchor(b.anchor.path, b.uuid, b.anchor.visit_index.?);
                 for (b.body) |*s| try self.prepass(s);
             },
             .fork, .backup_fork => |f| {
-                try self.registerAnchor(f.anchor.path, f.uuid, stmt.loc.start);
+                try self.registerAnchor(f.anchor.path, f.uuid, f.anchor.visit_index.?);
                 for (f.body) |*s| try self.prepass(s);
             },
             .choice => |c| {
-                try self.registerAnchor(c.anchor.path, c.uuid, stmt.loc.start);
+                try self.registerAnchor(c.anchor.path, c.uuid, c.anchor.visit_index.?);
                 for (c.body) |*s| try self.prepass(s);
             },
             .@"if" => |i| {
@@ -224,15 +216,14 @@ pub const Codegen = struct {
         }
     }
 
-    /// Register an anchor: define its visit symbol on the root scope and
-    /// reserve a constants slot holding the Anchor Value.Obj. Mirrors
-    /// `compiler.zig:registerAnchor`.
-    fn registerAnchor(self: *Codegen, full_path: []const u8, uuid: UUID.ID, token: Token) Error!void {
-        _ = token;
-        if (self.emitter.constants_map.contains(full_path)) return error.SymbolAlreadyDeclared;
-
-        const visit_sym = try self.root_scope.define(self.arena.allocator(), full_path, false);
-        visit_sym.uuid = uuid;
+    /// Reserve a constants slot holding the Anchor `Value.Obj` for a
+    /// visit-tracked anchor (bough/fork/choice). The visit-slot index
+    /// is supplied by lowering (via `AnchorRef.visit_index`); the
+    /// global symbol table is built from `program.globals` separately.
+    /// Lowering's anchor dedup guarantees uniqueness, so a duplicate
+    /// here would indicate an IR-shape regression.
+    fn registerAnchor(self: *Codegen, full_path: []const u8, uuid: UUID.ID, visit_index: C.GLOBAL) Error!void {
+        std.debug.assert(!self.emitter.constants_map.contains(full_path));
 
         // Parent index: derived by stripping the last `.<segment>` from
         // the path. Top-level anchors have no parent.
@@ -250,7 +241,7 @@ pub const Codegen = struct {
                 .anchor = .{
                     .name = try self.alloc.dupe(u8, full_path),
                     .uuid = uuid,
-                    .visit_index = visit_sym.index,
+                    .visit_index = visit_index,
                     .parent_anchor_index = parent_idx,
                     .ip = 0,
                 },
@@ -780,13 +771,6 @@ pub const Codegen = struct {
         try self.compileExpr(v.initializer);
         switch (v.slot) {
             .global => |g| {
-                // Define the symbol on root_scope so it appears in
-                // bytecode.global_symbols. The index lands at the
-                // current root_scope.count, which equals `g.index`
-                // because lowering seeded the count with the anchor
-                // visit-slot total before defining any var.
-                _ = self.root_scope.define(self.arena.allocator(), v.name, v.is_mutable) catch
-                    return error.SymbolAlreadyDeclared;
                 try self.emitter.writeOp(.decl_global, token);
                 _ = try self.emitter.writeInt(C.GLOBAL, g.index, token);
             },
@@ -1086,18 +1070,18 @@ pub const Codegen = struct {
     // =======================================================================
 
     fn bytecode(self: *Codegen) !Bytecode {
-        const global_symbols = try self.alloc.alloc(Bytecode.GlobalSymbol, self.root_scope.symbols.count());
+        const global_symbols = try self.alloc.alloc(Bytecode.GlobalSymbol, self.program.globals.len);
         var filled: usize = 0;
         errdefer {
             for (global_symbols[0..filled]) |gs| self.alloc.free(gs.name);
             self.alloc.free(global_symbols);
         }
-        for (self.root_scope.symbols.values(), 0..) |s, i| {
+        for (self.program.globals, 0..) |g, i| {
             global_symbols[i] = .{
-                .name = try self.alloc.dupe(u8, s.name),
-                .uuid = s.uuid,
-                .index = s.index,
-                .is_mutable = s.is_mutable,
+                .name = try self.alloc.dupe(u8, g.name),
+                .uuid = g.uuid,
+                .index = g.index,
+                .is_mutable = g.is_mutable,
             };
             filled = i + 1;
         }

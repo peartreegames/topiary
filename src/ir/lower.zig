@@ -45,6 +45,15 @@ pub const Error = error{
     LowerError,
 };
 
+/// Pre-walk-allocated visit slot for a bough/fork/choice. Mirrors the
+/// shape of a scope `Symbol` for the bits codegen needs but lives in a
+/// separate list so anchors don't pollute `root_scope.symbols`.
+const VisitSymbol = struct {
+    path: []const u8,
+    uuid: UUID.ID,
+    index: C.GLOBAL,
+};
+
 /// Lower a Module's resolved trees into an IR Program. The result has
 /// anchors registered and forward references resolved, but semantic
 /// diagnostics (arity, dot-access, function-as-value, etc.) have NOT
@@ -79,6 +88,18 @@ const Lowerer = struct {
     /// diagnostics. Same lifetime as the IR program (scratch arena).
     decl_tokens: std.array_hash_map.String(Token),
 
+    /// Visit symbols allocated by the pre-walk (`defineAnchorVisitSlots`),
+    /// in slot-index order (one per bough/fork/choice). These reserve
+    /// `globals[0..N-1]` for runtime visit counters and feed
+    /// `program.globals` at the end of lowering. Scratch-lifetime.
+    /// Kept out of `root_scope.symbols` on purpose so `resolveSymbol`
+    /// can't pick them up as variables — anchor lookups go through
+    /// `program.anchors`.
+    visit_symbols: std.ArrayList(VisitSymbol),
+    /// Path → visit slot index, for the main walk to wire onto each
+    /// `AnchorRef.visit_index` via `registerAnchor`. Scratch-lifetime.
+    visit_index_by_path: std.array_hash_map.String(C.GLOBAL),
+
     /// High-water mark of local-scope counts seen since the last
     /// reset (saved/restored around `function` scopes). Used to
     /// populate `FunctionDecl.locals_count` for codegen.
@@ -103,6 +124,8 @@ const Lowerer = struct {
             .path_stack = .empty,
             .seen_files = .empty,
             .decl_tokens = .empty,
+            .visit_symbols = .empty,
+            .visit_index_by_path = .empty,
         };
     }
 
@@ -145,15 +168,17 @@ const Lowerer = struct {
 
         try self.registerBuiltinAnchors();
 
-        // Pre-count anchor visit slots (boughs / forks / choices). The
-        // runtime layout reserves globals[0..N-1] for these visit
-        // counters, then [N..] for plain var_decls. Seeding
-        // `root_scope.count = N` makes every subsequent `scope.define`
-        // for a var produce an index that already matches the runtime
-        // slot — codegen no longer needs a translation step.
-        const anchor_slots = try self.countAnchorVisitSlots(tree.root);
+        // Pre-walk anchor declarations (boughs / forks / choices) and
+        // reserve a visit slot for each. The runtime layout reserves
+        // globals[0..N-1] for these visit counters, then [N..] for
+        // plain var_decls. Visit symbols deliberately live OUTSIDE
+        // `root_scope.symbols` (in `visit_symbols`) so `resolveSymbol`
+        // can't find them as variables — anchor-name lookups go through
+        // `program.anchors`. We bump `root_scope.count` afterwards to
+        // reserve the slot range so var indices start at N.
+        try self.defineAnchorVisitSlots(tree.root);
         self.seen_files.clearRetainingCapacity();
-        self.root_scope.count = anchor_slots;
+        self.root_scope.count = @intCast(self.visit_symbols.items.len);
 
         // One walk: emit IR, registering anchors at their declaration sites.
         var body: std.ArrayList(ir.Stmt) = .empty;
@@ -164,11 +189,41 @@ const Lowerer = struct {
         self.program.globals_count = @intCast(self.root_scope.count);
         self.program.top_level_locals_count = self.locals_count;
         try self.populateFilesTable();
+        try self.materializeGlobals();
 
         // Resolve forward references by walking the IR. Semantic
         // validation is dispatched separately by `module.generateBytecode`
         // so it can be skipped if lowering itself recorded any errors.
         try self.validateAnchors();
+    }
+
+    /// Build `program.globals` from the pre-walk's `visit_symbols`
+    /// followed by the var symbols defined on `root_scope` during the
+    /// main walk. Visit symbols come first (indices 0..N-1, matching
+    /// the runtime layout); vars come after (indices N..). Names are
+    /// duped into the program arena since both source lists live in
+    /// scratch and die with `deinitTransient`.
+    fn materializeGlobals(self: *Lowerer) Error!void {
+        const var_symbols = self.root_scope.symbols.values();
+        const total = self.visit_symbols.items.len + var_symbols.len;
+        const globals = try self.arena().alloc(ir.GlobalSymbol, total);
+        for (self.visit_symbols.items, 0..) |v, i| {
+            globals[i] = .{
+                .name = try self.arena().dupe(u8, v.path),
+                .uuid = v.uuid,
+                .index = v.index,
+                .is_mutable = false,
+            };
+        }
+        for (var_symbols, 0..) |s, i| {
+            globals[self.visit_symbols.items.len + i] = .{
+                .name = try self.arena().dupe(u8, s.name),
+                .uuid = s.uuid,
+                .index = s.index,
+                .is_mutable = s.is_mutable,
+            };
+        }
+        self.program.globals = globals;
     }
 
     fn populateFilesTable(self: *Lowerer) Error!void {
@@ -272,10 +327,11 @@ const Lowerer = struct {
     fn lowerChoiceStmt(self: *Lowerer, c: anytype, tok: Token) Error!ir.Stmt {
         const choice_name = c.name orelse &c.id;
         const path = try self.qualifyName(choice_name);
-        const anchor = self.registerAnchor(path, .choice, c.id) catch |e| switch (e) {
+        const visit_index = self.visit_index_by_path.get(path);
+        const anchor = self.registerAnchor(path, .choice, c.id, visit_index) catch |e| switch (e) {
             error.SymbolAlreadyDeclared => blk: {
                 try self.errors().addWithHelp(self.current_file.path, "'{s}' is already declared", tok, .err, .{choice_name}, null, try self.previousDeclNote(path));
-                break :blk ir.AnchorRef{ .kind = .choice, .path = path, .uuid = c.id };
+                break :blk ir.AnchorRef{ .kind = .choice, .path = path, .uuid = c.id, .visit_index = visit_index };
             },
             error.OutOfMemory => return error.OutOfMemory,
         };
@@ -316,10 +372,11 @@ const Lowerer = struct {
         }
         const fork_name = try self.forkName(f.name, f.id);
         const path = try self.qualifyName(fork_name);
-        const anchor = self.registerAnchor(path, .fork, f.id) catch |e| switch (e) {
+        const visit_index = self.visit_index_by_path.get(path);
+        const anchor = self.registerAnchor(path, .fork, f.id, visit_index) catch |e| switch (e) {
             error.SymbolAlreadyDeclared => blk: {
                 try self.errors().addSpanWithHelp(self.current_file.path, "'{s}' is already declared", tok, f.end_token, .err, .{fork_name}, null, try self.previousDeclNote(path));
-                break :blk ir.AnchorRef{ .kind = .fork, .path = path, .uuid = f.id };
+                break :blk ir.AnchorRef{ .kind = .fork, .path = path, .uuid = f.id, .visit_index = visit_index };
             },
             error.OutOfMemory => return error.OutOfMemory,
         };
@@ -343,10 +400,11 @@ const Lowerer = struct {
 
     fn lowerBoughStmt(self: *Lowerer, b: anytype, tok: Token) Error!ir.Stmt {
         const path = try self.qualifyName(b.name);
-        const anchor = self.registerAnchor(path, .bough, b.id) catch |e| switch (e) {
+        const visit_index = self.visit_index_by_path.get(path);
+        const anchor = self.registerAnchor(path, .bough, b.id, visit_index) catch |e| switch (e) {
             error.SymbolAlreadyDeclared => blk: {
                 try self.errors().addSpanWithHelp(self.current_file.path, "Bough '{s}' is already declared", tok, b.name_token, .err, .{b.name}, null, try self.previousDeclNote(path));
-                break :blk ir.AnchorRef{ .kind = .bough, .path = path, .uuid = b.id };
+                break :blk ir.AnchorRef{ .kind = .bough, .path = path, .uuid = b.id, .visit_index = visit_index };
             },
             error.OutOfMemory => return error.OutOfMemory,
         };
@@ -494,7 +552,7 @@ const Lowerer = struct {
         if (!f.is_method) {
             const path = try self.qualifyName(f.name);
             const anchor_kind: ir.AnchorRef.Kind = if (f.is_extern) .extern_function else .function;
-            anchor = self.registerAnchor(path, anchor_kind, UUID.Empty) catch |e| switch (e) {
+            anchor = self.registerAnchor(path, anchor_kind, UUID.Empty, null) catch |e| switch (e) {
                 // If the path was already claimed (e.g., a same-named class or
                 // sibling), produce an error but keep going with a non-anchored
                 // representation.
@@ -577,7 +635,7 @@ const Lowerer = struct {
 
     fn lowerClassStmt(self: *Lowerer, c: anytype, tok: Token) Error!ir.Stmt {
         const path = try self.qualifyName(c.name);
-        const anchor = self.registerAnchor(path, .class, UUID.Empty) catch |e| switch (e) {
+        const anchor = self.registerAnchor(path, .class, UUID.Empty, null) catch |e| switch (e) {
             error.SymbolAlreadyDeclared => blk: {
                 try self.errors().addSpanWithHelp(self.current_file.path, "'{s}' is already declared", tok, c.name_token, .err, .{c.name}, null, try self.previousDeclNote(path));
                 break :blk ir.AnchorRef{ .kind = .class, .path = path };
@@ -640,7 +698,7 @@ const Lowerer = struct {
 
     fn lowerEnumStmt(self: *Lowerer, e: anytype, tok: Token) Error!ir.Stmt {
         const path = try self.qualifyName(e.name);
-        const anchor = self.registerAnchor(path, .@"enum", UUID.Empty) catch |err| switch (err) {
+        const anchor = self.registerAnchor(path, .@"enum", UUID.Empty, null) catch |err| switch (err) {
             error.SymbolAlreadyDeclared => blk: {
                 try self.errors().addSpanWithHelp(self.current_file.path, "'{s}' is already declared", tok, e.name_token, .err, .{e.name}, null, try self.previousDeclNote(path));
                 break :blk ir.AnchorRef{ .kind = .@"enum", .path = path };
@@ -1047,16 +1105,24 @@ const Lowerer = struct {
 
     /// Insert an anchor into `program.anchors`. Returns the canonical
     /// `AnchorRef`. Returns `error.SymbolAlreadyDeclared` if the path is
-    /// already taken.
+    /// already taken. `visit_index` is the global slot reserved for
+    /// visit-tracked anchors (bough/fork/choice) by `defineAnchorVisitSlots`;
+    /// pass `null` for class/enum/function anchors.
     fn registerAnchor(
         self: *Lowerer,
         path: []const u8,
         kind: ir.AnchorRef.Kind,
         uuid: UUID.ID,
+        visit_index: ?C.GLOBAL,
     ) !ir.AnchorRef {
         const gop = try self.program.anchors.getOrPut(self.arena(), path);
         if (gop.found_existing) return error.SymbolAlreadyDeclared;
-        gop.value_ptr.* = .{ .kind = kind, .path = path, .uuid = uuid };
+        gop.value_ptr.* = .{
+            .kind = kind,
+            .path = path,
+            .uuid = uuid,
+            .visit_index = visit_index,
+        };
         return gop.value_ptr.*;
     }
 
@@ -1429,35 +1495,87 @@ const Lowerer = struct {
     }
 
     // =======================================================================
-    // Anchor pre-count
+    // Anchor pre-walk
     // =======================================================================
 
-    /// Walk the AST counting anchors that take a runtime visit-count
-    /// slot (boughs, forks, choices). Mirrors `Codegen.prepass`'s
-    /// recursion shape so both arrive at the same total.
+    /// Walk the AST defining a visit-slot symbol on `root_scope` for
+    /// every bough/fork/choice. Mirrors the main walk's naming and
+    /// path-stack discipline so each symbol is keyed by the same
+    /// fully-qualified path that `registerAnchor` will use later.
+    /// Side effect: `root_scope.count` ends at the total visit-slot
+    /// count, and `visit_index_by_path` maps each path → its slot.
     /// Reuses `seen_files` for include cycle detection; the caller
-    /// must reset that set before the lowering walk so includes get
-    /// re-traversed.
-    fn countAnchorVisitSlots(self: *Lowerer, stmts: []const ast.Statement) Error!u32 {
-        var n: u32 = 0;
-        for (stmts) |*s| n += try self.countAnchorVisitSlotsInStmt(s);
-        return n;
+    /// must reset that set before the lowering walk re-traverses
+    /// includes.
+    fn defineAnchorVisitSlots(self: *Lowerer, stmts: []const ast.Statement) Error!void {
+        for (stmts) |*s| try self.defineAnchorVisitSlotsInStmt(s);
     }
 
-    fn countAnchorVisitSlotsInStmt(self: *Lowerer, stmt: *const ast.Statement) Error!u32 {
-        return switch (stmt.type) {
-            .bough => |b| 1 + try self.countAnchorVisitSlots(b.body),
-            .fork => |f| 1 + try self.countAnchorVisitSlots(f.body),
-            .choice => |c| 1 + try self.countAnchorVisitSlots(c.body),
-            .include => |inc| blk: {
-                const result = (try self.resolveInclude(inc.path)) orelse break :blk 0;
+    fn defineAnchorVisitSlotsInStmt(self: *Lowerer, stmt: *const ast.Statement) Error!void {
+        switch (stmt.type) {
+            .bough => |b| {
+                try self.defineVisitSlot(b.name, b.id);
+                try self.pushPath(b.name);
+                defer self.popPath();
+                try self.defineAnchorVisitSlots(b.body);
+            },
+            .fork => |f| {
+                const fork_name = try self.forkName(f.name, f.id);
+                try self.defineVisitSlot(fork_name, f.id);
+                try self.pushPath(fork_name);
+                defer self.popPath();
+                try self.defineAnchorVisitSlots(f.body);
+            },
+            .choice => |c| {
+                const choice_name = c.name orelse &c.id;
+                try self.defineVisitSlot(choice_name, c.id);
+                try self.pushPath(choice_name);
+                defer self.popPath();
+                try self.defineAnchorVisitSlots(c.body);
+            },
+            // Plain control flow doesn't introduce a new path segment but
+            // can host nested anchor declarations (e.g. a choice inside an
+            // `if` inside a fork). Descend so those still get visit slots.
+            .@"if" => |i| {
+                try self.defineAnchorVisitSlots(i.then_branch);
+                if (i.else_branch) |eb| try self.defineAnchorVisitSlots(eb);
+            },
+            .@"while" => |w| try self.defineAnchorVisitSlots(w.body),
+            .@"for" => |f| try self.defineAnchorVisitSlots(f.body),
+            .@"switch" => |sw| {
+                for (sw.prongs) |*p| {
+                    if (p.type == .switch_prong) try self.defineAnchorVisitSlots(p.type.switch_prong.body);
+                }
+            },
+            .block => |b| try self.defineAnchorVisitSlots(b),
+            .include => |inc| {
+                const result = (try self.resolveInclude(inc.path)) orelse return;
                 const prev = self.current_file;
                 defer self.current_file = prev;
                 self.current_file = result.file;
-                break :blk try self.countAnchorVisitSlots(result.tree);
+                try self.defineAnchorVisitSlots(result.tree);
             },
-            else => 0,
-        };
+            else => {},
+        }
+    }
+
+    /// Reserve a visit-slot for the anchor with the given segment name
+    /// under the current `path_stack`. Records into `visit_symbols` (for
+    /// the final `program.globals`) and `visit_index_by_path` (for the
+    /// main walk to wire onto `AnchorRef.visit_index`). On duplicate
+    /// paths, skip silently — the main walk's `registerAnchor` will
+    /// diagnose the duplicate with token spans via `previousDeclNote`.
+    fn defineVisitSlot(self: *Lowerer, segment: []const u8, uuid: UUID.ID) Error!void {
+        const path = try self.qualifyName(segment);
+        const gop = try self.visit_index_by_path.getOrPut(self.scratchAlloc(), path);
+        if (gop.found_existing) return;
+        const idx: C.GLOBAL = @intCast(self.visit_symbols.items.len);
+        gop.value_ptr.* = idx;
+        try self.visit_symbols.append(self.scratchAlloc(), .{
+            .path = path,
+            .uuid = uuid,
+            .index = idx,
+        });
     }
 
     // =======================================================================

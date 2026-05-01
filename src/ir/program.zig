@@ -139,6 +139,11 @@ pub const AnchorRef = struct {
     /// Stamped UUID, stable across recompiles. `UUID.Empty` for fully
     /// anonymous anchors (today, only synthesized choice anchors).
     uuid: UUID.ID = UUID.Empty,
+    /// Set on visit-tracked anchor *declarations* (bough/fork/choice).
+    /// `null` on classes/enums/functions and on AnchorRef *references*
+    /// (LoadConst.target, Visit.target, Divert.target) — those look up
+    /// the slot via `Program.anchors` instead.
+    visit_index: ?C.GLOBAL = null,
 
     pub const Kind = enum {
         bough,
@@ -149,6 +154,18 @@ pub const AnchorRef = struct {
         class,
         @"enum",
     };
+};
+
+/// One entry per slot in the program-level (global) frame. Built by
+/// lowering in slot-index order; codegen copies these into
+/// `Bytecode.global_symbols[]`. Names are owned by the program arena.
+pub const GlobalSymbol = struct {
+    name: []const u8,
+    /// `UUID.Empty` for plain `var` decls; the anchor UUID for
+    /// visit-tracked anchors (bough/fork/choice).
+    uuid: UUID.ID,
+    index: C.GLOBAL,
+    is_mutable: bool,
 };
 
 // ===========================================================================
@@ -178,6 +195,11 @@ pub const Program = struct {
     /// Mirrors the compiler's `constants_map`, but only contains
     /// anchor-typed entries — for fast IR-walking lookups.
     anchors: std.array_hash_map.String(AnchorRef) = .empty,
+
+    /// Final ordered list of every name in the program-level frame.
+    /// Insertion order = slot index (visit anchors first, plain vars
+    /// after). Codegen copies these into `Bytecode.global_symbols[]`.
+    globals: []const GlobalSymbol = &.{},
 
     /// Source files this program spans (file_index → path). Populated by
     /// lowering from the parser's include resolution.
