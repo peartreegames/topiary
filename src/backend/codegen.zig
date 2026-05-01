@@ -321,10 +321,11 @@ pub const Codegen = struct {
         _ = try self.emitter.writeInt(C.CONSTANT, anchor_idx, token);
     }
 
-    /// Common pattern for `.loc`-bearing nodes (line + choice). Pushes
+    /// Common pattern for dialogue/choice text (carries a UUID). Pushes
     /// each interp value, builds the joined `{N}`-marked string, and
-    /// emits `.loc <const_idx> <interp_count>`. Returns the interp
-    /// count for callers that still need to write follow-up trailers.
+    /// emits `.string <const_idx> <interp_count>`. The Obj.id (UUID) is
+    /// the locale-lookup signal at runtime — non-dialogue text leaves
+    /// it `UUID.Empty` and skips the locale path.
     fn emitLocString(
         self: *Codegen,
         segments: []const ir.TextSegment,
@@ -363,15 +364,21 @@ pub const Codegen = struct {
             .data = .{ .string = try buf.toOwnedSlice(self.alloc) },
         };
         const c_idx = try self.emitter.addConstant(.{ .obj = obj });
-        try self.emitter.writeOp(.loc, token);
+        try self.emitter.writeOp(.string, token);
         _ = try self.emitter.writeInt(C.CONSTANT, c_idx, token);
         _ = try self.emitter.writeInt(u8, interp_count, token);
         return interp_count;
     }
 
     fn compileLine(self: *Codegen, line: ir.Line, token: Token) Error!void {
-        for (line.tags) |tag| {
-            try self.emitter.addIdentifierConstant(self.arena.allocator(), tag.name, token);
+        // Tags live in the constant pool as a contiguous run; the
+        // dialogue op carries [start, count] so the VM can borrow the
+        // slice without per-tag stack traffic. Indices are added fresh
+        // (no dedup) so the run is guaranteed contiguous.
+        var tag_start: C.CONSTANT = 0;
+        for (line.tags, 0..) |tag, i| {
+            const idx = try self.emitter.addConstant(.{ .const_string = tag.name });
+            if (i == 0) tag_start = idx;
         }
         _ = try self.emitLocString(line.segments, line.uuid, token);
         if (line.speaker) |speaker| {
@@ -379,12 +386,17 @@ pub const Codegen = struct {
         }
         try self.emitter.writeOp(.dialogue, token);
         _ = try self.emitter.writeInt(u8, if (line.speaker == null) 0 else 1, token);
+        _ = try self.emitter.writeInt(C.CONSTANT, tag_start, token);
         _ = try self.emitter.writeInt(u8, @intCast(line.tags.len), token);
     }
 
     fn compileChoice(self: *Codegen, c: ir.Choice, token: Token) Error!void {
-        for (c.tags) |tag| {
-            try self.emitter.addIdentifierConstant(self.arena.allocator(), tag.name, token);
+        // See `compileLine` — tags are added contiguously to the
+        // constant pool and referenced from the choice op as [start, count].
+        var tag_start: C.CONSTANT = 0;
+        for (c.tags, 0..) |tag, i| {
+            const idx = try self.emitter.addConstant(.{ .const_string = tag.name });
+            if (i == 0) tag_start = idx;
         }
         const anchor_idx = try self.anchorIdx(c.anchor.path);
 
@@ -398,6 +410,7 @@ pub const Codegen = struct {
         const choice_jp = try self.emitter.emitJump(.choice, token);
         _ = try self.emitter.writeInt(u8, if (c.is_unique) 1 else 0, token);
         _ = try self.emitter.writeInt(C.CONSTANT, anchor_idx, token);
+        _ = try self.emitter.writeInt(C.CONSTANT, tag_start, token);
         _ = try self.emitter.writeInt(u8, @intCast(c.tags.len), token);
 
         const end_jp = try self.emitter.emitJump(.jump, token);
@@ -421,8 +434,7 @@ pub const Codegen = struct {
 
         var backup_jp: ?JumpPatch = null;
         if (is_backup) {
-            backup_jp = try self.emitter.emitJump(.backup, token);
-            _ = try self.emitter.writeInt(u8, 1, token); // 1 = fork backup
+            backup_jp = try self.emitter.emitJump(.backup_fork, token);
         }
         try self.emitter.writeOp(.fork, token);
         const end_pos = self.emitter.instructionPos();
@@ -432,8 +444,7 @@ pub const Codegen = struct {
     fn compileDivert(self: *Codegen, d: ir.Divert, is_backup: bool, token: Token) Error!void {
         const anchor_idx = try self.anchorIdx(d.target.path);
         if (is_backup) {
-            const backup_jp = try self.emitter.emitJump(.backup, token);
-            _ = try self.emitter.writeInt(u8, 0, token); // 0 = divert backup
+            const backup_jp = try self.emitter.emitJump(.backup_divert, token);
             try self.emitter.writeOp(.divert, token);
             _ = try self.emitter.writeInt(C.CONSTANT, anchor_idx, token);
             try self.emitter.patchJump(backup_jp);

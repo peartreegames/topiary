@@ -16,7 +16,7 @@ pub const Bytecode = struct {
     debug_info: []DebugInfo,
 
     pub const magic = "TPBC";
-    pub const version: u16 = 2;
+    pub const version: u16 = 3;
     const prelude_size = magic.len + @sizeOf(u16) + 2; // magic + version + 2 reserved bytes
     const section_count = 4;
     const offsets_size = section_count * @sizeOf(u64);
@@ -214,12 +214,10 @@ pub const Bytecode = struct {
                     try writer.print("{d: >8}", .{dest});
                     i += 4;
                 },
-                .backup => {
+                .backup_fork, .backup_divert => {
                     const dest = std.mem.readVarInt(C.GLOBAL, instructions[i..(i + 4)], .little);
                     i += 4;
-                    const is_fork = instructions[i] == 1;
-                    i += 1;
-                    try writer.print("{d: >8} {s}", .{ dest, if (is_fork) "fork" else "divert" });
+                    try writer.print("{d: >8}", .{dest});
                 },
                 .divert => {
                     const dest = std.mem.readVarInt(C.JUMP, instructions[i..(i + 4)], .little);
@@ -259,10 +257,12 @@ pub const Bytecode = struct {
                 },
                 .dialogue => {
                     const has_speaker = instructions[i] == 1;
-                    const tag_count = instructions[i + 1];
-                    _ = tag_count;
-                    i += 2;
-                    try writer.print("{: >8}", .{has_speaker});
+                    i += 1;
+                    const tag_start = std.mem.readVarInt(C.CONSTANT, instructions[i..(i + 4)], .little);
+                    i += 4;
+                    const tag_count = instructions[i];
+                    i += 1;
+                    try writer.print("{: >8} tags: [{d}..{d})", .{ has_speaker, tag_start, tag_start + tag_count });
                 },
                 .choice => {
                     const dest = std.mem.readVarInt(C.JUMP, instructions[i..(i + 4)], .little);
@@ -271,12 +271,14 @@ pub const Bytecode = struct {
                     i += 1;
                     const anchor_idx = std.mem.readVarInt(C.CONSTANT, instructions[i..(i + 4)], .little);
                     i += 4;
+                    const tag_start = std.mem.readVarInt(C.CONSTANT, instructions[i..(i + 4)], .little);
+                    i += 4;
                     const tag_count = instructions[i];
                     i += 1;
                     try writer.print("{d: >8}", .{dest});
-                    try writer.print(" unique: {}, anchor: {d}, tags: {d}", .{ is_unique, anchor_idx, tag_count });
+                    try writer.print(" unique: {}, anchor: {d}, tags: [{d}..{d})", .{ is_unique, anchor_idx, tag_start, tag_start + tag_count });
                 },
-                .string, .loc => {
+                .string => {
                     const index = std.mem.readVarInt(C.CONSTANT, instructions[i..(i + 4)], .little);
                     i += 4;
                     try writer.print("{d: >8}", .{index});

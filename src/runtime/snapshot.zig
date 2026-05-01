@@ -26,12 +26,13 @@
 //! survive collections that happen between fork captures.
 //!
 //! ## Choice content lifetime
-//! `Choice.content` and each tag string are slices into heap-string objects.
-//! At capture time we dupe the actual bytes into snapshot-owned vm.alloc
-//! buffers; on restore we allocate fresh slice headers (so `selectChoice`
-//! can free them) but the slices borrow the snapshot's bytes. This works
-//! because the snapshot lives in `vm.history` until at least the next fork
-//! is captured, well after the user picks at the rewound fork.
+//! `Choice.content` is a slice into a heap-string object: at capture time
+//! we dupe the bytes into a snapshot-owned `vm.alloc` buffer, and on
+//! restore we hand the snapshot's buffer back to the choice (the choice's
+//! tag-slice header is freed by `selectChoice`, but the bytes are owned
+//! by the snapshot). Tags borrow directly from the bytecode constant pool
+//! both at capture and restore — the constant pool outlives the VM, so
+//! no per-snapshot copy is needed for them.
 
 const std = @import("std");
 
@@ -218,13 +219,11 @@ pub const Snapshot = struct {
             const content_buf = try vm.alloc.dupe(u8, c.content);
             try choice_bytes.append(vm.alloc, content_buf);
 
+            // Tags borrow from the bytecode constant pool (which outlives
+            // the VM); only the slice header is snapshot-owned.
             const tags = try vm.alloc.alloc([]const u8, c.tags.len);
             errdefer vm.alloc.free(tags);
-            for (c.tags, 0..) |t, j| {
-                const tag_buf = try vm.alloc.dupe(u8, t);
-                try choice_bytes.append(vm.alloc, tag_buf);
-                tags[j] = tag_buf;
-            }
+            for (c.tags, 0..) |t, j| tags[j] = t;
             current_choices[i] = .{
                 .content = content_buf,
                 .tags = tags,

@@ -688,3 +688,51 @@ test "Localization Generate From Module Stale CSV Entries" {
     try std.testing.expectEqual(@as(usize, 0), gen_result.missing_uuids.items.len);
     try std.testing.expectEqual(@as(usize, 1), gen_result.extra_uuids.items.len);
 }
+
+test "Localization Runtime Translates Tagged Dialogue" {
+    // Regression guard for the v3 .loc collapse: the unified .string
+    // opcode must consult the locale provider when the constant carries
+    // a non-empty UUID, and skip it when the UUID is empty. The dialogue
+    // line below carries an explicit @id and gets translated; the
+    // non-dialogue interpolated string assigned to `greet` does not.
+    const alloc = std.testing.allocator;
+
+    const csv =
+        \\"id","speaker","raw","en"
+        \\"AAAAAAAA-BBBBBBBB","Sp","Hello.","Bonjour."
+        \\
+    ;
+    var allocating = std.Io.Writer.Allocating.init(alloc);
+    defer allocating.deinit();
+    try Locale.generate(alloc, csv, 3, &allocating.writer, null);
+    const topil = try allocating.toOwnedSlice();
+    defer alloc.free(topil);
+
+    const source =
+        \\ var greet = "ignored {1 + 2}"
+        \\ === START {
+        \\     :Sp: "Hello."@AAAAAAAA-BBBBBBBB
+        \\ }
+    ;
+
+    var mod = try Module.initEmpty(alloc, std.testing.io);
+    defer mod.deinit();
+    var bytecode = try compileSource(source, mod);
+    defer bytecode.free(alloc);
+    const test_runner = try TestRunner.init(alloc);
+    defer test_runner.deinit();
+    var vm = try Vm.init(alloc, std.testing.io, &bytecode, &test_runner.runner);
+    defer vm.deinit();
+
+    try vm.setLocaleFromBuffer("en", topil);
+    try vm.interpret();
+    try test_runner.expectOutput(&[_][]const u8{"Bonjour."});
+
+    // The non-dialogue interpolated string was emitted with id=Empty and
+    // must surface verbatim — no locale lookup, even though the provider
+    // is set. If the v3 collapse mistakenly forwarded `compileText` to a
+    // path that reads `Obj.id` of empty as a hit, this would change.
+    const greet_idx = try vm.getGlobalsIndex("greet");
+    const greet_str = vm.globals[greet_idx].asString() orelse return error.NotAString;
+    try std.testing.expectEqualStrings("ignored 3", greet_str);
+}

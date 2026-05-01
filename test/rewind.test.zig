@@ -486,3 +486,109 @@ test "Rewind: GC stress with tight threshold" {
     // Should not have crashed; output should reflect the latest state.
     try testing.expectEqual(@as(usize, 1), rr.output.items.len);
 }
+
+// Custom runner for the tag-survival test: records every choice's tag
+// list as a deterministic concat string so we can assert that tags
+// borrow stays valid across snapshot/restore (regression guard for the
+// v3 borrow change in `snapshot.zig`).
+const TagRunner = struct {
+    runner: Runner,
+    alloc: std.mem.Allocator,
+    actions: []const RewindAction,
+    action_index: usize = 0,
+    fork_tags: std.ArrayList([]const u8) = .empty,
+
+    fn init(alloc: std.mem.Allocator, actions: []const RewindAction) TagRunner {
+        return .{
+            .runner = .{ .on_line = onLine, .on_choices = onChoices, .on_value_changed = onValueChanged },
+            .alloc = alloc,
+            .actions = actions,
+        };
+    }
+
+    fn deinit(self: *TagRunner) void {
+        for (self.fork_tags.items) |s| self.alloc.free(s);
+        self.fork_tags.deinit(self.alloc);
+    }
+
+    fn onLine(_: *Runner, vm: *Vm, _: *const Line) void {
+        vm.selectContinue();
+    }
+
+    fn onChoices(_: *Runner, vm: *Vm, choices: []Choice) void {
+        const self: *TagRunner = @fieldParentPtr("runner", vm.runner);
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(self.alloc);
+        for (choices, 0..) |c, ci| {
+            if (ci > 0) buf.append(self.alloc, '|') catch unreachable;
+            for (c.tags, 0..) |t, ti| {
+                if (ti > 0) buf.append(self.alloc, ',') catch unreachable;
+                buf.appendSlice(self.alloc, t) catch unreachable;
+            }
+        }
+        const owned = buf.toOwnedSlice(self.alloc) catch unreachable;
+        self.fork_tags.append(self.alloc, owned) catch unreachable;
+
+        if (self.action_index >= self.actions.len) return;
+        const a = self.actions[self.action_index];
+        self.action_index += 1;
+        switch (a) {
+            .select => |i| vm.selectChoice(i) catch {},
+            .rewind => vm.rewind() catch {},
+            .redo => vm.redo() catch {},
+        }
+    }
+
+    fn onValueChanged(_: *Runner, _: *Vm, _: []const u8, _: Value) void {}
+};
+
+test "Rewind: choice tags survive borrow across restore" {
+    // After v3, choice tags borrow from the bytecode constant pool and
+    // snapshot.zig drops the per-snapshot byte dupe. The borrow must
+    // hold across rewind so the inner fork sees the same tags before
+    // and after the restore. Two forks are needed because rewind
+    // requires history_cursor >= 2.
+    const source =
+        \\ === START {
+        \\     fork^ {
+        \\         ~ "A1" => B
+        \\         ~ "A2" => B
+        \\     }
+        \\     === B {
+        \\         fork^ {
+        \\             ~ "B1" #alpha #beta { :Sp: "Picked B1" }
+        \\             ~ "B2" #gamma { :Sp: "Picked B2" }
+        \\         }
+        \\     }
+        \\ }
+    ;
+    // Mirror the basic two-fork rewind pattern: rewind from inside B
+    // (during B's onChoices) so we land back at fork A, then re-pick.
+    const actions = [_]RewindAction{
+        .{ .select = 0 }, // A: pick A1 -> enter B
+        .rewind,           // B (first time): rewind back to A
+        .{ .select = 1 }, // A: pick A2 -> enter B again
+        .{ .select = 1 }, // B (revisit): pick B2
+    };
+
+    var mod = try Module.initEmpty(allocator, std.testing.io);
+    defer mod.deinit();
+    var tr = TagRunner.init(allocator, &actions);
+    defer tr.deinit();
+
+    var bytecode = try compileSource(source, mod);
+    defer bytecode.free(allocator);
+    var vm = try Vm.init(allocator, std.testing.io, &bytecode, &tr.runner);
+    vm.history_capacity = 4;
+    defer vm.deinit();
+
+    try runVm(&vm);
+
+    // Four fork presentations: A, B, A (post-rewind), B-revisit. Tags
+    // for fork B must match before and after the rewind cycle.
+    try testing.expectEqual(@as(usize, 4), tr.fork_tags.items.len);
+    try testing.expectEqualStrings("|", tr.fork_tags.items[0]); // A: two choices, no tags
+    try testing.expectEqualStrings("alpha,beta|gamma", tr.fork_tags.items[1]);
+    try testing.expectEqualStrings("|", tr.fork_tags.items[2]);
+    try testing.expectEqualStrings("alpha,beta|gamma", tr.fork_tags.items[3]);
+}

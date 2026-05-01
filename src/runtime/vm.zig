@@ -800,16 +800,14 @@ pub const Vm = struct {
                     const target_frame = self.frames.items[frame_count - frames_to_skip];
                     self.stack.items[target_frame.bp + index] = try self.pop();
                 },
-                .string, .loc => {
+                .string => {
                     const index = self.takeInt(C.CONSTANT);
                     const string_obj = self.bytecode.constants[index].obj;
                     var str: []const u8 = string_obj.data.string;
 
-                    if (op == .loc) {
-                        if (!UUID.isEmpty(string_obj.id)) {
-                            if (self.loc_provider) |lp| {
-                                str = lp.map.get(string_obj.id) orelse str;
-                            }
+                    if (!UUID.isEmpty(string_obj.id)) {
+                        if (self.loc_provider) |lp| {
+                            str = lp.map.get(string_obj.id) orelse str;
                         }
                     }
 
@@ -1093,6 +1091,9 @@ pub const Vm = struct {
                 },
                 .dialogue => {
                     const has_speaker = self.takeInt(u8) == 1;
+                    const tag_start = self.takeInt(C.CONSTANT);
+                    const tag_count = self.takeInt(u8);
+
                     var speaker: ?[]const u8 = null;
                     if (has_speaker) {
                         const speaker_value = try self.pop();
@@ -1104,14 +1105,14 @@ pub const Vm = struct {
                     const dialogue_value = try self.pop();
                     const dialogue_str = dialogue_value.asString() orelse return self.fail("Dialogue must be of type string, but found '{s}'", .{dialogue_value.typeName()});
 
-                    const tag_count = self.takeInt(u8);
+                    // Borrow tag bytes from the constant pool; the slice
+                    // header is a per-emission scratch alloc that the
+                    // runner is documented not to retain past the callback.
                     var tags = try self.alloc.alloc([]const u8, tag_count);
                     defer self.alloc.free(tags);
                     var i: usize = 0;
                     while (i < tag_count) : (i += 1) {
-                        const tag_value = try self.pop();
-                        const str = tag_value.asString() orelse return self.fail("Tag must be of type string, but found '{s}'", .{tag_value.typeName()});
-                        tags[tag_count - i - 1] = str;
+                        tags[i] = self.bytecode.constants[tag_start + i].const_string;
                     }
                     if (is_in_jump) continue;
                     self.is_waiting = true;
@@ -1214,19 +1215,24 @@ pub const Vm = struct {
                     const anchor = anchor_val.obj.data.anchor;
                     const visit_count = self.globals[anchor.visit_index].visit;
 
+                    const tag_start = self.takeInt(C.CONSTANT);
+                    const tag_count = self.takeInt(u8);
+
                     const content_value = try self.pop();
                     const content_str = content_value.asString() orelse return self.fail("Choice content must be of type string, but found '{s}'", .{content_value.typeName()});
 
-                    const tag_count = self.takeInt(u8);
+                    // Tag bytes borrow from the constant pool; the slice
+                    // header is owned and freed when the choice list is
+                    // released (selectChoice / vm.deinit).
                     var tags = try self.alloc.alloc([]const u8, tag_count);
                     var i: usize = 0;
                     while (i < tag_count) : (i += 1) {
-                        const tag_value = try self.pop();
-                        const str = tag_value.asString() orelse
-                            return self.fail("Tag must be of type string, but found '{s}'", .{tag_value.typeName()});
-                        tags[tag_count - i - 1] = str;
+                        tags[i] = self.bytecode.constants[tag_start + i].const_string;
                     }
-                    if (visit_count > 0 and is_unique) continue;
+                    if (visit_count > 0 and is_unique) {
+                        self.alloc.free(tags);
+                        continue;
+                    }
 
                     try self.choices_list.append(self.alloc, .{
                         .content = content_str,
@@ -1257,14 +1263,22 @@ pub const Vm = struct {
                         self.currentFrame().ip = dest;
                     }
                 },
-                .backup => {
+                .backup_fork => {
                     const ip = self.takeInt(C.JUMP);
-                    const is_fork_backup = self.takeInt(u8) == 1;
                     if (is_in_jump) continue;
                     try self.jump_backups.append(self.alloc, .{
                         .ip = ip,
                         .anchor_depth = self.anchor_stack.items.len,
-                        .is_fork = is_fork_backup,
+                        .is_fork = true,
+                    });
+                },
+                .backup_divert => {
+                    const ip = self.takeInt(C.JUMP);
+                    if (is_in_jump) continue;
+                    try self.jump_backups.append(self.alloc, .{
+                        .ip = ip,
+                        .anchor_depth = self.anchor_stack.items.len,
+                        .is_fork = false,
                     });
                 },
                 .end => {

@@ -1665,6 +1665,40 @@ test "Runtime Jump Backups" {
     }
 }
 
+test "Runtime Backup Mixed" {
+    // Exercises .backup_fork and .backup_divert in the same run, the
+    // two opcodes the v3 split replaces .backup with.
+    const input =
+        \\ === START {
+        \\     :A: "Question"
+        \\     fork^ {
+        \\         ~ "Pick" {
+        \\             =>^ MIDDLE
+        \\             :A: "After divert backup"
+        \\         }
+        \\     }
+        \\     :A: "After fork backup"
+        \\ }
+        \\ === MIDDLE {
+        \\     :A: "Inside middle"
+        \\ }
+    ;
+    var mod = try Module.initEmpty(allocator, std.testing.io);
+    defer mod.deinit();
+    var vm = try initTestVm(input, mod, false);
+    defer vm.deinit();
+    const test_runner: *TestRunner = @fieldParentPtr("runner", vm.runner);
+    defer test_runner.deinit();
+    defer vm.bytecode.free(testing.allocator);
+    try vm.interpret();
+    try test_runner.expectOutput(&[_][]const u8{
+        "Question",
+        "Inside middle",
+        "After divert backup",
+        "After fork backup",
+    });
+}
+
 test "Runtime Jump Code" {
     const test_cases = .{
         .{
