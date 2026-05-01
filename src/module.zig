@@ -85,19 +85,22 @@ pub const Module = struct {
         return std.Io.Timestamp.now(self.io, .awake).nanoseconds;
     }
 
+    fn hadCompileErrors(self: *const Module) bool {
+        for (self.errors.list.items) |e| if (e.severity == .err) return true;
+        return false;
+    }
+
     pub fn generateBytecode(self: *Module, allocator: std.mem.Allocator) !Bytecode {
         const total_start = self.nowNs();
         var phase_start = total_start;
         // Capture whatever phases completed if we error out partway through.
         errdefer self.timings.total_ns = @intCast(self.nowNs() - total_start);
 
-        // Phase 1: Resolve all includes and load sources
         try self.resolveIncludes();
         var now = self.nowNs();
         self.timings.resolve_includes_ns = @intCast(now - phase_start);
         phase_start = now;
 
-        // Populate file/source counts now that all sources are loaded.
         self.timings.file_count = self.includes.count();
         var bytes: usize = 0;
         var src_it = self.includes.iterator();
@@ -106,7 +109,6 @@ pub const Module = struct {
         }
         self.timings.source_bytes = bytes;
 
-        // Phase 2: Build parse trees for all files
         var it = self.includes.iterator();
         while (it.next()) |kvp| {
             try kvp.value_ptr.*.buildTree();
@@ -115,7 +117,6 @@ pub const Module = struct {
         self.timings.parse_ns = @intCast(now - phase_start);
         phase_start = now;
 
-        // Phase 3: Lower to IR and codegen to bytecode.
         // Parent the IR program's arena on the module's arena. The
         // bytecode constants borrow strings from the IR (anchor paths,
         // tag names, extern function names, identifier constants), so
@@ -123,21 +124,21 @@ pub const Module = struct {
         // both, and ArenaAllocator.free is a no-op, so `program.deinit()`
         // safely returns memory to the module's arena where it's
         // reclaimed at module deinit.
-        const prev_err_count = self.errors.list.items.len;
+        //
+        // Each phase collects diagnostics and continues internally
+        // (writers see every error at once); we gate at the boundaries
+        // so that a phase only runs when its inputs are well-formed.
+        // `error.CompilerError` is the runtime contract — tests and
+        // the editor treat it as "compilation failed, do not run."
         var program = try ir.lower(self.arena.allocator(), self);
         defer program.deinit();
-        // Module-level fatal-diagnostic gate. The IR collects errors on
-        // `module.errors` without short-circuiting, but tests (and the
-        // runtime contract) expect `error.CompilerError` when compilation
-        // isn't well-formed. Bridge: if lowering or validation appended
-        // any `.err` entries, refuse to emit bytecode. Future refactor:
-        // give the IR its own fatal vs. recoverable severity so lowering
-        // halts at the source instead of walking the whole tree before
-        // noticing.
-        for (self.errors.list.items[prev_err_count..]) |entry| {
-            if (entry.severity == .err) return error.CompilerError;
-        }
+        if (self.hadCompileErrors()) return error.CompilerError;
+
+        try ir.validate(self.arena.allocator(), self, &program);
+        if (self.hadCompileErrors()) return error.CompilerError;
+
         const result = try Codegen.emit(allocator, self, &program);
+        if (self.hadCompileErrors()) return error.CompilerError;
         now = self.nowNs();
         self.timings.compile_ns = @intCast(now - phase_start);
         self.timings.total_ns = @intCast(now - total_start);

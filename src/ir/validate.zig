@@ -5,8 +5,9 @@
 //! dot-access type checks, function-as-value rejection, static-initializer
 //! shape, unreachable code, and choice-without-exit.
 //!
-//! `lower()` runs this pass automatically after anchor resolution, so
-//! callers normally don't invoke `validate` directly.
+//! Dispatched from `module.generateBytecode` after `ir.lower` returns,
+//! gated on the absence of lowering errors so we don't validate IR
+//! whose placeholders may not satisfy this pass's structural assumptions.
 
 const std = @import("std");
 

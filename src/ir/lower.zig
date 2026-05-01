@@ -45,7 +45,11 @@ pub const Error = error{
     LowerError,
 };
 
-/// Lower a Module's resolved trees into an IR Program.
+/// Lower a Module's resolved trees into an IR Program. The result has
+/// anchors registered and forward references resolved, but semantic
+/// diagnostics (arity, dot-access, function-as-value, etc.) have NOT
+/// run yet — callers should invoke `ir.validate` after this returns,
+/// gated on `module.errors` to avoid validating malformed IR.
 /// `module.resolveIncludes()` and `File.buildTree()` must already have run.
 pub fn lower(parent_alloc: std.mem.Allocator, module: *Module) Error!ir.Program {
     var lowerer = try Lowerer.init(parent_alloc, module);
@@ -161,11 +165,10 @@ const Lowerer = struct {
         self.program.top_level_locals_count = self.locals_count;
         try self.populateFilesTable();
 
-        // Resolve forward references by walking the IR.
+        // Resolve forward references by walking the IR. Semantic
+        // validation is dispatched separately by `module.generateBytecode`
+        // so it can be skipped if lowering itself recorded any errors.
         try self.validateAnchors();
-
-        // Run semantic diagnostics over the now fully-resolved IR.
-        try @import("validate.zig").validate(self.scratchAlloc(), self.module, &self.program);
     }
 
     fn populateFilesTable(self: *Lowerer) Error!void {

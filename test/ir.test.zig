@@ -35,7 +35,9 @@ fn parseSource(source: []const u8) !*Module {
 fn lowerSource(source: []const u8) !struct { mod: *Module, program: ir.Program } {
     const mod = try parseSource(source);
     errdefer mod.deinit();
-    const program = try ir.lower(allocator, mod);
+    var program = try ir.lower(allocator, mod);
+    errdefer program.deinit();
+    try ir.validate(allocator, mod, &program);
     return .{ .mod = mod, .program = program };
 }
 

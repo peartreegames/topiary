@@ -39,6 +39,7 @@ fn compileViaIr(mod: *Module) !Bytecode {
     try mod.entry.buildTree();
     var program = try ir.lower(mod.arena.allocator(), mod);
     defer program.deinit();
+    try ir.validate(mod.arena.allocator(), mod, &program);
     return try Codegen.emit(allocator, mod, &program);
 }
 
