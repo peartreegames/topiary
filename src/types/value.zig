@@ -404,7 +404,7 @@ pub const Value = union(Type) {
                         try writer.writeByte(f.arity);
                         try writer.writeByte(if (f.is_method) 1 else 0);
                         try writer.writeInt(u16, @as(u16, @intCast(f.locals_count)), .little);
-                        try writer.writeInt(u16, @as(u16, @intCast(f.instructions.len)), .little);
+                        try writer.writeInt(u32, @as(u32, @intCast(f.instructions.len)), .little);
                         try writer.writeAll(f.instructions);
                         try writer.writeInt(u32, @intCast(f.debug_info.len), .little);
                         for (f.debug_info) |d| try d.serialize(writer);
@@ -574,7 +574,7 @@ pub const Value = union(Type) {
                         const arity = try reader.takeByte();
                         const is_method = if ((try reader.takeByte()) == 1) true else false;
                         const locals_count = try reader.takeInt(u16, .little);
-                        const instructions_count = try reader.takeInt(u16, .little);
+                        const instructions_count = try reader.takeInt(u32, .little);
                         const buf = try reader.readAlloc(allocator, instructions_count);
                         const debug_info_count = try reader.takeInt(u32, .little);
                         var debug_info = try allocator.alloc(DebugInfo, debug_info_count);
@@ -782,7 +782,10 @@ pub const Value = union(Type) {
             var hasher = std.hash.Wyhash.init(0);
 
             switch (v) {
-                .number => |n| hashFn(&hasher, @as(u32, @intFromFloat(n * 10000.0))),
+                // Bucket-by-1e-4 hash matches the epsilon-eql in `eql` below.
+                // Cast via i32 then bitcast: avoids UB from `@intFromFloat(u32)`
+                // for negative literals and NaN/out-of-range floats.
+                .number => |n| hashFn(&hasher, @as(u32, @bitCast(std.math.lossyCast(i32, n * 10000.0)))),
                 .bool => |b| hashFn(&hasher, b),
                 .visit => |visit| hashFn(&hasher, visit),
                 .timestamp => |t| hashFn(&hasher, t),

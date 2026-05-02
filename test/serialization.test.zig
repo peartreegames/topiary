@@ -251,6 +251,7 @@ test "Compile Serialization" {
     var deserialized = try Bytecode.deserialize(allocator, reader);
     defer deserialized.free(allocator);
     try testing.expectEqualSlices(u8, bytecode.instructions, deserialized.instructions);
+    try testing.expectEqual(bytecode.locals_count, deserialized.locals_count);
     for (bytecode.constants, 0..) |constant, i| {
         try testing.expect(constant.eql(deserialized.constants[i]));
     }
