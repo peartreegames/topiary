@@ -822,3 +822,221 @@ test "Localization v1 File Rejected" {
     try std.testing.expectError(error.UnsupportedLocaleVersion, LocaleProvider.init(alloc, "en", owned));
     alloc.free(owned);
 }
+
+const stale_topi_input =
+    \\=== START {
+    \\    :: "Hello"@AAAAAAAA-BBBBBBBB
+    \\    :: "World"@CCCCCCCC-DDDDDDDD
+    \\}
+;
+
+test "Localization Stale Flag Set When Raw Changes" {
+    // Row 1: CSV raw "Helo" differs from AST raw "Hello" → fr_stale="1"
+    // Row 2: CSV raw "World" matches AST raw "World"     → fr_stale=""
+    const existing_csv =
+        \\"id","speaker","raw","en","fr","fr_stale"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Helo","Helo","Bonjour",""
+        \\"CCCCCCCC-DDDDDDDD","NONE","World","World","Monde",""
+        \\
+    ;
+    const expected =
+        \\"id","speaker","raw","en","fr","fr_stale"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Hello","Hello","Bonjour","1"
+        \\"CCCCCCCC-DDDDDDDD","NONE","World","World","Monde",""
+        \\
+    ;
+
+    const mod = try parser_test.parseSource(stale_topi_input);
+    defer mod.deinit();
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try Locale.exportFileWithMerge(mod.entry, &output.writer, "en", existing_csv, std.testing.allocator);
+
+    try std.testing.expectEqualSlices(u8, expected, output.written());
+}
+
+test "Localization Stale Flag Preserved When Raw Unchanged" {
+    // Translator left fr_stale="1" but did not update fr; raw is unchanged.
+    // Expectation: re-export preserves the "1" verbatim. The translator
+    // clears the flag themselves once they update the translation.
+    const existing_csv =
+        \\"id","speaker","raw","en","fr","fr_stale"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Hello","Hello","Bonjour","1"
+        \\"CCCCCCCC-DDDDDDDD","NONE","World","World","Monde",""
+        \\
+    ;
+
+    const mod = try parser_test.parseSource(stale_topi_input);
+    defer mod.deinit();
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try Locale.exportFileWithMerge(mod.entry, &output.writer, "en", existing_csv, std.testing.allocator);
+
+    try std.testing.expectEqualSlices(u8, existing_csv, output.written());
+}
+
+test "Localization Stale Flag Empty For Empty Translation" {
+    // Raw drifted, but the translator never wrote a translation. Nothing
+    // is invalidated yet, so fr_stale stays empty.
+    const existing_csv =
+        \\"id","speaker","raw","en","fr","fr_stale"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Helo","Helo","",""
+        \\"CCCCCCCC-DDDDDDDD","NONE","World","World","",""
+        \\
+    ;
+    const expected =
+        \\"id","speaker","raw","en","fr","fr_stale"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Hello","Hello","",""
+        \\"CCCCCCCC-DDDDDDDD","NONE","World","World","",""
+        \\
+    ;
+
+    const mod = try parser_test.parseSource(stale_topi_input);
+    defer mod.deinit();
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try Locale.exportFileWithMerge(mod.entry, &output.writer, "en", existing_csv, std.testing.allocator);
+
+    try std.testing.expectEqualSlices(u8, expected, output.written());
+}
+
+test "Localization Stale Flag Empty For New Row" {
+    // CCCCCCCC-DDDDDDDD is new in the AST — its stale column starts empty.
+    const existing_csv =
+        \\"id","speaker","raw","en","fr","fr_stale"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Hello","Hello","Bonjour",""
+        \\
+    ;
+
+    const mod = try parser_test.parseSource(stale_topi_input);
+    defer mod.deinit();
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try Locale.exportFileWithMerge(mod.entry, &output.writer, "en", existing_csv, std.testing.allocator);
+
+    const result = output.written();
+    // New row's fr and fr_stale are both empty.
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"CCCCCCCC-DDDDDDDD\",\"NONE\",\"World\",\"World\",\"\",\"\"") != null);
+}
+
+test "Localization Stale Flag Round Trip Identical" {
+    // No source change, no translator change → re-export must produce
+    // byte-identical output.
+    const existing_csv =
+        \\"id","speaker","raw","en","fr","fr_stale"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Hello","Hello","Bonjour",""
+        \\"CCCCCCCC-DDDDDDDD","NONE","World","World","Monde","1"
+        \\
+    ;
+
+    const mod = try parser_test.parseSource(stale_topi_input);
+    defer mod.deinit();
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try Locale.exportFileWithMerge(mod.entry, &output.writer, "en", existing_csv, std.testing.allocator);
+
+    try std.testing.expectEqualSlices(u8, existing_csv, output.written());
+}
+
+test "Localization Stale Flag Multi Language Independence" {
+    // Raw drifted. fr is translated → fr_stale="1". de has no
+    // translation → de_stale stays empty. Each translator's flag is
+    // independent of the others.
+    const topi_input =
+        \\=== START {
+        \\    :: "Hello"@AAAAAAAA-BBBBBBBB
+        \\}
+    ;
+    const existing_csv =
+        \\"id","speaker","raw","en","fr","fr_stale","de","de_stale"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Helo","Helo","Bonjour","","",""
+        \\
+    ;
+    const expected =
+        \\"id","speaker","raw","en","fr","fr_stale","de","de_stale"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Hello","Hello","Bonjour","1","",""
+        \\
+    ;
+
+    const mod = try parser_test.parseSource(topi_input);
+    defer mod.deinit();
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try Locale.exportFileWithMerge(mod.entry, &output.writer, "en", existing_csv, std.testing.allocator);
+
+    try std.testing.expectEqualSlices(u8, expected, output.written());
+}
+
+test "Localization Stale Orphan Column Preserved" {
+    // notes_stale follows fr, not "notes" — so it has no language partner.
+    // The merger preserves it verbatim and never auto-sets it.
+    const topi_input =
+        \\=== START {
+        \\    :: "Hello"@AAAAAAAA-BBBBBBBB
+        \\}
+    ;
+    const existing_csv =
+        \\"id","speaker","raw","en","fr","notes_stale"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Helo","Helo","Bonjour","keep me"
+        \\
+    ;
+    const expected =
+        \\"id","speaker","raw","en","fr","notes_stale"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Hello","Hello","Bonjour","keep me"
+        \\
+    ;
+
+    const mod = try parser_test.parseSource(topi_input);
+    defer mod.deinit();
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try Locale.exportFileWithMerge(mod.entry, &output.writer, "en", existing_csv, std.testing.allocator);
+
+    try std.testing.expectEqualSlices(u8, expected, output.written());
+}
+
+test "Localization Stale Codegen Skips Stale Columns" {
+    // Codegen must not emit a *.fr_stale.topil file. Only real language
+    // columns get .topil output.
+    const alloc = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const topi_content =
+        \\=== START {
+        \\    :: "Hello"@AAAAAAAA-BBBBBBBB
+        \\}
+    ;
+    const csv_content =
+        \\"id","speaker","raw","en","fr","fr_stale"
+        \\"AAAAAAAA-BBBBBBBB","NONE","Hello","Hello","Bonjour","1"
+        \\
+    ;
+
+    const test_files = &[_]TestFile{
+        .{ .name = "story.topi", .content = topi_content },
+        .{ .name = "story.topi.csv", .content = csv_content },
+    };
+    try setupModuleTestFiles(tmp_dir.dir, test_files);
+    defer cleanupModuleTestFiles(tmp_dir.dir, test_files);
+
+    const test_io = std.testing.io;
+    const full_path = try tmp_dir.dir.realPathFileAlloc(test_io, "story.topi", alloc);
+    defer alloc.free(full_path);
+    const folder = try tmp_dir.dir.realPathFileAlloc(test_io, ".", alloc);
+    defer alloc.free(folder);
+
+    var gen_result = try Locale.generateFromModuleWithIo(alloc, std.testing.io, full_path, folder, null, false, null);
+    defer gen_result.deinit();
+
+    // story.fr.topil was generated.
+    const fr_file = try tmp_dir.dir.openFile(test_io, "story.fr.topil", .{});
+    fr_file.close(test_io);
+
+    // story.fr_stale.topil was NOT generated.
+    try std.testing.expectError(error.FileNotFound, tmp_dir.dir.openFile(test_io, "story.fr_stale.topil", .{}));
+
+    // Cleanup generated files
+    tmp_dir.dir.deleteFile(test_io, "story.fr.topil") catch {};
+    tmp_dir.dir.deleteFile(test_io, "story.en.topil") catch {};
+}

@@ -407,32 +407,55 @@ pub const Locale = struct {
                 else => unreachable,
             };
 
+            // Render the new raw into a scratch buffer so we can both
+            // emit it and compare its cell-form bytes against the
+            // existing row's prior raw (which the CsvIndex captured
+            // verbatim from the previous CSV).
+            var scratch: std.Io.Writer.Allocating = .init(ctx.alloc);
+            defer scratch.deinit();
+
             switch (stmt.type) {
                 .choice => |c| {
                     const str = c.content.type.string;
                     ctx.writer.print("\"{s}\",\"CHOICE\",", .{&c.id}) catch return error.WriteFailure;
-                    try writeRawFieldWithIndices(ctx.writer, str.raw, ctx.alloc);
+                    try writeRawFieldWithIndices(&scratch.writer, str.raw, ctx.alloc);
+                    ctx.writer.writeAll(scratch.written()) catch return error.WriteFailure;
                     ctx.writer.writeAll(",") catch return error.WriteFailure;
                     writeCsvField(ctx.writer, str.value) catch return error.WriteFailure;
                 },
                 .dialogue => |d| {
                     const str = d.content.type.string;
                     ctx.writer.print("\"{s}\",\"{s}\",", .{ &d.id, d.speaker orelse "NONE" }) catch return error.WriteFailure;
-                    try writeRawFieldWithIndices(ctx.writer, str.raw, ctx.alloc);
+                    try writeRawFieldWithIndices(&scratch.writer, str.raw, ctx.alloc);
+                    ctx.writer.writeAll(scratch.written()) catch return error.WriteFailure;
                     ctx.writer.writeAll(",") catch return error.WriteFailure;
                     writeCsvField(ctx.writer, str.value) catch return error.WriteFailure;
                 },
                 else => unreachable,
             }
 
-            if (ctx.index.rows.get(id)) |extra_values| {
-                for (extra_values) |val| {
-                    ctx.writer.print(",\"{s}\"", .{val}) catch return error.WriteFailure;
-                }
-            } else {
-                for (0..ctx.index.extra_headers.len) |_| {
-                    ctx.writer.writeAll(",\"\"") catch return error.WriteFailure;
-                }
+            // Cell-form of the rendered raw: strip the outer quotes added
+            // by writeRawFieldWithIndices. The CsvIndex stores prior_raw
+            // in cell-form as well, so this comparison is symmetric.
+            const rendered = scratch.written();
+            const new_raw_cell: []const u8 = if (rendered.len >= 2)
+                rendered[1 .. rendered.len - 1]
+            else
+                rendered;
+
+            const existing = ctx.index.rows.get(id);
+            for (ctx.index.extra_headers, ctx.index.extra_roles, 0..) |_, role, i| {
+                const cell: []const u8 = if (existing) |e| e.cells[i] else "";
+                const value: []const u8 = switch (role) {
+                    .language, .@"opaque" => cell,
+                    .stale_for => |lang_idx| blk: {
+                        const e = existing orelse break :blk "";
+                        if (std.mem.eql(u8, new_raw_cell, e.prior_raw)) break :blk cell;
+                        if (e.cells[lang_idx].len == 0) break :blk "";
+                        break :blk "1";
+                    },
+                };
+                ctx.writer.print(",\"{s}\"", .{value}) catch return error.WriteFailure;
             }
             ctx.writer.writeAll("\n") catch return error.WriteFailure;
         }
@@ -553,10 +576,34 @@ pub const Locale = struct {
         }
     };
 
+    /// Returns true when `cur` is a `_stale` companion to `prev`, i.e. it
+    /// ends in `_stale` and its prefix matches the immediately preceding
+    /// header. Used to recognize translator-staleness flag columns.
+    fn isStaleCompanion(prev: ?[]const u8, cur: []const u8) bool {
+        const suffix = "_stale";
+        if (cur.len <= suffix.len) return false;
+        if (!std.mem.endsWith(u8, cur, suffix)) return false;
+        const prefix = std.mem.trim(u8, cur[0 .. cur.len - suffix.len], " \t");
+        const p = prev orelse return false;
+        return std.mem.eql(u8, std.mem.trim(u8, p, " \t"), prefix);
+    }
+
     const CsvIndex = struct {
         extra_headers: []const []const u8,
-        rows: std.AutoHashMapUnmanaged(UUID.ID, []const []const u8),
+        extra_roles: []const Role,
+        rows: std.AutoHashMapUnmanaged(UUID.ID, RowData),
         allocator: std.mem.Allocator,
+
+        const Role = union(enum) {
+            language,
+            stale_for: usize,
+            @"opaque",
+        };
+
+        const RowData = struct {
+            prior_raw: []const u8,
+            cells: []const []const u8,
+        };
 
         fn init(allocator: std.mem.Allocator, csv_content: []const u8) !CsvIndex {
             const content = stripBom(csv_content);
@@ -573,10 +620,28 @@ pub const Locale = struct {
                 try headers.append(allocator, cell);
             }
 
-            var rows: std.AutoHashMapUnmanaged(UUID.ID, []const []const u8) = .empty;
+            // Classify each extra column: a `_stale` cell whose prefix
+            // matches the previous header is a companion; otherwise it's a
+            // language column. An orphan `_stale` (no matching prefix) is
+            // preserved verbatim as opaque — the column survives the
+            // round-trip but is never auto-set.
+            var roles = try allocator.alloc(Role, headers.items.len);
+            errdefer allocator.free(roles);
+            for (headers.items, 0..) |h, i| {
+                const prev: ?[]const u8 = if (i == 0) null else headers.items[i - 1];
+                if (isStaleCompanion(prev, h)) {
+                    roles[i] = .{ .stale_for = i - 1 };
+                } else if (std.mem.endsWith(u8, h, "_stale")) {
+                    roles[i] = .@"opaque";
+                } else {
+                    roles[i] = .language;
+                }
+            }
+
+            var rows: std.AutoHashMapUnmanaged(UUID.ID, RowData) = .empty;
             errdefer {
                 var it = rows.iterator();
-                while (it.next()) |entry| allocator.free(entry.value_ptr.*);
+                while (it.next()) |entry| allocator.free(entry.value_ptr.cells);
                 rows.deinit(allocator);
             }
 
@@ -584,6 +649,7 @@ pub const Locale = struct {
                 var cell_iter = CsvCellIterator.init(line);
                 var cell_idx: usize = 0;
                 var id: ?UUID.ID = null;
+                var prior_raw: []const u8 = "";
                 var extra_values: std.ArrayList([]const u8) = .empty;
                 defer extra_values.deinit(allocator);
 
@@ -592,6 +658,8 @@ pub const Locale = struct {
                         if (cell.len >= UUID.Size) {
                             id = UUID.fromString(cell[0..UUID.Size]);
                         }
+                    } else if (cell_idx == 2) {
+                        prior_raw = cell;
                     } else if (cell_idx >= 4) {
                         try extra_values.append(allocator, cell);
                     }
@@ -601,12 +669,16 @@ pub const Locale = struct {
                     while (extra_values.items.len < headers.items.len) {
                         try extra_values.append(allocator, "");
                     }
-                    try rows.put(allocator, valid_id, try extra_values.toOwnedSlice(allocator));
+                    try rows.put(allocator, valid_id, .{
+                        .prior_raw = prior_raw,
+                        .cells = try extra_values.toOwnedSlice(allocator),
+                    });
                 }
             }
 
             return .{
                 .extra_headers = try headers.toOwnedSlice(allocator),
+                .extra_roles = roles,
                 .rows = rows,
                 .allocator = allocator,
             };
@@ -614,8 +686,9 @@ pub const Locale = struct {
 
         fn deinit(self: *CsvIndex) void {
             self.allocator.free(self.extra_headers);
+            self.allocator.free(self.extra_roles);
             var it = self.rows.iterator();
-            while (it.next()) |entry| self.allocator.free(entry.value_ptr.*);
+            while (it.next()) |entry| self.allocator.free(entry.value_ptr.cells);
             self.rows.deinit(self.allocator);
         }
     };
@@ -645,6 +718,9 @@ pub const Locale = struct {
         while (header_iter.next()) |h| : (col_idx += 1) {
             const key = std.mem.trim(u8, h, " ");
             if (std.mem.eql(u8, key, "id") or std.mem.eql(u8, key, "speaker") or std.mem.eql(u8, key, "raw")) continue;
+            // Skip translator-staleness flag columns: they are CSV
+            // workflow markers and do not represent a real language.
+            if (std.mem.endsWith(u8, key, "_stale")) continue;
             if (filter_lang) |f| if (!std.mem.eql(u8, key, f)) continue;
 
             if (!dry) {
@@ -845,6 +921,9 @@ pub const Locale = struct {
         while (m_header_iter.next()) |h| : (col_idx += 1) {
             const key = std.mem.trim(u8, h, " ");
             if (std.mem.eql(u8, key, "id") or std.mem.eql(u8, key, "speaker") or std.mem.eql(u8, key, "raw")) continue;
+            // Skip translator-staleness flag columns: they are CSV
+            // workflow markers and do not represent a real language.
+            if (std.mem.endsWith(u8, key, "_stale")) continue;
             if (filter_lang) |f| if (!std.mem.eql(u8, key, f)) continue;
 
             if (!dry) {

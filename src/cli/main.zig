@@ -655,6 +655,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                         return;
                     };
                 }
+                try writer.flush();
             }
         },
         .validate => {

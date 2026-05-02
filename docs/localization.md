@@ -63,6 +63,48 @@ Re-exporting after code changes merges new/removed lines while preserving existi
 topi loc export story.topi -l en -o story.topi.csv  # merges with existing CSV
 ```
 
+### Tracking changes with stale flags
+
+When the source dialogue changes after a translator has worked on a CSV,
+the existing translation is preserved on re-export — but it's now stale
+relative to the new source. Topiary supports an optional per-language
+**stale flag** so translators can see which rows need attention.
+
+To opt in, add a companion column named `<lang>_stale` immediately after a
+language column:
+
+```csv
+"id","speaker","raw","en","fr","fr_stale"
+"8R955KPX-2WI5R816","Speaker","Hello world","Hello world","Bonjour le monde",""
+```
+
+On re-export, Topiary compares the previous CSV's `raw` cell against the
+new source raw:
+
+- If they differ **and** the translation cell is non-empty, `fr_stale` is
+  set to `"1"`.
+- If they differ but the translation is empty, `fr_stale` stays empty —
+  there is nothing yet to invalidate.
+- If the raw is unchanged, `fr_stale` is preserved verbatim. Translators
+  control it manually from there.
+
+A translator clears the flag by emptying the cell after updating their
+translation. Flags are independent per language — `fr_stale` and `de_stale`
+track their own translators separately, so one language can be up to date
+while another is still pending.
+
+A few things to note:
+
+- Companion columns are opt-in. A language column without a `<lang>_stale`
+  companion is treated normally; Topiary never auto-creates one.
+- A `_stale` column without a matching language column directly before it
+  is preserved verbatim but never auto-set.
+- `_stale` columns are skipped during `topi loc generate` — they never
+  produce `.topil` files.
+- Re-exporting twice with no source changes produces a byte-identical CSV.
+- `--no-merge` discards the existing CSV (translations and stale flags
+  alike) and writes a fresh export.
+
 ## Generate
 
 Generate takes a `.topi` file (not a CSV), walks its `include` graph,

@@ -477,7 +477,9 @@ fn describeStorm || {
     :: "The coast guard arrives at dawn. {KEEPER_NAME} is found alive in the caves," @O3HBZ9DZ-DBZN0B32
     :: "dehydrated but breathing." @T4FKZN18-5NUG3W8D
     :Sable: "I knew... someone would come." @2899O6EQ-RSP1IN3Q
-    :: "The truth comes out: {if suspect == Suspect.Callum "Callum had been smuggling supplies through the island, using the lighthouse as cover." else if suspect == Suspect.Mirren "Mirren had discovered Sable's plans to report the smuggling ring and tried to silence him." else "A mainland syndicate had been using the island as a waypoint."}" @E7AJ8W2R-XGZLKQEF
+    :: "The truth comes out: {if suspect == Suspect.Callum "Callum had been smuggling supplies through the island, using the lighthouse as cover."
+        else if suspect == Suspect.Mirren "Mirren had discovered Sable's plans to report the smuggling ring and tried to silence him."
+        else "A mainland syndicate had been using the island as a waypoint."}" @E7AJ8W2R-XGZLKQEF
     :: "" @32D40I1G-479XF823
     :: "You helped save {KEEPER_NAME}. The lighthouse beam cuts through the clearing storm." @2BJLF0II-15YV7SP7
     :: "Your notebook is full. Your hands are steady." @T9VOXDKK-C1LWGXDO
