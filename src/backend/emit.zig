@@ -290,6 +290,21 @@ pub const Emitter = struct {
         return i;
     }
 
+    /// Probe-only lookup. Used by callers that need to construct the
+    /// pool entry lazily (e.g. allocate a heap Obj only on miss).
+    pub fn findLiteralConstant(self: *Emitter, value: Value) ?C.CONSTANT {
+        return self.literal_cache.get(value);
+    }
+
+    /// Insert a value at the next pool slot AND cache it for future
+    /// `findLiteralConstant` hits. Counterpart to `findLiteralConstant`
+    /// for the lazy-allocate pattern.
+    pub fn addAndCacheLiteralConstant(self: *Emitter, arena_alloc: std.mem.Allocator, value: Value) !C.CONSTANT {
+        const i = try self.addConstant(value);
+        try self.literal_cache.put(arena_alloc, value, i);
+        return i;
+    }
+
     /// Emit a `.constant <idx>` opcode for an identifier name, registering
     /// a string constant for it on first use.
     pub fn addIdentifierConstant(self: *Emitter, arena_alloc: std.mem.Allocator, name: []const u8, token: Token) !void {

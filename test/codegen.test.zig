@@ -209,3 +209,56 @@ test "Codegen var_decl" {
         "const x = 1 const y = 2 const z = x + y",
     });
 }
+
+fn constantsCount(src: []const u8) !usize {
+    var mod = try newModuleWithSource(src);
+    defer mod.deinit();
+    var bc = try compileViaIr(mod);
+    defer bc.free(allocator);
+    return bc.constants.len;
+}
+
+test "Codegen dedups number literals" {
+    const one = try constantsCount("const a = 5");
+    const two = try constantsCount("const a = 5 const b = 5");
+    try testing.expectEqual(one, two);
+}
+
+test "Codegen dedups string literals" {
+    const one = try constantsCount(
+        \\const a = "hello"
+    );
+    const two = try constantsCount(
+        \\const a = "hello" const b = "hello"
+    );
+    try testing.expectEqual(one, two);
+}
+
+test "Codegen does not dedup interpolated strings" {
+    const one = try constantsCount(
+        \\const x = 1
+        \\const a = "v={x}"
+    );
+    const two = try constantsCount(
+        \\const x = 1
+        \\const a = "v={x}" const b = "v={x}"
+    );
+    try testing.expectEqual(one + 1, two);
+}
+
+test "Codegen dedups speaker names" {
+    const one = try constantsCount(
+        \\=== B @AAAAAAAA-AAAAAAAA {
+        \\    :P: "a"
+        \\}
+    );
+    const two = try constantsCount(
+        \\=== B @AAAAAAAA-AAAAAAAA {
+        \\    :P: "a"
+        \\    :P: "b"
+        \\}
+    );
+    // One added entry for the second line's text Obj (UUID-unique), but the
+    // speaker name "P" is name-keyed so it does not grow.
+    try testing.expectEqual(one + 1, two);
+}

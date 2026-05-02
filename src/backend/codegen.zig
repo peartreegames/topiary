@@ -888,9 +888,28 @@ pub const Codegen = struct {
         // Expression-position string (no UUID) — same lowering as
         // `emitLocString` minus the locale id.
         const lowered = try self.lowerText(segments);
-        const obj = try self.alloc.create(Value.Obj);
-        obj.* = .{ .data = .{ .string = .{ .bytes = lowered.bytes, .segments = lowered.segments } } };
-        const c_idx = try self.emitter.addConstant(.{ .obj = obj });
+        // Dedup only when there are no interpolations: the Value.Adapter
+        // matches `Obj.string` by bytes alone, which is ambiguous when
+        // `\{N\}` literal escapes can collide with `{N}` interp markers
+        // (same bytes, different segment tables and interp_count). Pure-
+        // literal strings have a deterministic single-literal segment
+        // table, so byte equality is sufficient.
+        const c_idx: C.CONSTANT = if (lowered.interp_count == 0) blk: {
+            var probe_obj: Value.Obj = .{ .data = .{ .string = .{ .bytes = lowered.bytes } } };
+            const probe: Value = .{ .obj = &probe_obj };
+            if (self.emitter.findLiteralConstant(probe)) |idx| {
+                self.alloc.free(lowered.bytes);
+                self.alloc.free(lowered.segments);
+                break :blk idx;
+            }
+            const obj = try self.alloc.create(Value.Obj);
+            obj.* = .{ .data = .{ .string = .{ .bytes = lowered.bytes, .segments = lowered.segments } } };
+            break :blk try self.emitter.addAndCacheLiteralConstant(self.arena.allocator(), .{ .obj = obj });
+        } else blk: {
+            const obj = try self.alloc.create(Value.Obj);
+            obj.* = .{ .data = .{ .string = .{ .bytes = lowered.bytes, .segments = lowered.segments } } };
+            break :blk try self.emitter.addConstant(.{ .obj = obj });
+        };
         try self.emitter.writeOp(.string, token);
         _ = try self.emitter.writeInt(C.CONSTANT, c_idx, token);
         _ = try self.emitter.writeInt(u8, lowered.interp_count, token);

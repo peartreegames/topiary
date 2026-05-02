@@ -797,6 +797,10 @@ pub const Value = union(Type) {
                     hashFn(&hasher, r.start);
                     hashFn(&hasher, r.end);
                 },
+                .enum_value => |e| {
+                    hashFn(&hasher, @intFromPtr(e.base));
+                    hashFn(&hasher, e.index);
+                },
                 else => unreachable,
             }
             return @as(u32, @truncate(hasher.final()));
@@ -811,6 +815,8 @@ pub const Value = union(Type) {
             _ = self;
             if (@intFromEnum(a) != @intFromEnum(b)) return false;
             return switch (a) {
+                // Fuzzy compare: f32 dialogue scripting tolerates one-ULP
+                // drift; literals within epsilon dedup to a single pool entry.
                 .number => |n| @abs(n - b.number) < 0.00001,
                 .bool => |bl| bl == b.bool,
                 .nil => b == .nil,
