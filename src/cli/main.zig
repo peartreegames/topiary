@@ -323,7 +323,7 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
         try print("Could not create module: {s}\n", .{@errorName(err)});
         return if (args.verbose) err else {};
     };
-    errdefer mod.deinit();
+    defer mod.deinit();
 
     var bytecode = mod.generateBytecode(alloc) catch |err| {
         try print("Could not create bytecode: {s}\n", .{@errorName(err)});
@@ -331,7 +331,6 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
         return if (args.verbose) err else {};
     };
     try writeErrors(mod);
-    mod.deinit();
     defer bytecode.free(alloc);
 
     var cli_runner = CliRunner.init(args.auto);
@@ -353,7 +352,13 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
         };
     }
 
-    try vm.start(args.bough);
+    vm.start(args.bough) catch |err| {
+        var buffer: [128]u8 = undefined;
+        var writer = std.Io.File.stdout().writer(io, &buffer);
+        const stdout = &writer.interface;
+        vm.err.print(stdout);
+        return if (args.verbose) err else {};
+    };
     if (args.locale_key_file) |file| {
         try vm.setLocale(file);
     }
@@ -389,7 +394,7 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
         try print("Could not create module", .{});
         return if (args.verbose) err else {};
     };
-    errdefer mod.deinit();
+    defer mod.deinit();
     var bytecode = mod.generateBytecode(alloc) catch |err| {
         try print("Could not generate bytecode", .{});
         try writeErrors(mod);
@@ -397,7 +402,6 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
     };
     try writeErrors(mod);
     if (args.time) try printCompileTimings(args.file.?, mod.timings);
-    mod.deinit();
     defer bytecode.free(alloc);
 
     if (args.dry) {
@@ -488,7 +492,7 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
         try print("Could not create module: {s}\n", .{@errorName(err)});
         return if (args.verbose) err else {};
     };
-    errdefer mod.deinit();
+    defer mod.deinit();
 
     var bytecode = mod.generateBytecode(alloc) catch |err| {
         try print("Could not create bytecode: {s}\n", .{@errorName(err)});
@@ -496,7 +500,6 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
         return if (args.verbose) err else {};
     };
     try writeErrors(mod);
-    mod.deinit();
     defer bytecode.free(alloc);
 
     var visit_counts: std.array_hash_map.String(u64) = .empty;
