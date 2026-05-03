@@ -17,8 +17,8 @@ pub const Bytecode = struct {
 
     pub const magic = "TPBC";
     pub const version: u16 = 3;
-    // magic + version + locals_count
-    const prelude_size = magic.len + @sizeOf(u16) + @sizeOf(u16);
+    // magic + version + reserved + locals_count
+    const prelude_size = magic.len + @sizeOf(u16) * 3;
     const section_count = 4;
     const offsets_size = section_count * @sizeOf(u64);
     const header_size = prelude_size + offsets_size;
@@ -82,6 +82,7 @@ pub const Bytecode = struct {
 
         try writer.writeAll(magic);
         try writer.writeInt(u16, version, .little);
+        try writer.writeInt(u16, 0, .little); // reserved
         try writer.writeInt(u16, @as(u16, @intCast(self.locals_count)), .little);
 
         offsets[0] = header_size + allocating.written().len;
@@ -111,6 +112,7 @@ pub const Bytecode = struct {
         if (!std.mem.eql(u8, &file_magic, magic)) return error.InvalidBytecodeFormat;
         const file_version = try reader.takeInt(u16, .little);
         if (file_version != version) return error.UnsupportedBytecodeVersion;
+        _ = try reader.takeInt(u16, .little); // reserved
         const locals_count = try reader.takeInt(u16, .little);
         // skip section offsets (unused on read)
         try reader.discardAll(offsets_size);

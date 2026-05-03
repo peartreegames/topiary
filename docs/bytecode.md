@@ -4,12 +4,13 @@ Little endianness
 
 ## Header
 
-| Name     | Type   | Description                          |
-|----------|--------|--------------------------------------|
-| Magic    | u8[4]  | `"TPBC"`                             |
-| Version  | u16    | Currently `2`                        |
-| Reserved | u16    | Always `0`                           |
-| Offsets  | u64[4] | Starting positions of each section   |
+| Name         | Type   | Description                          |
+|--------------|--------|--------------------------------------|
+| Magic        | u8[4]  | `"TPBC"`                             |
+| Version      | u16    | Currently `3`                        |
+| Reserved     | u16    | Always `0`                           |
+| Locals Count | u16    | Top-level locals (stack frame size)  |
+| Offsets      | u64[4] | Starting positions of each section   |
 
 Section offset indices:
 
@@ -46,10 +47,10 @@ Section offset indices:
 
 ### Constant
 
-| Name  | Type                                                                                                                                                                                      |
-|-------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Type  | [Type](#ValueType)                                                                                                                                                                        |
-| Value | [Nil](#NilVoid) \| [Void](#NilVoid) \| [Bool](#Bool) \| [Number](#Number) \| [Range](#Range) \| [Visit](#Visit) \| [Timestamp](#Timestamp) \| [ConstString](#String) \| [Object](#Object) |
+| Name  | Type                                                                                                                                                                                           |
+|-------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Type  | [Type](#ValueType)                                                                                                                                                                             |
+| Value | [Nil](#NilVoid) \| [Void](#NilVoid) \| [Bool](#Bool) \| [Number](#Number) \| [Range](#Range) \| [Visit](#Visit) \| [Timestamp](#Timestamp) \| [ConstString](#ConstString) \| [Object](#Object) |
 
 ## ValueType
 
@@ -62,11 +63,11 @@ Used for `Constant.Type`:
 | 1  | nil          |
 | 2  | bool         |
 | 3  | number       |
-| 4  | range        |
+| 4  | range        | // not constant
 | 5  | obj          |
 | 6  | map_pair     | // not constant
 | 7  | visit        |
-| 8  | enum_value   |
+| 8  | enum_value   | // not constant
 | 9  | timestamp    |
 | 10 | const_string |
 | 11 | ref          | // not constant
@@ -116,6 +117,16 @@ Stringified value up to 5 decimal places
 |-------|------|
 | Value | i64  |
 
+#### ConstString
+
+Plain UTF-8 string with no interpolation segments. (See [Object → String](#String)
+for interpolated dialogue/locale strings.)
+
+| Name   | Type        |
+|--------|-------------|
+| Length | u16         |
+| Value  | u8[Length]  |
+
 #### Object
 
 | Name  | Type                                                                                                                                                            |
@@ -145,10 +156,41 @@ Used for `Object.Type`:
 
 #### String
 
-| Name   | Type       |
-|--------|------------|
-| Length | u16        |
-| Value  | u8[Length] |
+Bytes blob plus a segment table that the VM walks to splice literal runs and
+interpolated args. The bytes blob includes `{N}` markers (kept for cat-readability);
+the segment table tells the runtime which byte ranges are literal and which slots
+are interpolations.
+
+| Name           | Type                          |
+|----------------|-------------------------------|
+| Length         | u16                           |
+| Value          | u8[Length]                    |
+| Segment Count  | u8                            |
+| Segments       | [Segment](#Segment)[Count]    |
+
+#### Segment
+
+| Name | Type                                                                 |
+|------|----------------------------------------------------------------------|
+| Tag  | u8 (`0` = literal, `1` = interp)                                     |
+| Body | [SegmentLiteral](#SegmentLiteral) \| [SegmentInterp](#SegmentInterp) |
+
+##### SegmentLiteral
+
+Byte range into the parent String's `Value`.
+
+| Name  | Type |
+|-------|------|
+| Start | u16  |
+| End   | u16  |
+
+##### SegmentInterp
+
+Stack-relative arg index for an interpolation slot.
+
+| Name  | Type |
+|-------|------|
+| Index | u8   |
 
 #### Enum
 
@@ -162,14 +204,20 @@ Used for `Object.Type`:
 
 #### Function
 
-| Name               | Type                     |
-|--------------------|--------------------------|
-| Arity              | u8                       |
-| Is Method          | u8 (0\|1)                |
-| Locals Count       | u16                      |
-| Instructions Count | u16                      |
-| Instructions       | u8[Instructions Count]   |
-| Debug Info         | [Debug Info](#DebugInfo) |
+The Name field is a u16 length-prefixed blob; an unnamed function writes
+length `0` and no bytes.
+
+| Name               | Type                                      |
+|--------------------|-------------------------------------------|
+| Name Length        | u16                                       |
+| Name               | u8[Name Length]                           |
+| Arity              | u8                                        |
+| Is Method          | u8 (0\|1)                                 |
+| Locals Count       | u16                                       |
+| Instructions Count | u32                                       |
+| Instructions       | u8[Instructions Count]                    |
+| Debug Info Count   | u32                                       |
+| Debug Info         | [DebugItem](#DebugItem)[Debug Info Count] |
 
 #### ExternFunction
 

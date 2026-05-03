@@ -1,38 +1,36 @@
 //! Rewindable VM state snapshots.
 //!
-//! A `Snapshot` captures the entire mutable execution state of a `Vm` paused
-//! at a fork: stack, frames, iterators, jump stacks, globals, variation
-//! state, RNG state, and the currently-presented choices. Snapshots are
-//! taken inside the `.fork` opcode handler (see `Vm.captureFork`) and held
-//! in a bounded ring buffer on the VM, indexed by `vm.history_cursor` for
-//! undo/redo.
+//! A `Snapshot` is everything mutable about a `Vm` paused at a fork: stack,
+//! frames, iterators, jump stacks, globals, variation state, RNG, and the
+//! choices currently on offer. We grab one inside the `.fork` opcode (see
+//! `Vm.captureFork`) and stash it in a ring buffer on the VM, indexed by
+//! `vm.history_cursor` for undo/redo.
 //!
 //! ## Heap clone strategy
-//! Mutable heap objects (`list`, `map`, `set`, `instance`) are deep-cloned
-//! into freshly allocated GC objects via `vm.gc.create`. Immutable types
-//! (`string`, `enum`, `function`, `extern`, `builtin`, `class`, `anchor`)
-//! are shared by pointer — they are never mutated, so reference sharing is
-//! safe. A dedup map (`*Obj` → `*Obj`) ensures cyclic graphs terminate and
-//! aliasing is preserved across the clone.
+//! Mutable heap objects (`list`, `map`, `set`, `instance`) get deep-cloned
+//! into fresh GC objects via `vm.gc.create`. Immutable types (`string`,
+//! `enum`, `function`, `extern`, `builtin`, `class`, `anchor`) we just
+//! share by pointer — nothing ever mutates them, so aliasing is harmless.
+//! A dedup map (`*Obj` → `*Obj`) keeps cycles from looping forever and
+//! preserves aliasing across the clone.
 //!
 //! ## GC interaction
-//! `Gc.create` may trigger collection if `gc.allocated > gc.threshold`. Mid
-//! clone, freshly created clones are not yet held by any root and would be
-//! swept. Both `capture` and `restore` raise `gc.threshold` to "infinity"
-//! for the duration of the clone walk and restore it afterward.
+//! `Gc.create` can trigger a collection if `gc.allocated > gc.threshold`,
+//! and a half-built clone isn't rooted yet, so it'd get swept out from
+//! under us. To dodge that, `capture` and `restore` both pin
+//! `gc.threshold` to "infinity" while they walk, then put it back.
 //!
-//! Snapshots themselves act as GC roots: `Vm.markRoots` walks
-//! `vm.history` and calls `Snapshot.markRoots` on each so the cloned objects
-//! survive collections that happen between fork captures.
+//! Snapshots themselves are GC roots: `Vm.markRoots` walks `vm.history` and
+//! calls `Snapshot.markRoots` on each, so cloned objects survive any
+//! collections that happen between fork captures.
 //!
 //! ## Choice content lifetime
-//! `Choice.content` is a slice into a heap-string object: at capture time
-//! we dupe the bytes into a snapshot-owned `vm.alloc` buffer, and on
-//! restore we hand the snapshot's buffer back to the choice (the choice's
-//! tag-slice header is freed by `selectChoice`, but the bytes are owned
-//! by the snapshot). Tags borrow directly from the bytecode constant pool
-//! both at capture and restore — the constant pool outlives the VM, so
-//! no per-snapshot copy is needed for them.
+//! `Choice.content` points into a heap-string object. At capture we dupe
+//! the bytes into a snapshot-owned `vm.alloc` buffer; on restore we hand
+//! that buffer back to the choice (the choice's tag-slice header is freed
+//! by `selectChoice`, but the bytes themselves belong to the snapshot).
+//! Tags just borrow from the bytecode constant pool at both ends — the
+//! pool outlives the VM, so there's no need to copy them.
 
 const std = @import("std");
 
@@ -51,11 +49,11 @@ const builtins = @import("builtins.zig");
 const runner = @import("runner.zig");
 const Choice = runner.Choice;
 
-/// Map from original object pointer to its clone, used during a clone walk
-/// to terminate cycles and preserve aliasing.
+/// Maps original object pointer → its clone. Used during a clone walk to
+/// break cycles and keep aliasing intact.
 pub const DedupMap = std.AutoHashMap(*Value.Obj, *Value.Obj);
 
-/// One immutable snapshot of VM state taken at a fork pause point.
+/// One frozen snapshot of VM state, taken at a fork pause.
 pub const Snapshot = struct {
     // Operand stack contents (count = stack_items.len)
     stack_items: []Value,
@@ -123,22 +121,22 @@ pub const Snapshot = struct {
         self.* = undefined;
     }
 
-    /// Mark every Value reachable from this snapshot so the GC does not
-    /// sweep cloned objects between fork captures.
+    /// Mark everything reachable from this snapshot so the GC doesn't
+    /// sweep our cloned objects between fork captures.
     pub fn markRoots(self: *const Snapshot) void {
         for (self.stack_items) |v| Gc.markValue(v);
         for (self.iterators) |it| Gc.markValue(it.value);
         for (self.globals) |v| Gc.markValue(v);
         // Frames hold *Obj pointers to function objects. The main frame's
-        // function obj is a separately-allocated, non-GC object; all others
-        // come from bytecode.constants and are likewise non-GC. We still
-        // mark them defensively in case that ever changes.
+        // func is a separately-allocated non-GC object; the rest come from
+        // bytecode.constants and are also non-GC. Mark them anyway just in
+        // case that ever changes.
         for (self.frames) |f| Gc.markValue(.{ .obj = f.func });
     }
 
-    /// Capture a snapshot of `vm`'s mutable state. Caller (Vm.captureFork)
-    /// is responsible for raising `vm.gc.threshold` for the duration of
-    /// this call so freshly-cloned objects survive a mid-clone collection.
+    /// Snapshot `vm`'s mutable state. The caller (Vm.captureFork) needs
+    /// to pin `vm.gc.threshold` while we run, otherwise a mid-clone GC
+    /// could sweep our half-built objects.
     pub fn capture(vm: *Vm) !Snapshot {
         var dedup = DedupMap.init(vm.alloc);
         defer dedup.deinit();
@@ -250,11 +248,10 @@ pub const Snapshot = struct {
         };
     }
 
-    /// Restore the snapshot's state into `vm`. Allocates fresh GC clones
-    /// of mutable heap objects out of the snapshot, leaving the snapshot
-    /// itself untouched (so it remains valid for subsequent re-rewinds).
-    /// Caller (Vm.rewind/redo) is responsible for raising gc.threshold
-    /// for the duration of this call.
+    /// Restore this snapshot's state into `vm`. Mutable heap objects get
+    /// fresh GC clones; the snapshot itself stays untouched so it can be
+    /// re-rewound later. Caller (Vm.rewind/redo) needs to pin gc.threshold
+    /// while we run.
     pub fn restore(self: *const Snapshot, vm: *Vm) !void {
         var dedup = DedupMap.init(vm.alloc);
         defer dedup.deinit();
@@ -348,15 +345,15 @@ pub const Snapshot = struct {
     }
 };
 
-/// Recursively clone a Value, deep-cloning mutable heap objects via
-/// `vm.gc.create` and sharing immutable ones by pointer. Cycles and
-/// aliasing are preserved via the dedup map.
+/// Recursively clone a Value: deep-clone mutable heap objects via
+/// `vm.gc.create`, share immutable ones by pointer. The dedup map
+/// handles cycles and keeps aliasing intact.
 pub fn cloneValue(vm: *Vm, value: Value, dedup: *DedupMap) std.mem.Allocator.Error!Value {
     return switch (value) {
         .obj => |o| .{ .obj = try cloneObj(vm, o, dedup) },
-        // Map pairs hold pointers into a map's storage; in practice they
-        // are transient values produced inside iteration and never live
-        // across a fork. Bit-copy is fine.
+        // Map pairs point into a map's storage, but they're only ever
+        // transient values from iteration and never survive across a fork.
+        // Bit-copy is fine.
         else => value,
     };
 }
@@ -364,8 +361,8 @@ pub fn cloneValue(vm: *Vm, value: Value, dedup: *DedupMap) std.mem.Allocator.Err
 fn cloneObj(vm: *Vm, obj: *Value.Obj, dedup: *DedupMap) std.mem.Allocator.Error!*Value.Obj {
     if (dedup.get(obj)) |existing| return existing;
 
-    // Immutable types: share by reference. Strings/enums/functions/classes/
-    // externs/builtins/anchors are never mutated after creation.
+    // Immutable types: just share the pointer. Strings/enums/functions/
+    // classes/externs/builtins/anchors never mutate once created.
     switch (obj.data) {
         .string,
         .@"enum",
@@ -381,10 +378,10 @@ fn cloneObj(vm: *Vm, obj: *Value.Obj, dedup: *DedupMap) std.mem.Allocator.Error!
         .list, .map, .set, .instance => {},
     }
 
-    // Mutable types: allocate the new GC object first (with empty contents),
-    // register in the dedup map, then recursively clone children. Order is
-    // critical for cycle handling: a list that contains itself must see its
-    // own clone in the dedup map before the recursive walk encounters it.
+    // Mutable types: allocate the new GC object first (empty), register it
+    // in the dedup map, *then* recursively clone the children. Order
+    // matters for cycles — a list that contains itself has to see its own
+    // clone in the dedup map before the recursive walk runs into it.
     switch (obj.data) {
         .list => |l| {
             var new_list: std.ArrayList(Value) = .empty;
@@ -424,7 +421,7 @@ fn cloneObj(vm: *Vm, obj: *Value.Obj, dedup: *DedupMap) std.mem.Allocator.Error!
         },
         .instance => |inst| {
             const new_fields = try vm.alloc.alloc(Value, inst.fields.len);
-            // Initialise to void so any GC sweep mid-clone sees a coherent obj.
+            // Init to void so a mid-clone GC sweep sees a coherent obj.
             @memset(new_fields, .{ .void = {} });
             const new_value = try vm.gc.create(vm, .{ .instance = .{
                 .base = inst.base, // class is immutable, share
