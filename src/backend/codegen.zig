@@ -133,12 +133,10 @@ pub const Codegen = struct {
         for (self.program.body) |*stmt| try self.emitBough(stmt);
 
         // Final `.end` opcode so the VM can grab the initial
-        // jump_request after the program completes.
+        // jump_request after the program completes. The byte inherits
+        // the trailing marker run — no new marker needed.
         const chunk = self.emitter.chunk;
         if (chunk.debug_markers.items.len > 0) {
-            const dupe = chunk.debug_markers.items[chunk.debug_markers.items.len - 1];
-            try chunk.debug_markers.ensureTotalCapacity(self.alloc, chunk.debug_markers.items.len + 1);
-            chunk.debug_markers.appendAssumeCapacity(dupe);
             try chunk.instructions.append(self.alloc, @intFromEnum(OpCode.end));
         }
     }
@@ -532,6 +530,9 @@ pub const Codegen = struct {
 
         const obj = try self.alloc.create(Value.Obj);
         errdefer self.alloc.destroy(obj);
+        // debugInfo() reads `chunk.instructions.items.len` to bound the
+        // last range; compute it before `toOwnedSlice` empties the list.
+        const debug_info = try chunk.debugInfo(self.alloc);
         obj.* = .{
             .id = UUID.new(),
             .data = .{
@@ -540,7 +541,7 @@ pub const Codegen = struct {
                     .arity = arity,
                     .is_method = f.is_method,
                     .instructions = try chunk.instructions.toOwnedSlice(self.alloc),
-                    .debug_info = try chunk.debugInfo(self.alloc),
+                    .debug_info = debug_info,
                     .locals_count = f.locals_count,
                 },
             },
@@ -1107,9 +1108,12 @@ pub const Codegen = struct {
             };
             filled = i + 1;
         }
+        // debugInfo() must run before the instructions slice is moved
+        // out — it reads `instructions.items.len` to bound the last range.
+        const debug_info = try self.emitter.chunk.debugInfo(self.alloc);
         return .{
             .instructions = try self.emitter.chunk.instructions.toOwnedSlice(self.alloc),
-            .debug_info = try self.emitter.chunk.debugInfo(self.alloc),
+            .debug_info = debug_info,
             .constants = try self.emitter.constants.toOwnedSlice(self.alloc),
             .global_symbols = global_symbols,
             .locals_count = self.program.top_level_locals_count,

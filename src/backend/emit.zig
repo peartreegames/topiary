@@ -42,6 +42,12 @@ pub const JUMP_HOLDER: C.JUMP = max_jump - 3;
 
 pub const Chunk = struct {
     instructions: std.ArrayList(u8) = .empty,
+    /// One marker per `(file_index, line)` run, in emit order. The
+    /// run starts at `ip` (a byte position in `instructions`) and
+    /// extends to the next marker's `ip` — or, for the last marker,
+    /// to `instructions.items.len`. Operand bytes inherit the
+    /// most-recent marker, so this list grows by at most one entry
+    /// per source line, not per instruction byte.
     debug_markers: std.ArrayList(Marker) = .empty,
     parent: ?*Chunk,
     module: *Module,
@@ -49,6 +55,7 @@ pub const Chunk = struct {
     last_op_pos: ?usize = null,
 
     const Marker = struct {
+        ip: u32,
         file_index: u32,
         line: u32,
     };
@@ -66,7 +73,7 @@ pub const Chunk = struct {
             const estimate = module.timings.source_bytes / 4;
             if (estimate > 0) {
                 try chunk.instructions.ensureTotalCapacity(allocator, estimate);
-                try chunk.debug_markers.ensureTotalCapacity(allocator, estimate);
+                try chunk.debug_markers.ensureTotalCapacity(allocator, estimate / 4);
             }
         }
         return chunk;
@@ -84,28 +91,23 @@ pub const Chunk = struct {
             infos.deinit(allocator);
             return &.{};
         }
-        var file_index = self.debug_markers.items[0].file_index;
-        var line = self.debug_markers.items[0].line;
-        var start: u32 = 0;
-        const initial_name = try allocator.dupe(u8, std.fs.path.basename(self.module.includes.keys()[file_index]));
+        const markers = self.debug_markers.items;
+        const total_bytes: u32 = @intCast(self.instructions.items.len);
+        const initial_name = try allocator.dupe(u8, std.fs.path.basename(self.module.includes.keys()[markers[0].file_index]));
         {
             errdefer allocator.free(initial_name);
             try infos.append(allocator, DebugInfo.init(allocator, initial_name));
         }
         var info: *DebugInfo = &(infos.items[0]);
-        for (self.debug_markers.items, 0..) |d, ip| {
-            const end: u32 = @intCast(ip);
-            // File change: find or create DebugInfo for the new file.
-            if (file_index != d.file_index and d.file_index < self.module.includes.count()) {
-                try info.ranges.append(allocator, .{ .start = start, .end = end, .line = line });
-                line = d.line;
-                start = end;
-
-                file_index = d.file_index;
-                const name = std.fs.path.basename(self.module.includes.keys()[file_index]);
-                info = for (infos.items, 0..) |item, i| {
+        var current_file = markers[0].file_index;
+        for (markers, 0..) |m, i| {
+            const end: u32 = if (i + 1 < markers.len) markers[i + 1].ip else total_bytes;
+            if (m.file_index != current_file and m.file_index < self.module.includes.count()) {
+                current_file = m.file_index;
+                const name = std.fs.path.basename(self.module.includes.keys()[m.file_index]);
+                info = for (infos.items, 0..) |item, j| {
                     if (!std.mem.eql(u8, name, item.file)) continue;
-                    break &(infos.items[i]);
+                    break &(infos.items[j]);
                 } else blk: {
                     const new_file_name = try allocator.dupe(u8, name);
                     {
@@ -114,16 +116,9 @@ pub const Chunk = struct {
                     }
                     break :blk &(infos.items[infos.items.len - 1]);
                 };
-                continue;
             }
-            // Line change: append the prior range and start a new one.
-            if (d.line != line) {
-                try info.ranges.append(allocator, .{ .start = start, .end = end, .line = line });
-                line = d.line;
-                start = end;
-            }
+            try info.ranges.append(allocator, .{ .start = m.ip, .end = end, .line = m.line });
         }
-        try info.ranges.append(allocator, .{ .start = start, .end = @intCast(self.debug_markers.items.len), .line = line });
         return try infos.toOwnedSlice(allocator);
     }
 
@@ -194,15 +189,23 @@ pub const Emitter = struct {
 
     pub fn writeOp(self: *Emitter, op: OpCode, token: Token) !void {
         var chunk = self.chunk;
-        chunk.last_op_pos = chunk.instructions.items.len;
-        try chunk.debug_markers.append(self.alloc, .{ .file_index = @intCast(token.file_index), .line = @intCast(token.line) });
+        const ip: u32 = @intCast(chunk.instructions.items.len);
+        const file_index: u32 = @intCast(token.file_index);
+        const line: u32 = @intCast(token.line);
+        const start_run = chunk.debug_markers.items.len == 0 or
+            chunk.debug_markers.items[chunk.debug_markers.items.len - 1].file_index != file_index or
+            chunk.debug_markers.items[chunk.debug_markers.items.len - 1].line != line;
+        if (start_run) {
+            try chunk.debug_markers.append(self.alloc, .{ .ip = ip, .file_index = file_index, .line = line });
+        }
+        chunk.last_op_pos = ip;
         try chunk.instructions.append(self.alloc, @intFromEnum(op));
     }
 
-    pub fn writeValue(self: *Emitter, buf: []const u8, token: Token) !void {
-        var chunk = self.chunk;
-        try chunk.debug_markers.appendNTimes(self.alloc, .{ .file_index = @intCast(token.file_index), .line = @intCast(token.line) }, buf.len);
-        try chunk.instructions.appendSlice(self.alloc, buf);
+    pub fn writeValue(self: *Emitter, buf: []const u8, _: Token) !void {
+        // Operand bytes inherit the most-recent marker, the surrounding
+        // op already pushed (or merged into) a run.
+        try self.chunk.instructions.appendSlice(self.alloc, buf);
     }
 
     pub fn writeInt(self: *Emitter, comptime T: type, value: T, token: Token) !usize {
@@ -246,7 +249,14 @@ pub const Emitter = struct {
         if (try self.lastIs(op)) {
             const pos = self.chunk.last_op_pos.?;
             self.chunk.instructions.items.len = pos;
-            self.chunk.debug_markers.items.len = pos;
+            // Drop any trailing markers whose run starts at or after
+            // the removed op. Usually that's at most one (this op
+            // started its own run); a continuation op pushed no marker
+            // and leaves the prior run intact.
+            const markers = &self.chunk.debug_markers;
+            while (markers.items.len > 0 and markers.items[markers.items.len - 1].ip >= pos) {
+                _ = markers.pop();
+            }
             self.chunk.last_op_pos = null;
         }
     }
