@@ -256,11 +256,19 @@ pub const Bytecode = struct {
                 .dialogue => {
                     const has_speaker = instructions[i] == 1;
                     i += 1;
+                    var speaker_idx: ?C.CONSTANT = null;
+                    if (has_speaker) {
+                        speaker_idx = std.mem.readVarInt(C.CONSTANT, instructions[i..(i + 4)], .little);
+                        i += 4;
+                    }
                     const tag_start = std.mem.readVarInt(C.CONSTANT, instructions[i..(i + 4)], .little);
                     i += 4;
                     const tag_count = instructions[i];
                     i += 1;
-                    try writer.print("{: >8} tags: [{d}..{d})", .{ has_speaker, tag_start, tag_start + tag_count });
+                    if (speaker_idx) |s|
+                        try writer.print("{: >8} speaker: {d}, tags: [{d}..{d})", .{ has_speaker, s, tag_start, tag_start + tag_count })
+                    else
+                        try writer.print("{: >8} tags: [{d}..{d})", .{ has_speaker, tag_start, tag_start + tag_count });
                 },
                 .choice => {
                     const dest = std.mem.readVarInt(C.JUMP, instructions[i..(i + 4)], .little);

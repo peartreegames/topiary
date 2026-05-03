@@ -315,18 +315,24 @@ pub const Emitter = struct {
         return i;
     }
 
+    /// Lookup-or-insert an identifier name in the constant pool and return
+    /// its index. Does NOT emit any opcode — used by callers that want the
+    /// index inline in another op's operands.
+    pub fn getOrAddIdentifierConstant(self: *Emitter, arena_alloc: std.mem.Allocator, name: []const u8) !C.CONSTANT {
+        if (self.constants_map.get(name)) |i| return i;
+        try self.constants_map.ensureUnusedCapacity(arena_alloc, 1);
+        const key = try arena_alloc.dupe(u8, name);
+        const i = try self.addConstant(.{ .const_string = name });
+        self.constants_map.putAssumeCapacityNoClobber(key, i);
+        return i;
+    }
+
     /// Emit a `.constant <idx>` opcode for an identifier name, registering
     /// a string constant for it on first use.
     pub fn addIdentifierConstant(self: *Emitter, arena_alloc: std.mem.Allocator, name: []const u8, token: Token) !void {
-        var i = self.constants_map.get(name);
-        if (i == null) {
-            try self.constants_map.ensureUnusedCapacity(arena_alloc, 1);
-            const key = try arena_alloc.dupe(u8, name);
-            i = try self.addConstant(.{ .const_string = name });
-            self.constants_map.putAssumeCapacityNoClobber(key, i.?);
-        }
+        const i = try self.getOrAddIdentifierConstant(arena_alloc, name);
         try self.writeOp(.constant, token);
-        _ = try self.writeInt(C.CONSTANT, i.?, token);
+        _ = try self.writeInt(C.CONSTANT, i, token);
     }
 
     pub fn replaceConstant(self: *Emitter, name: []const u8, value: Value) error{ConstantNotFound}!void {

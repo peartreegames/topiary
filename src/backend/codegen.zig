@@ -405,11 +405,13 @@ pub const Codegen = struct {
             if (i == 0) tag_start = idx;
         }
         _ = try self.emitLocString(line.segments, line.uuid, token);
+        var speaker_idx: ?C.CONSTANT = null;
         if (line.speaker) |speaker| {
-            try self.emitter.addIdentifierConstant(self.arena.allocator(), speaker, token);
+            speaker_idx = try self.emitter.getOrAddIdentifierConstant(self.arena.allocator(), speaker);
         }
         try self.emitter.writeOp(.dialogue, token);
-        _ = try self.emitter.writeInt(u8, if (line.speaker == null) 0 else 1, token);
+        _ = try self.emitter.writeInt(u8, if (speaker_idx == null) 0 else 1, token);
+        if (speaker_idx) |idx| _ = try self.emitter.writeInt(C.CONSTANT, idx, token);
         _ = try self.emitter.writeInt(C.CONSTANT, tag_start, token);
         _ = try self.emitter.writeInt(u8, @intCast(line.tags.len), token);
     }

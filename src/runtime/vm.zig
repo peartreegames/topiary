@@ -1078,16 +1078,16 @@ pub const Vm = struct {
                 },
                 .dialogue => {
                     const has_speaker = self.takeInt(u8) == 1;
-                    const tag_start = self.takeInt(C.CONSTANT);
-                    const tag_count = self.takeInt(u8);
-
                     var speaker: ?[]const u8 = null;
                     if (has_speaker) {
-                        const speaker_value = try self.pop();
-                        const str = speaker_value.asString() orelse
-                            return self.fail("Speaker id must be of type string, but found '{s}'", .{speaker_value.typeName()});
-                        speaker = str;
+                        const idx = self.takeInt(C.CONSTANT);
+                        const entry = self.bytecode.constants[idx];
+                        if (entry != .const_string)
+                            return self.fail("Internal error: speaker pool entry must be const_string, found '{s}'", .{entry.typeName()});
+                        speaker = entry.const_string;
                     }
+                    const tag_start = self.takeInt(C.CONSTANT);
+                    const tag_count = self.takeInt(u8);
 
                     const dialogue_value = try self.pop();
                     const dialogue_str = dialogue_value.asString() orelse return self.fail("Dialogue must be of type string, but found '{s}'", .{dialogue_value.typeName()});
