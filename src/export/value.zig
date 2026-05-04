@@ -69,8 +69,7 @@ pub const ExportValue = extern struct {
                     break :blk .{ .tag = Tag.set, .data = .{ .list = .{ .items = list.ptr, .count = @intCast(list.len) } } };
                 },
                 .map => |m| blk: {
-                    const count = m.count();
-                    const list = allocator.alloc(ExportValue, count * 2) catch return Nil;
+                    const list = allocator.alloc(ExportValue, m.count() * 2) catch return Nil;
                     var it = m.iterator();
                     var i: usize = 0;
                     while (it.next()) |kvp| {
@@ -78,7 +77,7 @@ pub const ExportValue = extern struct {
                         list[i + 1] = fromValue(kvp.value_ptr.*, allocator);
                         i += 2;
                     }
-                    break :blk .{ .tag = Tag.map, .data = .{ .list = .{ .items = list.ptr, .count = @intCast(count) } } };
+                    break :blk .{ .tag = Tag.map, .data = .{ .list = .{ .items = list.ptr, .count = @intCast(list.len) } } };
                 },
                 else => Nil,
             },
@@ -217,8 +216,7 @@ pub const ExportValue = extern struct {
     pub fn deinit(self: *const ExportValue, allocator: std.mem.Allocator) void {
         switch (self.tag) {
             .list, .set, .map => {
-                var count = self.data.list.count;
-                if (self.tag == .map) count *= 2;
+                const count = self.data.list.count;
                 for (self.data.list.items[0..count]) |item| {
                     item.deinit(allocator);
                 }
