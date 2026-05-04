@@ -250,60 +250,19 @@ This is more verbose, but it produces better translations — in French,
 "Good morning, how are you?" and "Good evening, how are you?" might use
 entirely different phrasing, not just a different greeting word.
 
-### Text variation (random, cycling, sequential)
+### Text variation
 
-For ambient text or narration that varies each time, use a counter variable
-and a `switch` so each variant has its own `@ID`:
+For ambient narration that varies (random, cycling, sequential), prefer
+the `switch` + counter pattern documented in
+[tips.md — Text variation](tips.md#text-variation-random-cycling-sequential)
+over the `cycle()` / `random()` / `sequence()` builtins. The builtins are
+fine for non-dialogue values (picking numbers, enum entries, objects),
+but for player-visible text only the `switch` form gives each variant its
+own `@ID` so translators can work with each line independently.
 
-```topi
-// cycle
-var wind_idx = 0
-=== CLIFFSIDE {
-    switch wind_idx {
-        0: :: "The wind howls through the rocks."@AAAAAAAA-BBBBBBBB,
-        1: :: "A gust rattles the shutters."@CCCCCCCC-DDDDDDDD,
-        2: :: "The wind shrieks like a wounded gull."@EEEEEEEE-FFFFFFFF
-    }
-    wind_idx = (wind_idx + 1) % 3
-}
-```
-
-For random selection, use `rnd()`:
-
-```topi
-// random
-var pick = rnd(0, 3)
-switch pick {
-    0: :: "Waves crash against the jetty."@11111111-22222222,
-    1: :: "The sea churns below."@33333333-44444444,
-    2: :: "Spray mists across the rocks."@55555555-66666666
-}
-```
-
-For a sequence that plays in order and sticks on the last entry:
-
-```topi
-// sequence
-var journal_idx = 0
-switch journal_idx {
-    0: :: "Day 12: The light must not go out."@AAAABBBB-CCCCDDDD,
-    1: :: "Day 19: Someone has been in the radio room."@EEEEFFFF-GGGGHHHH,
-    else: :: "Day 31: If you are reading this, I am already gone."@IIIIJJJJ-KKKKLLLL
-}
-if journal_idx < 2 journal_idx += 1
-```
-
-The `random()`, `cycle()`, `sequence()`, and `shuffle()` builtins are useful
-for non-dialogue values (game logic, selecting numbers or objects), but for
-player-visible text, prefer the `switch` pattern so each line is localizable.
-
-::: Note
-
-These patterns increase localized word count, but modern translation tools
-with translation memory and repetition analysis handle this well — similar
-lines are flagged as fuzzy matches and translate quickly.
-
-:::
+These patterns increase localized word count, but modern translation
+tools with translation memory and repetition analysis handle near-duplicates
+well — similar lines are flagged as fuzzy matches and translate quickly.
 
 ### Speaker names
 

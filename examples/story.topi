@@ -85,7 +85,7 @@ fn describeStorm || {
 === VILLAGE @3G1IO2ZG-FWH1O8YQ {
     storm = Storm.Rising
     :: "{describeStorm()}" @4I0SI7RW-85SNW4M2
-    if VILLAGE == 0 {
+    if VILLAGE == 1 {
         :: "A handful of stone cottages huddle against the wind." @J7MY7W3O-U4G0BABK
         :: "Smoke rises from only two chimneys." @5GRNJGK5-1BWGZFBY
     }
@@ -211,7 +211,7 @@ fn describeStorm || {
     else storm = Storm.Rising
     :: "{describeStorm()}" @PVLPV936-9WKRITSX
     cycle(wind_sounds)
-    if LIGHTHOUSE == 0 {
+    if LIGHTHOUSE == 1 {
         :: "The lighthouse is a white column scarred by salt and age." @ZKXF39GK-JN83L1H5
         :: "The front door is unlocked. Inside, the air smells of oil and damp paper." @MGIVUGCD-M81NT7KB
         explored.add("Lighthouse")
@@ -257,7 +257,7 @@ fn describeStorm || {
 
     // --- RADIO ROOM ---
     === RADIO_ROOM @6JUVM1UV-29KSOD8U {
-        if LIGHTHOUSE.RADIO_ROOM == 0 {
+        if LIGHTHOUSE.RADIO_ROOM == 1 {
             :: "The radio room is a mess. Papers scattered, dials smashed." @OUSTTUH8-ZEDH2MTE
             :: "Someone didn't want this radio working." @7DVLRS67-0N09MXAK
             evidence.add("sabotaged_radio", 3)
@@ -299,7 +299,7 @@ fn describeStorm || {
     === LANTERN_ROOM @7VUXS2XU-9IVEU3IA {
         :: "The spiral stairs groan under your weight." @HDVZ5UUU-W8PPHX54
         :: "At the top, the great lens turns slowly, casting light into the storm." @RKNGFI0F-DUXS7ICT
-        if LIGHTHOUSE.LANTERN_ROOM == 0 {
+        if LIGHTHOUSE.LANTERN_ROOM == 1 {
             :: "A journal lies open on the sill." @FO2Y896X-UU8W4AIO
             :: "You begin to read." #journal @FJBM6W1B-KU5UCZ8V
         }

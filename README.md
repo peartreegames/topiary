@@ -27,6 +27,7 @@ and select a choice with `0-9` then `enter`
 
 You can view a full breakdown in the [syntax](https://github.com/peartreegames/topiary/blob/main/docs/syntax.md) file,
 the [CLI reference](https://github.com/peartreegames/topiary/blob/main/docs/cli.md),
+[tips & tricks](https://github.com/peartreegames/topiary/blob/main/docs/tips.md) for writing patterns,
 and examples in the [example folder](https://github.com/peartreegames/topiary/tree/main/examples).
 
 Here you can see what writing in topi looks like
