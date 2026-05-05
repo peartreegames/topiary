@@ -65,15 +65,17 @@ pub const ExportLogger = struct {
 pub const ExportFunction = struct {
     func: Delegate,
     free: Free,
+    user_data: usize,
     vm: *Vm,
 
     pub const Free = *const fn (ptr: usize) callconv(.c) void;
-    pub const Delegate = *const fn (vm_ptr: usize, args: [*c]ExportValue, args_len: u8) callconv(.c) ExportValue;
+    pub const Delegate = *const fn (vm_ptr: usize, user_data: usize, args: [*c]ExportValue, args_len: u8) callconv(.c) ExportValue;
 
-    pub fn create(vm: *Vm, func: Delegate, free: Free) ExportFunction {
+    pub fn create(vm: *Vm, func: Delegate, user_data: usize, free: Free) ExportFunction {
         return .{
             .func = func,
             .free = free,
+            .user_data = user_data,
             .vm = vm,
         };
     }
@@ -98,7 +100,7 @@ pub const ExportFunction = struct {
             exp_args[i] = ExportValue.fromValue(args[i], arenaAlloc);
         }
         logger.log("Calling ExportFunction", .{}, .info);
-        var v = self.func(@intFromPtr(self.vm), exp_args.ptr, @intCast(exp_args.len));
+        var v = self.func(@intFromPtr(self.vm), self.user_data, exp_args.ptr, @intCast(exp_args.len));
         return v.toValue(self.vm, self.free) catch |err| {
             logger.log("Could not return value of extern function, returning null: {s}", .{@errorName(err)}, .err);
             return Nil;
@@ -142,8 +144,15 @@ pub const ExportRunner = struct {
     pub fn onLine(runner: *Runner, vm: *Vm, dialogue: *const Line) void {
         var self: *ExportRunner = @fieldParentPtr("runner", runner);
 
+        // tags_length is u8 (max 255) and the shared buffer caps at self.tags.len; truncate on overflow.
+        const tag_cap = @min(self.tags.len, std.math.maxInt(u8));
+        const tag_count = if (dialogue.tags.len > tag_cap) blk: {
+            self.logger.log("Line tags ({d}) exceed buffer capacity ({d}); truncating", .{ dialogue.tags.len, tag_cap }, .warn);
+            break :blk tag_cap;
+        } else dialogue.tags.len;
+
         var i: usize = 0;
-        while (i < dialogue.tags.len) : (i += 1) {
+        while (i < tag_count) : (i += 1) {
             self.tags[i] = .{ .ptr = dialogue.tags[i].ptr, .len = dialogue.tags[i].len };
         }
 
@@ -151,7 +160,7 @@ pub const ExportRunner = struct {
             .content = .{ .ptr = dialogue.content.ptr, .len = dialogue.content.len },
             .speaker = if (dialogue.speaker) |s| .{ .ptr = s.ptr, .len = s.len } else .{ .ptr = "".ptr, .len = 0 },
             .tags = &self.tags,
-            .tags_length = @intCast(dialogue.tags.len),
+            .tags_length = @intCast(tag_count),
         };
         self.logger.log("Line:{s}: {s} {f}", .{ dialogue.speaker orelse "", dialogue.content, fmt.array("#{s}",dialogue.tags) }, .debug);
         self.on_line(@intFromPtr(vm), &self.dialogue);
@@ -170,7 +179,14 @@ pub const ExportRunner = struct {
         while (i < choices.len) : (i += 1) {
             var t: usize = 0;
             const t_start = t_count;
-            while (t < choices[i].tags.len) : (t += 1) {
+            // tags_length is u8 and self.tags is shared across all choices in this batch; truncate on overflow.
+            const remaining = self.tags.len - t_count;
+            const per_choice_cap = @min(remaining, std.math.maxInt(u8));
+            const choice_tag_count = if (choices[i].tags.len > per_choice_cap) blk: {
+                self.logger.log("Choice tags ({d}) exceed remaining buffer capacity ({d}); truncating", .{ choices[i].tags.len, per_choice_cap }, .warn);
+                break :blk per_choice_cap;
+            } else choices[i].tags.len;
+            while (t < choice_tag_count) : (t += 1) {
                 self.tags[t_count + t] = .{ .ptr = choices[i].tags[t].ptr, .len = choices[i].tags[t].len };
             }
             t_count += t;
@@ -180,7 +196,7 @@ pub const ExportRunner = struct {
             result[i] = .{
                 .content = .{ .ptr = content.ptr, .len = content.len },
                 .tags = self.tags[t_start..t_count].ptr,
-                .tags_length = @intCast(choices[i].tags.len),
+                .tags_length = @intCast(choice_tag_count),
                 .visit_count = @intCast(choices[i].visit_count),
                 .ip = choices[i].ip,
             };

@@ -21,6 +21,26 @@ const ExportChoice = export_runner.ExportChoice;
 var alloc = std.heap.smp_allocator;
 const io = std.Io.Threaded.global_single_threaded.io();
 
+/// Override the default panic handler so the host can log a final message
+/// before the process aborts. After invoking the registered handler (if any),
+/// chains to `defaultPanic` which dumps a trace and aborts.
+pub const Panic = std.debug.FullPanic(panicImpl);
+
+const PanicHandler = *const fn (msg_ptr: [*]const u8, msg_len: usize) callconv(.c) void;
+var registered_panic: ?PanicHandler = null;
+
+fn panicImpl(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    if (registered_panic) |h| h(msg.ptr, msg.len);
+    std.debug.defaultPanic(msg, first_trace_addr);
+}
+
+/// Register a process-wide panic handler. Pass null to clear.
+/// The handler runs in undefined-state context: it must not allocate,
+/// must not re-enter Topi, and should do the minimum (log + return).
+pub export fn setPanicHandler(handler_ptr: ?*const anyopaque) void {
+    registered_panic = if (handler_ptr) |p| @ptrCast(@alignCast(p)) else null;
+}
+
 /// Used to pre-calculate the size required
 /// for a compiled topi module
 pub export fn calculateCompileSize(path_ptr: [*:0]const u8, log_ptr: *const anyopaque, log_severity: u8) usize {
@@ -163,7 +183,7 @@ pub export fn selectChoice(vm_ptr: *anyopaque, index: usize) void {
     vm.selectChoice(index) catch runner.logger.log("Invalid choice", .{}, .err);
 }
 
-pub export fn setExternFunc(vm_ptr: *anyopaque, name_ptr: [*:0]const u8, value_ptr: *const anyopaque, arity: u8, free_ptr: *const anyopaque) void {
+pub export fn setExternFunc(vm_ptr: *anyopaque, name_ptr: [*:0]const u8, value_ptr: *const anyopaque, arity: u8, user_data: usize, free_ptr: *const anyopaque) void {
     var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
     const logger = runner.logger;
@@ -173,9 +193,10 @@ pub export fn setExternFunc(vm_ptr: *anyopaque, name_ptr: [*:0]const u8, value_p
         logger.log("Could not allocate ExportFunction '{s}': {s}", .{ name, @errorName(err) }, .err);
         return;
     };
-    wrapper.* = ExportFunction.create(vm, @ptrCast(@alignCast(value_ptr)), @ptrCast(@alignCast(free_ptr)));
+    wrapper.* = ExportFunction.create(vm, @ptrCast(@alignCast(value_ptr)), user_data, @ptrCast(@alignCast(free_ptr)));
     vm.setExtern(name, arity, wrapper, ExportFunction.call, ExportFunction.destroy) catch |err| {
         logger.log("Could not set extern fn '{s}': {s}", .{ name, @errorName(err) }, .err);
+        vm.alloc.destroy(wrapper);
     };
 }
 
@@ -286,7 +307,7 @@ pub export fn saveStateFile(vm_ptr: *anyopaque, path_ptr: [*:0]const u8) bool {
     return true;
 }
 
-pub export fn saveState(vm_ptr: *anyopaque, out_ptr: [*:0]u8, max: usize) usize {
+pub export fn saveState(vm_ptr: *anyopaque, out_ptr: [*]u8, max: usize) usize {
     const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     var fbs = std.Io.Writer.fixed(out_ptr[0..max]);
     State.serialize(vm, &fbs) catch |err| {

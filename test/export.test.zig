@@ -80,8 +80,8 @@ const TestRunner = struct {
         std.c.free(@ptrFromInt(ptr));
     }
 
-    // *const fn (vm_ptr: *anyopaque, args: [*c]ExportValue, args_len: u8) callconv(.c) ExportValue;
-    pub fn sum(_: usize, args: [*c]ExportValue, _: u8) callconv(.c) ExportValue {
+    // *const fn (vm_ptr: usize, user_data: usize, args: [*c]ExportValue, args_len: u8) callconv(.c) ExportValue;
+    pub fn sum(_: usize, _: usize, args: [*c]ExportValue, _: u8) callconv(.c) ExportValue {
         const arg1 = args[0].data.number;
         const arg2 = args[1].data.number;
         output.append(allocator, std.fmt.allocPrint(allocator, "extern sum {d} + {d} = {d}", .{ arg1, arg2, arg1 + arg2 }) catch unreachable) catch unreachable;
@@ -90,7 +90,7 @@ const TestRunner = struct {
 
     /// Extern function that returns a string ExportValue allocated with C malloc.
     /// Tests the string ownership path: toValue dupes the string then calls free.
-    pub fn greet(_: usize, _: [*c]ExportValue, _: u8) callconv(.c) ExportValue {
+    pub fn greet(_: usize, _: usize, _: [*c]ExportValue, _: u8) callconv(.c) ExportValue {
         const greeting = "hello from C";
         const ptr: [*]u8 = @ptrCast(std.c.malloc(greeting.len) orelse unreachable);
         @memcpy(ptr[0..greeting.len], greeting);
@@ -150,7 +150,7 @@ test "Export Create and Destroy Vm" {
 
     defer main.destroyVm(vm_ptr);
     const free_ptr: *const anyopaque = @ptrCast(&TestRunner.free);
-    main.setExternFunc(vm_ptr, "sum", @ptrCast(&TestRunner.sum), 2, free_ptr);
+    main.setExternFunc(vm_ptr, "sum", @ptrCast(&TestRunner.sum), 2, 0, free_ptr);
 
     const list_name = "list";
     _ = main.subscribe(vm_ptr, list_name);
@@ -383,7 +383,7 @@ test "Export Extern Function Returning String" {
 
     TestRunner.free_called = false;
     const free_ptr: *const anyopaque = @ptrCast(&TestRunner.free);
-    main.setExternFunc(vm_ptr, "greet", @ptrCast(&TestRunner.greet), 0, free_ptr);
+    main.setExternFunc(vm_ptr, "greet", @ptrCast(&TestRunner.greet), 0, 0, free_ptr);
 
     main.start(vm_ptr, "");
     const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
