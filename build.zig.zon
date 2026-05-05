@@ -1,7 +1,7 @@
 .{
     .name = .topiary,
     .fingerprint = 0xbed0bd749e79c511,
-    .version = "0.21.2",
+    .version = "0.22.0",
     .paths = .{""},
     .dependencies = .{},
 }
