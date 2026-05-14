@@ -105,8 +105,7 @@ Choices can be unique with `~*`, disappearing once selected.
 }
 ```
 
-Use `fork<` when you want the player to pick through several questions or actions in any order.
-Spoke choices use `=>^` to ask their question and come back; the leave choice uses a plain `=>` to walk away.
+Use `fork<` when you want the player to pick through several questions or actions in any order then come back.
 
 ```topi
 === STUDY {
@@ -126,13 +125,10 @@ Spoke choices use `=>^` to ask their question and come back; the leave choice us
 }
 ```
 
-The `<` reads as "back into the fork." The fork re-enters only when a choice's own body runs to its end —
-`=>^` returns into the body and falls through, so the cycle continues;
-a plain `=>` leaves the body before its end is reached, so the player simply walks on into whatever the divert points to.
-Each `~*` question is removed once it's been asked, and the plain `~` "That will be all." stays available so a player can pick it to leave.
+The `<` reads as "back into the fork." The fork re-enters only when a choice's own body runs to its end.
+So in the above example the divert backup `=>^` returns into the choice body, so the cycle continues.
 
-If you leave off the `~` choice, the fork ends on its own once every `~*` has been used. 
-The compiler warns about this so it stays a deliberate choice.
+A plain divert `=>` leaves the body before its end is reached, so the player simply walks on into whatever the divert points to.
 
 ### Visits
 
