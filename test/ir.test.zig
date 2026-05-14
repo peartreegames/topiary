@@ -148,6 +148,211 @@ test "lower backup divert produces backup_divert kind" {
     try testing.expect(bough_a.body[1].kind == .backup_divert);
 }
 
+test "lower cycle fork produces cycle_fork kind" {
+    var result = try lowerSource(
+        \\=== HUB {
+        \\    fork< MENU {
+        \\        ~* "[A]" => A
+        \\        ~* "[B]" => B
+        \\        ~ "[Leave]" => OUT
+        \\    }
+        \\}
+        \\=== A { => HUB }
+        \\=== B { => HUB }
+        \\=== OUT { fin }
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+
+    const hub = program.body[0].kind.bough;
+    // hub.body = [Visit, cycle_fork]
+    try testing.expect(hub.body[1].kind == .cycle_fork);
+}
+
+fn parseSourceCheckingError(source: []const u8, needle: []const u8) !bool {
+    const mod = try Module.initEmpty(allocator, std.testing.io);
+    defer mod.deinit();
+    const file = try mod.arena.allocator().create(File);
+    file.* = .{
+        .module = mod,
+        .path = "_test_",
+        .name = "_test_",
+        .dir_name = ".",
+        .source = source,
+    };
+    mod.entry = file;
+    try mod.includes.putNoClobber(allocator, file.path, file);
+    // Allow parser errors -- we want to inspect the diagnostics, not bail.
+    file.buildTree() catch {};
+    for (mod.errors.list.items) |e| {
+        if (std.mem.indexOf(u8, e.fmt, needle) != null) return true;
+    }
+    return false;
+}
+
+test "parser rejects fork^<" {
+    try testing.expect(try parseSourceCheckingError(
+        \\=== A {
+        \\    fork^< {
+        \\        ~ "x" => A
+        \\    }
+        \\}
+    , "'fork^<' is not a valid form"));
+}
+
+test "parser rejects fork<^" {
+    try testing.expect(try parseSourceCheckingError(
+        \\=== A {
+        \\    fork<^ {
+        \\        ~ "x" => A
+        \\    }
+        \\}
+    , "'fork<^' is not a valid form"));
+}
+
+test "diagnostic: fork< without hard divert warns about no exit" {
+    var result = try lowerSource(
+        \\=== HUB {
+        \\    fork< MENU {
+        \\        ~* "[A]" =>^ A
+        \\        ~* "[B]" =>^ B
+        \\    }
+        \\}
+        \\=== A { :Speaker: "a" }
+        \\=== B { :Speaker: "b" }
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "'fork<' has no choice with a hard divert ('=>') or 'fin'", .warn));
+}
+
+test "diagnostic: fork< with hard divert silences the no-exit warning" {
+    var result = try lowerSource(
+        \\=== HUB {
+        \\    fork< MENU {
+        \\        ~* "[A]" =>^ A
+        \\        ~ "[Leave]" => OUT
+        \\    }
+        \\}
+        \\=== A { :Speaker: "a" }
+        \\=== OUT { :Speaker: "bye" }
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "'fork<' has no choice with a hard divert ('=>') or 'fin'", .warn));
+}
+
+test "diagnostic: fork< no-exit check uses divert kind, not uniqueness" {
+    // A unique `~*` with a hard `=>` counts as an exit; a non-unique `~`
+    // with a backup `=>^` does not.
+    var result = try lowerSource(
+        \\=== HUB {
+        \\    fork< MENU {
+        \\        ~* "[Exit]" => OUT
+        \\        ~ "[Return]" =>^ HELPER
+        \\    }
+        \\}
+        \\=== OUT { :Speaker: "bye" }
+        \\=== HELPER { :Speaker: "still here" }
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "'fork<' has no choice with a hard divert ('=>') or 'fin'", .warn));
+}
+
+test "diagnostic: fork< with fin in a choice body silences the no-exit warning" {
+    // `fin` is a valid way to leave the cycle, so it should count as an
+    // explicit exit.
+    var result = try lowerSource(
+        \\=== HUB {
+        \\    fork< MENU {
+        \\        ~* "[Ask]" =>^ HELPER
+        \\        ~ "[End]" { :Speaker: "Done." fin }
+        \\    }
+        \\}
+        \\=== HELPER { :Speaker: "still here" }
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "'fork<' has no choice with a hard divert ('=>') or 'fin'", .warn));
+}
+
+test "diagnostic: fork< with all-unique choices warns about exhaustion fin" {
+    // Even with a hard exit in one branch, re-entering the fork from
+    // outside after that exit's been used would leave nothing.
+    var result = try lowerSource(
+        \\=== HUB {
+        \\    fork< MENU {
+        \\        ~* "[A]" =>^ A
+        \\        ~* "[Leave]" => OUT
+        \\    }
+        \\}
+        \\=== A { :Speaker: "a" }
+        \\=== OUT { :Speaker: "bye" }
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "every choice in this 'fork<' is unique", .warn));
+}
+
+test "diagnostic: plain fork with all-unique choices warns" {
+    // The same hazard applies to plain `fork` if it ever gets re-entered.
+    var result = try lowerSource(
+        \\=== HUB {
+        \\    fork CHOOSE {
+        \\        ~* "[A]" => A
+        \\        ~* "[B]" => B
+        \\    }
+        \\}
+        \\=== A { :Speaker: "a" }
+        \\=== B { :Speaker: "b" }
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "every choice in this fork is unique", .warn));
+}
+
+test "diagnostic: fork^ with all-unique choices warns" {
+    var result = try lowerSource(
+        \\=== HUB {
+        \\    fork^ CHOOSE {
+        \\        ~* "[A]" =>^ A
+        \\        ~* "[B]" =>^ B
+        \\    }
+        \\}
+        \\=== A { :Speaker: "a" }
+        \\=== B { :Speaker: "b" }
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "every choice in this fork is unique", .warn));
+}
+
+test "diagnostic: fork with a ~ choice does not trigger the unique warning" {
+    var result = try lowerSource(
+        \\=== HUB {
+        \\    fork CHOOSE {
+        \\        ~* "[Once]" => A
+        \\        ~ "[Anytime]" => B
+        \\    }
+        \\}
+        \\=== A { :Speaker: "a" }
+        \\=== B { :Speaker: "b" }
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(!hasError(result.mod, "every choice in this fork is unique", .warn));
+}
+
 test "lower interpolated string produces segments" {
     var result = try lowerSource(
         \\var name = "World"
@@ -731,6 +936,24 @@ test "diagnostic: dot-access on number rejects field access" {
         \\var n = 1
         \\=== Main {
         \\    var z = n.foo
+        \\    fin
+        \\}
+    );
+    defer result.mod.deinit();
+    var program = result.program;
+    defer program.deinit();
+    try testing.expect(hasError(result.mod, "Cannot access field 'foo' on a number", .err));
+}
+
+test "diagnostic: chained dot-access through instance field rejects field on number" {
+    // `c.x` is a number (per the class default), so `c.x.foo` is a field
+    // access on a number and must be rejected at compile time. This used
+    // to slip through because `.field` exprs had var_type = .unknown.
+    var result = try lowerSource(
+        \\class C { x = 0 }
+        \\var c = new C{}
+        \\=== Main {
+        \\    var z = c.x.foo
         \\    fin
         \\}
     );

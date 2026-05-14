@@ -105,6 +105,35 @@ Choices can be unique with `~*`, disappearing once selected.
 }
 ```
 
+Use `fork<` when you want the player to pick through several questions or actions in any order.
+Spoke choices use `=>^` to ask their question and come back; the leave choice uses a plain `=>` to walk away.
+
+```topi
+=== STUDY {
+    :Detective: "Lady Margery. A few questions, if I may."
+    fork< QUESTIONS {
+        ~* "Where were you at midnight?" =>^ ALIBI
+        ~* "What do you know of the poison?" =>^ POISON
+        ~* "Tell me about the will." =>^ WILL
+        ~  "That will be all." => GARDEN_PATH
+    }
+}
+=== ALIBI  { :Lady_Margery: "In the conservatory, as I said." }
+=== POISON { :Lady_Margery: "I use that for the slugs, nothing more." }
+=== WILL   { :Lady_Margery: "My husband's affairs were his own." }
+=== GARDEN_PATH {
+    :Detective: "I'll see myself out."
+}
+```
+
+The `<` reads as "back into the fork." The fork re-enters only when a choice's own body runs to its end —
+`=>^` returns into the body and falls through, so the cycle continues;
+a plain `=>` leaves the body before its end is reached, so the player simply walks on into whatever the divert points to.
+Each `~*` question is removed once it's been asked, and the plain `~` "That will be all." stays available so a player can pick it to leave.
+
+If you leave off the `~` choice, the fork ends on its own once every `~*` has been used. 
+The compiler warns about this so it stays a deliberate choice.
+
 ### Visits
 
 Use paths to check how many times a player has visited a location or made a choice.

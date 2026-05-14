@@ -38,7 +38,7 @@ fn dumpStmt(stmt: *const ir.Stmt, writer: *std.Io.Writer, depth: usize) !void {
             });
             for (c.body) |s| try dumpStmt(&s, writer, depth + 1);
         },
-        .fork, .backup_fork => |f| {
+        .fork, .backup_fork, .cycle_fork => |f| {
             try writer.print(" name={s} path={s}\n", .{
                 f.name orelse "(anon)",
                 f.anchor.path,

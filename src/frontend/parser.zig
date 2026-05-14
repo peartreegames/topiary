@@ -913,10 +913,17 @@ pub const Parser = struct {
 
         var name: ?[]const u8 = null;
         var is_backup: bool = false;
+        var is_cycle: bool = false;
         if (self.currentIs(.caret)) {
             end_token = self.current_token;
             is_backup = true;
             self.next();
+            if (self.currentIs(.less)) return self.fail("'fork^<' is not a valid form. Use 'fork^' or 'fork<' but not both.", self.current_token, .{});
+        } else if (self.currentIs(.less)) {
+            end_token = self.current_token;
+            is_cycle = true;
+            self.next();
+            if (self.currentIs(.caret)) return self.fail("'fork<^' is not a valid form. Use 'fork^' or 'fork<' but not both.", self.current_token, .{});
         }
         if (self.currentIs(.identifier)) {
             end_token = self.current_token;
@@ -941,6 +948,7 @@ pub const Parser = struct {
                     .end_token = end_token,
                     .body = try self.block(),
                     .is_backup = is_backup,
+                    .is_cycle = is_cycle,
                 },
             },
         };

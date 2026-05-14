@@ -1665,6 +1665,92 @@ test "Runtime Jump Backups" {
     }
 }
 
+test "Runtime Cycling Fork" {
+    // fork< re-enters only when a choice body itself falls through to its
+    // terminus. Spoke choices use `=>^` to come back to the body (and
+    // re-enter the cycle from there). The `~` leave option uses a hard
+    // `=>` which jumps out of the body before the terminus, so the cycle
+    // is not re-entered -- the leave bough's natural end terminates the
+    // VM cleanly without needing `fin`.
+    const input =
+        \\ === HUB {
+        \\     fork< MENU {
+        \\         ~* "[Ask Kovac]" =>^ ASK_KOVAC
+        \\         ~* "[Ask Reyes]" =>^ ASK_REYES
+        \\         ~ "[Leave]" => OUT
+        \\     }
+        \\ }
+        \\ === ASK_KOVAC {
+        \\     :K: "Kovac reply"
+        \\ }
+        \\ === ASK_REYES {
+        \\     :R: "Reyes reply"
+        \\ }
+        \\ === OUT {
+        \\     :O: "Goodbye"
+        \\ }
+        \\ => HUB
+    ;
+    var mod = try Module.initEmpty(allocator, std.testing.io);
+    defer mod.deinit();
+    var vm = try initTestVm(input, mod, false);
+    defer vm.deinit();
+    const test_runner: *TestRunner = @fieldParentPtr("runner", vm.runner);
+    defer test_runner.deinit();
+    defer vm.bytecode.free(testing.allocator);
+
+    // Pick 0 each time: first cycle picks Kovac (index 0 of [Kovac, Reyes, Leave]),
+    // second cycle picks Reyes (index 0 of [Reyes, Leave] -- Kovac was filtered),
+    // third cycle picks Leave (index 0 of [Leave]).
+    try test_runner.choices_to_make.appendSlice(allocator, &[_]usize{ 0, 0, 0 });
+
+    vm.interpret() catch |err| {
+        std.debug.print("{s}\n", .{input});
+        try printBytecode(&vm.bytecode);
+        printErr(&vm);
+        return err;
+    };
+    try test_runner.expectOutput(&[_][]const u8{ "Kovac reply", "Reyes reply", "Goodbye" });
+}
+
+test "Runtime Cycling Fork Fins When Exhausted" {
+    // fork< with only ~* choices and no ~: spokes use `=>^` so each
+    // choice body falls through after the spoke returns, re-entering the
+    // fork. Once all `~*` are consumed, the next .cycle_fork sees an
+    // empty list and ends as `fin`.
+    const input =
+        \\ === HUB {
+        \\     fork< MENU {
+        \\         ~* "[A]" =>^ GO_A
+        \\         ~* "[B]" =>^ GO_B
+        \\     }
+        \\     :End: "should not reach here"
+        \\ }
+        \\ === GO_A { :Speaker: "A body" }
+        \\ === GO_B { :Speaker: "B body" }
+        \\ => HUB
+    ;
+    var mod = try Module.initEmpty(allocator, std.testing.io);
+    defer mod.deinit();
+    var vm = try initTestVm(input, mod, false);
+    defer vm.deinit();
+    const test_runner: *TestRunner = @fieldParentPtr("runner", vm.runner);
+    defer test_runner.deinit();
+    defer vm.bytecode.free(testing.allocator);
+
+    try test_runner.choices_to_make.appendSlice(allocator, &[_]usize{ 0, 0 });
+
+    vm.interpret() catch |err| {
+        std.debug.print("{s}\n", .{input});
+        try printBytecode(&vm.bytecode);
+        printErr(&vm);
+        return err;
+    };
+    // Two choice bodies run, then the fork fins -- the line after the
+    // fork must NOT execute (the cycle_fork ends as fin, not falls through).
+    try test_runner.expectOutput(&[_][]const u8{ "A body", "B body" });
+}
+
 test "Runtime Backup Mixed" {
     // Exercises .backup_fork and .backup_divert in the same run, the
     // two opcodes the v3 split replaces .backup with.

@@ -155,6 +155,7 @@ pub const Formatter = struct {
                 try self.writeIndent();
                 try self.write("fork");
                 if (f.is_backup) try self.write("^");
+                if (f.is_cycle) try self.write("<");
                 if (f.name) |name| {
                     try self.write(" ");
                     try self.write(name);

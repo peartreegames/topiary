@@ -69,6 +69,12 @@ pub const Codegen = struct {
     emitter: Emitter,
     program: *const ir.Program,
     module: *Module,
+    /// IP of the loop-back target for the innermost enclosing `fork<`.
+    /// When set, `compileChoice` emits `.jump cycle_loop_start` at the
+    /// choice body's terminus instead of `.end`, so a choice body that
+    /// runs to completion re-enters the cycling fork. Hard `=>` diverts
+    /// jump away before the terminus and never re-enter.
+    cycle_loop_start: ?C.JUMP = null,
 
     pub fn emit(
         alloc: std.mem.Allocator,
@@ -190,7 +196,7 @@ pub const Codegen = struct {
                 try self.registerAnchor(b.anchor.path, b.uuid, b.anchor.visit_index.?);
                 for (b.body) |*s| try self.prepass(s);
             },
-            .fork, .backup_fork => |f| {
+            .fork, .backup_fork, .cycle_fork => |f| {
                 try self.registerAnchor(f.anchor.path, f.uuid, f.anchor.visit_index.?);
                 for (f.body) |*s| try self.prepass(s);
             },
@@ -290,8 +296,9 @@ pub const Codegen = struct {
             .enum_decl => |e| try self.compileEnumStmt(e, token),
             .line => |l| try self.compileLine(l, token),
             .choice => |c| try self.compileChoice(c, token),
-            .fork => |f| try self.compileFork(f, false, token),
-            .backup_fork => |f| try self.compileFork(f, true, token),
+            .fork => |f| try self.compileFork(f, .normal, token),
+            .backup_fork => |f| try self.compileFork(f, .backup, token),
+            .cycle_fork => |f| try self.compileFork(f, .cycle, token),
             .divert => |d| try self.compileDivert(d, false, token),
             .backup_divert => |d| try self.compileDivert(d, true, token),
             .bough => |b| try self.compileBough(b, token),
@@ -446,25 +453,59 @@ pub const Codegen = struct {
         // (lower.zig:lowerChoiceStmt), so we don't auto-emit one here —
         // descending into body covers it.
         for (c.body) |*s| try self.compileStmt(s);
-        try self.emitter.writeOp(.end, token);
+        if (self.cycle_loop_start) |loop_start| {
+            // Inside a `fork<`: the body falling through means we re-enter
+            // the cycle. Hard `=>` inside the body jumps away first and
+            // never reaches here, so it exits the cycle as intended.
+            try self.emitter.writeOp(.jump, token);
+            _ = try self.emitter.writeInt(C.JUMP, loop_start, token);
+        } else {
+            try self.emitter.writeOp(.end, token);
+        }
         try self.emitter.patchJump(end_jp);
     }
 
-    fn compileFork(self: *Codegen, f: ir.Fork, is_backup: bool, token: Token) Error!void {
+    const ForkKind = enum { normal, backup, cycle };
+
+    fn compileFork(self: *Codegen, f: ir.Fork, kind: ForkKind, token: Token) Error!void {
         const anchor_idx = try self.anchorIdx(f.anchor.path);
         const start_pos = self.emitter.instructionPos();
         self.emitter.constants.items[anchor_idx].obj.data.anchor.ip = start_pos;
         try self.compileVisit(anchor_idx, token);
 
+        // For cycling forks, choices are re-emitted on every iteration so
+        // their `~*` filter naturally drops consumed choices. The loop
+        // edge points just past `.visit ANCHOR` — visit runs once on
+        // first entry, but the anchor stays on the stack across cycles.
+        const loop_start = self.emitter.instructionPos();
+
+        // Make the loop-back target visible to nested `compileChoice` calls
+        // so they can emit `.jump loop_start` at each choice body terminus.
+        // Restore on the way out so nested non-cycling forks see the
+        // correct enclosing context (or null at top level).
+        const prev_cycle = self.cycle_loop_start;
+        self.cycle_loop_start = if (kind == .cycle) loop_start else null;
+        defer self.cycle_loop_start = prev_cycle;
+
         for (f.body) |*s| try self.compileStmt(s);
 
-        var backup_jp: ?JumpPatch = null;
-        if (is_backup) {
-            backup_jp = try self.emitter.emitJump(.backup_fork, token);
+        switch (kind) {
+            .normal => try self.emitter.writeOp(.fork, token),
+            .backup => {
+                const backup_jp = try self.emitter.emitJump(.backup_fork, token);
+                try self.emitter.writeOp(.fork, token);
+                const end_pos = self.emitter.instructionPos();
+                try self.emitter.patchJumpTo(backup_jp, end_pos);
+            },
+            .cycle => {
+                // .cycle_fork acts like .fork but fins when its visible
+                // choice list is empty. The loop-back edge is in each
+                // choice body (emitted by compileChoice), not on the
+                // fork opcode itself — so a hard `=>` from inside a
+                // choice exits the cycle cleanly.
+                try self.emitter.writeOp(.cycle_fork, token);
+            },
         }
-        try self.emitter.writeOp(.fork, token);
-        const end_pos = self.emitter.instructionPos();
-        if (backup_jp) |jp| try self.emitter.patchJumpTo(jp, end_pos);
     }
 
     fn compileDivert(self: *Codegen, d: ir.Divert, is_backup: bool, token: Token) Error!void {

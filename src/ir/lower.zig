@@ -394,7 +394,12 @@ const Lowerer = struct {
         };
         return .{
             .loc = locFromSpan(tok, f.end_token),
-            .kind = if (f.is_backup) .{ .backup_fork = fork_payload } else .{ .fork = fork_payload },
+            .kind = if (f.is_backup)
+                .{ .backup_fork = fork_payload }
+            else if (f.is_cycle)
+                .{ .cycle_fork = fork_payload }
+            else
+                .{ .fork = fork_payload },
         };
     }
 
@@ -1217,7 +1222,7 @@ const Lowerer = struct {
                 defer _ = stack.pop();
                 try self.validateBody(c.body, stack);
             },
-            .fork, .backup_fork => |*f| {
+            .fork, .backup_fork, .cycle_fork => |*f| {
                 try self.patchAnchor(&f.anchor, stack, stmt.loc.start);
                 try stack.append(self.scratchAlloc(), lastSegment(f.anchor.path));
                 defer _ = stack.pop();

@@ -203,6 +203,7 @@ pub const Statement = struct {
             end_token: Token,
             body: []const Statement,
             is_backup: bool,
+            is_cycle: bool = false,
         },
         function: struct {
             is_method: bool = false,

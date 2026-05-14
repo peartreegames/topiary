@@ -15,9 +15,9 @@
 //!
 //! Other lowering choices the IR bakes in:
 //!
-//!   - `fork^` and `=>^` are tag-distinct from `fork` and `=>`. Backup
-//!     stack semantics are not a flag — Zig's exhaustive switch checker
-//!     forces every consumer to acknowledge the backup case.
+//!   - `fork^`, `fork*`, and `=>^` are tag-distinct from `fork` and `=>`.
+//!     Backup-stack and cycling semantics are not a flag — Zig's exhaustive
+//!     switch checker forces every consumer to acknowledge each case.
 //!   - `Visit` is a first-class statement. Today the visit-count
 //!     increment is implicit in choice/bough/fork compilation; in IR
 //!     it is a node you can see, count, and reorder.
@@ -236,6 +236,12 @@ pub const Stmt = struct {
         /// `fork^` — pushes a return marker on the backup stack so any
         /// `=>^` inside (or end-of-fork) unwinds back here.
         backup_fork: Fork,
+        /// `fork*` — cycling fork. After each chosen choice's body ends
+        /// naturally, the fork re-enters itself with consumed `~*`
+        /// choices filtered out. When the visible choice list is empty,
+        /// the fork exits as `fin`. A hard `=>` from inside a choice
+        /// body exits the cycle via the existing backup-trim logic.
+        cycle_fork: Fork,
         /// `=> path` — non-backup direct jump.
         divert: Divert,
         /// `=>^ path` — pushes the target on the backup stack so a later

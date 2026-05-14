@@ -165,7 +165,7 @@ const Validator = struct {
                 if (e.anchor.kind != null) try self.enum_by_path.put(a, e.anchor.path, e);
             },
             .bough => |*b| try self.collectMetadata(b.body),
-            .fork, .backup_fork => |*f| try self.collectMetadata(f.body),
+            .fork, .backup_fork, .cycle_fork => |*f| try self.collectMetadata(f.body),
             .choice => |*c| try self.collectMetadata(c.body),
             .block => |*b| try self.collectMetadata(b.body),
             .@"if" => |*i| {
@@ -198,6 +198,49 @@ const Validator = struct {
     ) Error!void {
         try self.checkUnreachable(stmts);
         for (stmts) |*s| try self.semStmt(s, stack);
+    }
+
+    /// Warn when every choice in a fork is `~*` (unique). On exhaustion
+    /// of the visible choice list, a `fork<` ends as `fin`, and a plain
+    /// `fork`/`fork^` has no choices left to offer the runner. Either
+    /// way, re-entering an exhausted fork is a footgun. A single `~`
+    /// (non-unique) choice silences the warning, since the writer has
+    /// declared a choice that persists across entries.
+    fn warnIfForkAllUnique(self: *Validator, stmt: *const ir.Stmt, fork: *const ir.Fork, is_cycle: bool) Error!void {
+        var has_choice = false;
+        var all_unique = true;
+        for (fork.body) |*body_stmt| {
+            if (body_stmt.kind == .choice) {
+                has_choice = true;
+                if (!body_stmt.kind.choice.is_unique) {
+                    all_unique = false;
+                    break;
+                }
+            }
+        }
+        if (!has_choice or !all_unique) return;
+        const help = try self.errors().allocator.dupe(u8, "add a '~' (non-unique) choice for an option that persists across entries");
+        if (is_cycle) {
+            try self.errors().addWithHelp(
+                self.pathForTok(stmt.loc.start),
+                "every choice in this 'fork<' is unique ('~*') -- once they're all consumed, the fork will end as 'fin'",
+                stmt.loc.start,
+                .warn,
+                .{},
+                help,
+                null,
+            );
+        } else {
+            try self.errors().addWithHelp(
+                self.pathForTok(stmt.loc.start),
+                "every choice in this fork is unique ('~*') -- if the fork is re-entered after they're all consumed, no choices will be available",
+                stmt.loc.start,
+                .warn,
+                .{},
+                help,
+                null,
+            );
+        }
     }
 
     fn semStmt(
@@ -234,11 +277,43 @@ const Validator = struct {
                         }
                     }
                 }
+                try self.warnIfForkAllUnique(stmt, f, false);
                 try stack.append(a, f.anchor.path);
                 defer _ = stack.pop();
                 try self.semBody(f.body, stack);
             },
             .backup_fork => |*f| {
+                try self.warnIfForkAllUnique(stmt, f, false);
+                try stack.append(a, f.anchor.path);
+                defer _ = stack.pop();
+                try self.semBody(f.body, stack);
+            },
+            .cycle_fork => |*f| {
+                try self.warnIfForkAllUnique(stmt, f, true);
+                // Cycle-specific: even with `~` choices keeping the menu
+                // alive, if none of the choices contain a hard `=>` or
+                // `fin` anywhere, the player has no way to leave the
+                // cycle via their own selection -- they can keep picking
+                // forever. Flag this independently of the all-`~*` check
+                // above.
+                var has_explicit_exit = false;
+                for (f.body) |*body_stmt| {
+                    if (body_stmt.kind == .choice and bodyHasExplicitExit(body_stmt.kind.choice.body)) {
+                        has_explicit_exit = true;
+                        break;
+                    }
+                }
+                if (!has_explicit_exit) {
+                    try self.errors().addWithHelp(
+                        self.pathForTok(stmt.loc.start),
+                        "'fork<' has no choice with a hard divert ('=>') or 'fin' -- the player has no way to leave the cycle",
+                        stmt.loc.start,
+                        .warn,
+                        .{},
+                        try self.errors().allocator.dupe(u8, "add a choice that uses '=>' (not '=>^') or 'fin' to leave the fork explicitly"),
+                        null,
+                    );
+                }
                 try stack.append(a, f.anchor.path);
                 defer _ = stack.pop();
                 try self.semBody(f.body, stack);
@@ -381,8 +456,8 @@ const Validator = struct {
                 try self.semExpr(i.index, stack);
             },
             .field => |*f| {
-                try self.checkFieldAccess(f, e.loc.start);
                 try self.semExpr(f.target, stack);
+                try self.checkFieldAccess(e, f, e.loc.start);
             },
             .call => |*c| {
                 try self.checkCallArity(c, stack, e.loc.start);
@@ -455,16 +530,29 @@ const Validator = struct {
     /// instance/string/collection get name-table checks; primitives are
     /// rejected outright; `.unknown` is silently permissive (chained
     /// access, call returns, etc.).
+    ///
+    /// When the access resolves to a known field, the resulting type is
+    /// published onto `parent.var_type` so deeper chains (`a.b.c`) can
+    /// see what `a.b` evaluated to. `lowerExpression` can't do this on
+    /// its own because class metadata isn't collected until the validate
+    /// pass runs.
     fn checkFieldAccess(
         self: *Validator,
+        parent: *const ir.Expr,
         f: *const ir.Field,
         tok: Token,
     ) Error!void {
         switch (f.target.var_type) {
             .instance => |class_name| {
                 const class = self.class_by_path.get(class_name) orelse return;
-                if (classHasField(class, f.name)) return;
-                if (classHasMethod(class, f.name)) return;
+                if (classFieldType(class, f.name)) |t| {
+                    setVarType(parent, t);
+                    return;
+                }
+                if (classHasMethod(class, f.name)) {
+                    setVarType(parent, .function_type);
+                    return;
+                }
                 try self.errors().addWithHelp(
                     self.pathForTok(tok),
                     "Class '{s}' does not contain a field '{s}'",
@@ -522,7 +610,10 @@ const Validator = struct {
             },
             .enum_type => |path| {
                 const e = self.enum_by_path.get(path) orelse return;
-                for (e.values) |v| if (std.mem.eql(u8, v, f.name)) return;
+                for (e.values) |v| if (std.mem.eql(u8, v, f.name)) {
+                    setVarType(parent, .number);
+                    return;
+                };
                 try self.errors().add(
                     self.pathForTok(tok),
                     "Enum '{s}' does not contain a value '{s}'",
@@ -533,8 +624,14 @@ const Validator = struct {
             },
             .class_type => |path| {
                 const c = self.class_by_path.get(path) orelse return;
-                if (classHasField(c, f.name)) return;
-                if (classHasMethod(c, f.name)) return;
+                if (classFieldType(c, f.name)) |t| {
+                    setVarType(parent, t);
+                    return;
+                }
+                if (classHasMethod(c, f.name)) {
+                    setVarType(parent, .function_type);
+                    return;
+                }
                 try self.errors().addWithHelp(
                     self.pathForTok(tok),
                     "Class '{s}' does not contain a field '{s}'",
@@ -861,7 +958,7 @@ const Validator = struct {
 
 fn statementExits(stmt: *const ir.Stmt) bool {
     return switch (stmt.kind) {
-        .return_value, .return_void, .fin, .fork, .divert => true,
+        .return_value, .return_void, .fin, .fork, .cycle_fork, .divert => true,
         .backup_fork, .backup_divert => false,
         .@"if" => |i| i.else_branch != null and
             blockExits(i.then_branch) and
@@ -887,12 +984,44 @@ fn blockExits(body: []const ir.Stmt) bool {
     return false;
 }
 
+/// Walk a choice body looking for any explicit exit -- a hard `=>` or
+/// `fin`. Used by the `fork<` warning: if none of the choices' bodies
+/// contain an explicit exit anywhere, the cycling fork has no way out
+/// and will end as `fin` once `~*` choices are exhausted. Backup
+/// diverts (`=>^`) don't count — they return into the body and keep
+/// cycling.
+fn bodyHasExplicitExit(body: []const ir.Stmt) bool {
+    for (body) |*s| {
+        if (stmtHasExplicitExit(s)) return true;
+    }
+    return false;
+}
+
+fn stmtHasExplicitExit(stmt: *const ir.Stmt) bool {
+    return switch (stmt.kind) {
+        .divert, .fin => true,
+        .backup_divert => false,
+        .@"if" => |i| bodyHasExplicitExit(i.then_branch) or
+            (i.else_branch != null and bodyHasExplicitExit(i.else_branch.?)),
+        .@"switch" => |s| blk: {
+            for (s.prongs) |p| if (bodyHasExplicitExit(p.body)) break :blk true;
+            break :blk false;
+        },
+        .block => |b| bodyHasExplicitExit(b.body),
+        .@"while" => |w| bodyHasExplicitExit(w.body),
+        .@"for" => |f| bodyHasExplicitExit(f.body),
+        .fork, .backup_fork, .cycle_fork => |f| bodyHasExplicitExit(f.body),
+        .choice => |c| bodyHasExplicitExit(c.body),
+        else => false,
+    };
+}
+
 fn exitKeyword(stmt: *const ir.Stmt) []const u8 {
     return switch (stmt.kind) {
         .return_value, .return_void => "return",
         .fin => "fin",
         .divert, .backup_divert => "divert",
-        .fork, .backup_fork => "fork",
+        .fork, .backup_fork, .cycle_fork => "fork",
         .@"if" => "if",
         .@"switch" => "switch",
         else => "",
@@ -921,6 +1050,28 @@ fn classHasField(class: *const ir.ClassDecl, name: []const u8) bool {
         if (std.mem.eql(u8, fname, name)) return true;
     }
     return false;
+}
+
+/// Return the declared type of a class field, derived from its
+/// initializer's inferred var_type. `null` when the field doesn't exist;
+/// `.unknown` when it exists but the initializer's type couldn't be
+/// inferred (still treated as "the field is real, just untyped").
+fn classFieldType(class: *const ir.ClassDecl, name: []const u8) ?@import("../types/var_type.zig").VarType {
+    for (class.field_names, 0..) |fname, i| {
+        if (!std.mem.eql(u8, fname, name)) continue;
+        if (i < class.field_initializers.len) return class.field_initializers[i].var_type;
+        return .unknown;
+    }
+    return null;
+}
+
+/// ExprRef is `*const ir.Expr`, but expression nodes live in the program
+/// arena and the validate pass is the canonical place where derived
+/// type information gets back-filled. Cast away const at the single
+/// publish point rather than threading mutability everywhere.
+fn setVarType(expr: *const ir.Expr, t: @import("../types/var_type.zig").VarType) void {
+    const mut: *ir.Expr = @constCast(expr);
+    mut.var_type = t;
 }
 
 fn classHasMethod(class: *const ir.ClassDecl, name: []const u8) bool {

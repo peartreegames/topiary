@@ -1250,6 +1250,40 @@ pub const Vm = struct {
                         self.currentFrame().ip = dest;
                     }
                 },
+                .cycle_fork => {
+                    // Cycling fork: same wait-on-choices behavior as
+                    // .fork. The loop-back edge lives at each choice
+                    // body's terminus (codegen emits `.jump LOOP_START`
+                    // instead of `.end`), so a body that falls through
+                    // re-enters here while a hard `=>` exits cleanly.
+                    // When the visible choice list is empty (all `~*`
+                    // consumed and no `~`), the fork ends as `fin`.
+                    self.current_choices = try self.choices_list.toOwnedSlice(self.alloc);
+                    self.choices_freed = false;
+                    self.choices_list.clearRetainingCapacity();
+                    if (is_in_jump) {
+                        const next_target = self.jump_requests.getLast();
+                        if (self.currentFrame().ip >= next_target) {
+                            _ = self.jump_requests.pop();
+                        } else continue;
+                    }
+
+                    if (self.current_choices.len == 0) {
+                        self.alloc.free(self.current_choices);
+                        self.current_choices = &.{};
+                        self.choices_freed = true;
+                        if (self.anchor_stack.items.len > 0) {
+                            _ = self.anchor_stack.pop();
+                        }
+                        self.end();
+                        break;
+                    }
+
+                    self.is_waiting = true;
+                    try self.captureFork();
+                    self.runner.onChoices(self, self.current_choices);
+                    return;
+                },
                 .backup_fork => {
                     const ip = self.takeInt(C.JUMP);
                     if (is_in_jump) continue;
