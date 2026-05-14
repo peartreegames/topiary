@@ -105,6 +105,73 @@ test "format: comment preservation" {
     , result);
 }
 
+test "format: comments inside body stay inside body" {
+    const result = try formatSource(
+        \\=== START {
+        \\    // leading comment
+        \\    :: "hello"
+        \\    // middle comment
+        \\    :: "world"
+        \\    // trailing comment
+        \\}
+    );
+    defer allocator.free(result);
+    try testing.expectEqualStrings(
+        \\=== START {
+        \\    // leading comment
+        \\    :: "hello"
+        \\    // middle comment
+        \\    :: "world"
+        \\    // trailing comment
+        \\}
+        \\
+    , result);
+}
+
+test "format: comments inside function body stay inside" {
+    const result = try formatSource(
+        \\fn add |x, y| {
+        \\    // sum them
+        \\    return x + y
+        \\}
+    );
+    defer allocator.free(result);
+    try testing.expectEqualStrings(
+        \\fn add |x, y| {
+        \\    // sum them
+        \\    return x + y
+        \\}
+        \\
+    , result);
+}
+
+test "format: comments inside if/fork stay inside" {
+    const result = try formatSource(
+        \\=== S {
+        \\    fork {
+        \\        // pick one
+        \\        ~ "yes" {
+        \\            // confirm
+        \\            :: "ok"
+        \\        }
+        \\    }
+        \\}
+    );
+    defer allocator.free(result);
+    try testing.expectEqualStrings(
+        \\=== S {
+        \\    fork {
+        \\        // pick one
+        \\        ~ "yes" {
+        \\            // confirm
+        \\            :: "ok"
+        \\        }
+        \\    }
+        \\}
+        \\
+    , result);
+}
+
 test "format: single-line if with dialogue" {
     const result = try formatSource(
         \\=== S { if   true  :: "yes" }

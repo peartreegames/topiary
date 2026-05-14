@@ -585,18 +585,29 @@ pub const Parser = struct {
         var list = std.ArrayList(Statement).empty;
         const has_brace = self.currentIs(.left_brace);
         if (!has_brace) {
+            try self.drainPendingComments(&list);
             try list.append(self.allocator, try self.statement());
+            try self.drainPendingComments(&list);
             return try list.toOwnedSlice(self.allocator);
         }
         self.next();
         while (!self.currentIsOneOf([2]TokenType{ .right_brace, .eof })) {
+            try self.drainPendingComments(&list);
             try list.append(self.allocator, try self.statement());
+            try self.drainPendingComments(&list);
             self.next();
         }
+        try self.drainPendingComments(&list);
         if (has_brace and self.currentIs(.eof)) {
             return self.fail("Missing closing brace", self.current_token, .{});
         }
         return try list.toOwnedSlice(self.allocator);
+    }
+
+    fn drainPendingComments(self: *Parser, list: *std.ArrayList(Statement)) !void {
+        if (self.pending_comments.items.len == 0) return;
+        try list.appendSlice(self.allocator, self.pending_comments.items);
+        self.pending_comments.items.len = 0;
     }
 
     fn instanceExpression(self: *Parser) Error!Expression {
