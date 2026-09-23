@@ -77,8 +77,8 @@ fn createModule(path: []const u8, logger: ExportLogger, allocator: std.mem.Alloc
         return null;
     };
 
-    mod.entry.loadSource() catch |err| {
-        logger.log("Could not load file source: {s}", .{@errorName(err)}, .err);
+    mod.resolveIncludes() catch |err| {
+        logger.log("Could not resolve includes: {s}", .{@errorName(err)}, .err);
         return null;
     };
 
