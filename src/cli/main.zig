@@ -260,7 +260,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const alloc = std.heap.smp_allocator;
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
-    var iter = std.process.Args.Iterator.init(init.args);
+    var iter = try std.process.Args.Iterator.initAllocator(init.args, arena.allocator());
+    defer iter.deinit();
     _ = iter.skip();
 
     const maybe_cmd = iter.next();

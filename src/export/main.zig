@@ -90,7 +90,7 @@ fn createModule(path: []const u8, logger: ExportLogger, allocator: std.mem.Alloc
             logger.log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
             return null;
         };
-        logger.log("Could not read .topi file '{s}': {s}\n{s}", .{ mod.entry.path, @errorName(err), output_log.written() }, .err);
+        logger.log("Could not read .topi file '{s}': {s}\n{s}", .{ mod.entry.name, @errorName(err), output_log.written() }, .err);
         return null;
     };
     return mod;
@@ -106,7 +106,7 @@ fn createBytecode(mod: *Module, logger: ExportLogger, allocator: std.mem.Allocat
             logger.log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
             return null;
         };
-        logger.log("Could not compile file '{s}': {s}\n{s}", .{ mod.entry.path, @errorName(err), output_log.written() }, .err);
+        logger.log("Could not compile file '{s}': {s}\n{s}", .{ mod.entry.name, @errorName(err), output_log.written() }, .err);
         return null;
     };
 }

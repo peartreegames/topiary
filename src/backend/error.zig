@@ -42,7 +42,7 @@ pub const CompilerErr = struct {
         start = @min(start, source.len - 1);
         end = @min(end, source.len);
 
-        try writer.print("file {s}, line {}\n", .{ self.file_path, line });
+        try writer.print("file {s}, line {}\n", .{ std.fs.path.basename(self.file_path), line });
         try writer.print("======\n", .{});
 
         var lines = std.mem.splitSequence(u8, source, "\n");

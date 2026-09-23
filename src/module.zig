@@ -33,27 +33,31 @@ pub const Module = struct {
     errors: CompilerErrors,
     entry: *File,
     io: Io,
-    dir: Io.Dir,
     dir_path: []const u8,
     includes: std.array_hash_map.String(*File),
     timings: Timings = .{},
 
     pub fn init(allocator: std.mem.Allocator, io: Io, entry_path: []const u8) !*Module {
-        const mod = try allocator.create(Module);
-        const path = std.fs.path.basename(entry_path);
+        // Resolution opens files via openFileAbsolute, so the entry must be
+        // an absolute path. A directory handle was previously used to anchor
+        // resolution, but it blocked `..` traversal out of the entry's
+        // directory on Windows — files reachable via parent paths failed to
+        // open. Storing absolute paths everywhere sidesteps that.
+        if (!std.fs.path.isAbsolute(entry_path)) return error.InvalidArgument;
         const dir_name = std.fs.path.dirname(entry_path) orelse return error.InvalidArgument;
+        const mod = try allocator.create(Module);
         mod.* = .{
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
             .io = io,
-            .dir = try Io.Dir.openDirAbsolute(io, dir_name, .{}),
             .dir_path = try allocator.dupe(u8, dir_name),
             .entry = undefined,
             .includes = std.array_hash_map.String(*File).empty,
             .errors = CompilerErrors.init(allocator),
         };
-        // Can't add entry until includes is initialized
-        mod.entry = try mod.addFileAtPath(path);
+        // Store the entry by its absolute path so the keys in `includes`
+        // are consistent across the entry and any transitive includes.
+        mod.entry = try mod.addFileAtPath(entry_path);
         return mod;
     }
 
@@ -64,7 +68,6 @@ pub const Module = struct {
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
             .io = io,
-            .dir = undefined,
             .dir_path = "",
             .entry = undefined,
             .includes = std.array_hash_map.String(*File).empty,
@@ -271,14 +274,15 @@ pub const Module = struct {
     /// List sibling .topi files in the directory of the missing include
     /// and return a did-you-mean suggestion if one is close enough.
     fn suggestIncludeFile(self: *Module, raw_path: []const u8, resolved_path: []const u8) !?[]const u8 {
+        // initEmpty has no real file system to inspect — skip suggestions.
+        if (self.dir_path.len == 0) return null;
+
         const alloc = self.arena.allocator();
         const basename = std.fs.path.basename(resolved_path);
-        const dirname = std.fs.path.dirname(resolved_path);
-
-        var dir = if (dirname) |dn|
-            self.dir.openDir(self.io, dn, .{ .iterate = true }) catch return null
-        else
-            self.dir.openDir(self.io, ".", .{ .iterate = true }) catch return null;
+        // resolved_path is absolute in file-system mode; its dirname is the
+        // absolute parent directory to scan.
+        const dn = std.fs.path.dirname(resolved_path) orelse return null;
+        var dir = Io.Dir.openDirAbsolute(self.io, dn, .{ .iterate = true }) catch return null;
         defer dir.close(self.io);
 
         var names: std.ArrayList([]const u8) = .empty;
@@ -341,28 +345,17 @@ pub const Module = struct {
         return try out.toOwnedSlice(alloc);
     }
 
-    /// Resolve an include path relative to the including file's directory,
-    /// then normalize to be relative to the module root directory.
+    /// Resolve an include path relative to the including file's directory.
+    /// In file-system mode this yields an absolute path; in `initEmpty`
+    /// mode (where `dir_name` is "."), it yields a normalized relative path
+    /// — `resolve` only prepends a root when the inputs would otherwise
+    /// remain relative AND need to. Either way the result is a stable key
+    /// for the `includes` map.
     pub fn resolveIncludePath(self: *Module, including_file: *File, raw_path: []const u8) ![]const u8 {
-        const alloc = self.arena.allocator();
-
-        if (self.dir_path.len > 0) {
-            const current_file_dir = try std.fs.path.resolve(alloc, &.{ self.dir_path, including_file.dir_name });
-            defer alloc.free(current_file_dir);
-
-            const full_path = try std.fs.path.resolve(alloc, &.{ current_file_dir, raw_path });
-            defer alloc.free(full_path);
-
-            return std.fs.path.relative(alloc, self.dir_path, null, self.dir_path, full_path) catch
-                try alloc.dupe(u8, full_path);
-        } else {
-            // initEmpty case (tests): resolve relative to dir_name directly
-            const current_file_dir = including_file.dir_name;
-            const full_path = try std.fs.path.resolve(alloc, &.{ current_file_dir, raw_path });
-            defer alloc.free(full_path);
-
-            return try alloc.dupe(u8, full_path);
-        }
+        return try std.fs.path.resolve(
+            self.arena.allocator(),
+            &.{ including_file.dir_name, raw_path },
+        );
     }
 
     pub fn writeErrors(self: *Module, writer: *std.Io.Writer) !void {
@@ -380,10 +373,7 @@ pub const Module = struct {
     pub fn deinit(self: *Module) void {
         self.errors.deinit();
         self.includes.deinit(self.allocator);
-        if (self.dir_path.len > 0) {
-            self.dir.close(self.io);
-            self.allocator.free(self.dir_path);
-        }
+        if (self.dir_path.len > 0) self.allocator.free(self.dir_path);
         var arena = self.arena;
         arena.deinit();
         self.allocator.destroy(self);
@@ -416,7 +406,12 @@ pub const File = struct {
     pub fn loadSource(self: *File) !void {
         if (self.source != null) return;
         const io = self.module.io;
-        var file = try self.module.dir.openFile(io, self.path, .{});
+        // File paths are absolute in file-system mode; openFileAbsolute is
+        // the cross-platform way to open them without going through a
+        // directory handle (which restricts `..` traversal on Windows).
+        // In initEmpty mode `source` is always pre-set, so this path is
+        // never reached.
+        var file = try std.Io.Dir.openFileAbsolute(io, self.path, .{});
         defer file.close(io);
 
         const stat = try file.stat(io);

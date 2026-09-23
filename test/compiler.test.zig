@@ -1311,6 +1311,51 @@ test "Missing Include File Error" {
     try testing.expect(has_suggestion);
 }
 
+test "Parent Directory Include From Subdirectory" {
+    // Regression for an include like `include "../shared.topi"` from an
+    // entry file living in a subdirectory. Earlier versions opened every
+    // included file through a directory handle anchored at the entry's
+    // directory, which on Windows refused to traverse `..` out of that
+    // handle. The resolver now uses absolute paths end-to-end.
+    const test_io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(test_io, "subdir");
+
+    {
+        var f = try tmp.dir.createFile(test_io, "shared.topi", .{});
+        defer f.close(test_io);
+        try f.writeStreamingAll(test_io, "=== SHARED {\n  :: \"shared body\"\n}\n");
+    }
+    {
+        var f = try tmp.dir.createFile(test_io, "subdir/entry.topi", .{});
+        defer f.close(test_io);
+        try f.writeStreamingAll(
+            test_io,
+            "include \"../shared.topi\"\n=== START {\n  => SHARED\n}\n",
+        );
+    }
+
+    const entry_path = try tmp.dir.realPathFileAlloc(test_io, "subdir/entry.topi", allocator);
+    defer allocator.free(entry_path);
+
+    var mod = try Module.init(allocator, test_io, entry_path);
+    defer mod.deinit();
+
+    var bytecode = mod.generateBytecode(allocator) catch |err| {
+        for (mod.errors.list.items) |e| std.log.warn("  {s}", .{e.fmt});
+        return err;
+    };
+    defer bytecode.free(allocator);
+
+    for (mod.errors.list.items) |e| {
+        try testing.expect(std.mem.indexOf(u8, e.fmt, "not found") == null);
+    }
+    // Both files must be tracked in the module's include map.
+    try testing.expectEqual(@as(usize, 2), mod.includes.count());
+}
+
 test "Unreachable Code Warning - Backup Divert Does Not Fire Warning" {
     const input =
         \\ === OTHER {

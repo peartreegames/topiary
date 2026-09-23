@@ -847,10 +847,10 @@ pub const Locale = struct {
             const csv_name = try std.fmt.allocPrint(allocator, "{s}.csv", .{file.path});
             defer allocator.free(csv_name);
 
-            const csv_file = mod.dir.openFile(mod.io, csv_name, .{}) catch {
+            const csv_file = std.Io.Dir.openFileAbsolute(mod.io, csv_name, .{}) catch {
                 // Only warn if this file has localizable content
                 if (file_uuid_counts.get(kvp.key_ptr.*) == null) continue;
-                try result.missing_csv_files.append(allocator, try allocator.dupe(u8, kvp.key_ptr.*));
+                try result.missing_csv_files.append(allocator, try allocator.dupe(u8, std.fs.path.basename(kvp.key_ptr.*)));
                 continue;
             };
             defer csv_file.close(mod.io);
