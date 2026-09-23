@@ -86,7 +86,7 @@ fn createModule(path: []const u8, logger: ExportLogger, allocator: std.mem.Alloc
         var output_log: std.Io.Writer.Allocating = .init(mod.allocator);
         defer output_log.deinit();
         const output_writer = &output_log.writer;
-        mod.writeErrors(output_writer) catch |e| {
+        mod.writeErrors(output_writer, false) catch |e| {
             logger.log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
             return null;
         };
@@ -102,7 +102,7 @@ fn createBytecode(mod: *Module, logger: ExportLogger, allocator: std.mem.Allocat
         defer output_log.deinit();
         const output_writer = &output_log.writer;
 
-        mod.writeErrors(output_writer) catch |e| {
+        mod.writeErrors(output_writer, false) catch |e| {
             logger.log("Could not write errors to log message. Something is very wrong. {s}", .{@errorName(e)}, .err);
             return null;
         };

@@ -2081,7 +2081,7 @@ test "Runtime Includes" {
     defer mod.deinit();
 
     const bytecode = mod.generateBytecode(std.testing.allocator) catch |err| {
-        try mod.writeErrors(err_writer);
+        try mod.writeErrors(err_writer, false);
         return err;
     };
     defer bytecode.free(std.testing.allocator);

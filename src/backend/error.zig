@@ -16,19 +16,20 @@ pub const CompilerErr = struct {
         err,
     };
 
-    pub fn write(self: CompilerErr, source: []const u8, writer: *std.Io.Writer) !void {
-        const color_prefix = switch (self.severity) {
+    pub fn write(self: CompilerErr, source: []const u8, writer: *std.Io.Writer, color: bool) !void {
+        const color_prefix = if (!color) "" else switch (self.severity) {
             .err => "\x1b[0;31m",
             .info => "\x1b[0;37m",
             .warn => "\x1b[0;33m",
         };
-        const help_prefix = "\x1b[0;36m";
+        const help_prefix = if (color) "\x1b[0;36m" else "";
+        const reset = if (color) "\x1b[0m" else "";
         const label = switch (self.severity) {
             .err => "error",
             .warn => "warning",
             .info => "info",
         };
-        try writer.print("{s}{s}: \x1b[0m{s}\n", .{ color_prefix, label, self.fmt });
+        try writer.print("{s}{s}: {s}{s}\n", .{ color_prefix, label, reset, self.fmt });
         var start = self.token.start;
         var end = self.token.end;
         if (self.end_token) |et| {
@@ -62,16 +63,16 @@ pub const CompilerErr = struct {
             while (count > 0) : (count -= 1) {
                 try writer.writeByte('~');
             }
-            try writer.writeAll("\n\x1b[0m");
+            try writer.print("\n{s}", .{reset});
             break;
         }
         try writer.print("======\n", .{});
 
         if (self.suggestion) |s| {
-            try writer.print("{s}help:\x1b[0m {s}\n", .{ help_prefix, s });
+            try writer.print("{s}help:{s} {s}\n", .{ help_prefix, reset, s });
         }
         if (self.note) |n| {
-            try writer.print("{s}note:\x1b[0m {s}\n", .{ help_prefix, n });
+            try writer.print("{s}note:{s} {s}\n", .{ help_prefix, reset, n });
         }
     }
 };

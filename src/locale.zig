@@ -800,7 +800,7 @@ pub const Locale = struct {
         var mod = try Module.init(allocator, io, topi_path);
         defer mod.deinit();
         mod.resolveIncludes() catch |err| {
-            if (error_writer) |w| mod.writeErrors(w) catch {};
+            if (error_writer) |w| mod.writeErrors(w, true) catch {};
             return err;
         };
 
@@ -808,7 +808,7 @@ pub const Locale = struct {
         var it = mod.includes.iterator();
         while (it.next()) |kvp| {
             kvp.value_ptr.*.buildTree() catch |err| {
-                if (error_writer) |w| mod.writeErrors(w) catch {};
+                if (error_writer) |w| mod.writeErrors(w, true) catch {};
                 return err;
             };
         }

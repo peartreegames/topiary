@@ -358,14 +358,14 @@ pub const Module = struct {
         );
     }
 
-    pub fn writeErrors(self: *Module, writer: *std.Io.Writer) !void {
+    pub fn writeErrors(self: *Module, writer: *std.Io.Writer, color: bool) !void {
         while (self.errors.list.pop()) |err| {
             // free since we're removing from list
             defer self.allocator.free(err.fmt);
             defer if (err.suggestion) |s| self.allocator.free(s);
             defer if (err.note) |n| self.allocator.free(n);
             const file = self.includes.get(err.file_path).?;
-            try err.write(file.source.?, writer);
+            try err.write(file.source.?, writer, color);
         }
         try writer.flush();
     }

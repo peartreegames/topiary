@@ -239,7 +239,7 @@ pub fn writeErrors(mod: *Module) !void {
     var buffer: [128]u8 = undefined;
     var writer = std.Io.File.stdout().writer(io, &buffer);
     const stdout = &writer.interface;
-    try mod.writeErrors(stdout);
+    try mod.writeErrors(stdout, true);
 }
 
 fn writeOutput(full_path: []const u8, content: []const u8, dry: bool) !void {
