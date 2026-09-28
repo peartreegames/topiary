@@ -176,6 +176,23 @@ pub export fn selectContinue(vm_ptr: *anyopaque) void {
     vm.selectContinue();
 }
 
+pub export fn continueRun(vm_ptr: *anyopaque) void {
+    var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
+    const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);
+    runner.logger.log("Continuing run", .{}, .debug);
+    vm.continueRun();
+}
+
+pub export fn suspendVm(vm_ptr: *anyopaque) void {
+    var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
+    vm.requestSuspend();
+}
+
+pub export fn isInJump(vm_ptr: *anyopaque) bool {
+    const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
+    return vm.isInJump();
+}
+
 pub export fn selectChoice(vm_ptr: *anyopaque, index: usize) void {
     var vm: *Vm = @ptrCast(@alignCast(vm_ptr));
     const runner: *ExportRunner = @fieldParentPtr("runner", vm.runner);

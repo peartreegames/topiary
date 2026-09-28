@@ -57,6 +57,10 @@ const TestRunner = struct {
         main.selectContinue(vm_ptr);
     }
 
+    pub fn onLineHold(_: *anyopaque, dialogue: *ExportLine) callconv(.c) void {
+        output.append(allocator, allocator.dupe(u8, dialogue.content.ptr[0..dialogue.content.len]) catch unreachable) catch unreachable;
+    }
+
     pub fn onChoices(vm_ptr: *anyopaque, choices: [*]ExportChoice, choices_len: u8) callconv(.c) void {
         _ = choices;
         _ = choices_len;
@@ -86,6 +90,13 @@ const TestRunner = struct {
         const arg2 = args[1].data.number;
         output.append(allocator, std.fmt.allocPrint(allocator, "extern sum {d} + {d} = {d}", .{ arg1, arg2, arg1 + arg2 }) catch unreachable) catch unreachable;
         return .{ .tag = .number, .data = .{ .number = arg1 + arg2 } };
+    }
+
+    pub fn pause(vm_ptr: usize, _: usize, _: [*c]ExportValue, _: u8) callconv(.c) ExportValue {
+        const vm: *anyopaque = @ptrFromInt(vm_ptr);
+        output.append(allocator, std.fmt.allocPrint(allocator, "pause jump={}", .{main.isInJump(vm)}) catch unreachable) catch unreachable;
+        main.suspendVm(vm);
+        return ExportValue.Nil;
     }
 
     /// Extern function that returns a string ExportValue allocated with C malloc.
@@ -396,4 +407,167 @@ test "Export Extern Function Returning String" {
     try std.testing.expectEqualSlices(u8, "hello from C", output.items[0]);
     // Verify the free callback was invoked to release the C-allocated string
     try std.testing.expect(TestRunner.free_called);
+}
+
+fn createTestVm(buf: []u8, on_line: *const anyopaque) !*anyopaque {
+    return main.createVm(
+        buf.ptr,
+        buf.len,
+        on_line,
+        @ptrCast(&TestRunner.onChoices),
+        @ptrCast(&TestRunner.onValueChanged),
+        @ptrCast(&TestRunner.log),
+        @intFromEnum(ExportLogger.Severity.debug),
+    ) orelse error.InternalError;
+}
+
+fn runToEnd(vm_ptr: *anyopaque) void {
+    const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
+    while (main.canContinue(vm_ptr) and !main.isWaiting(vm_ptr)) {
+        main.run(vm_ptr);
+        if (vm.err.msg) |_| break;
+    }
+}
+
+fn expectOutput(expected: []const []const u8) !void {
+    try std.testing.expectEqual(expected.len, output.items.len);
+    for (expected, 0..) |e, i| {
+        try std.testing.expectEqualSlices(u8, e, output.items[i]);
+    }
+}
+
+test "Export Extern Suspends Until Continued" {
+    const text =
+        \\ extern fn pause || return void
+        \\ === START {
+        \\     :: "before"
+        \\     pause()
+        \\     :: "after"
+        \\ }
+    ;
+    output = .empty;
+    defer {
+        clearOutput();
+        output.deinit(allocator);
+    }
+
+    const buf = try compileSource(text);
+    defer allocator.free(buf);
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, "tmp_export.topi") catch {};
+
+    const vm_ptr = try createTestVm(buf, @ptrCast(&TestRunner.onLine));
+    defer main.destroyVm(vm_ptr);
+    main.setExternFunc(vm_ptr, "pause", @ptrCast(&TestRunner.pause), 0, 0, @ptrCast(&TestRunner.free));
+
+    main.start(vm_ptr, "");
+    runToEnd(vm_ptr);
+    try std.testing.expect(main.isWaiting(vm_ptr));
+    try std.testing.expect(main.canContinue(vm_ptr));
+    try expectOutput(&.{ "before", "pause jump=false" });
+
+    main.run(vm_ptr);
+    try expectOutput(&.{ "before", "pause jump=false" });
+
+    main.continueRun(vm_ptr);
+    runToEnd(vm_ptr);
+    try std.testing.expect(!main.canContinue(vm_ptr));
+    try expectOutput(&.{ "before", "pause jump=false", "after" });
+}
+
+test "Export Suspend Ignored During Jump" {
+    const text =
+        \\ extern fn pause || return void
+        \\ === OUTER {
+        \\     pause()
+        \\     === INNER {
+        \\         :: "inner"
+        \\     }
+        \\ }
+    ;
+    output = .empty;
+    defer {
+        clearOutput();
+        output.deinit(allocator);
+    }
+
+    const buf = try compileSource(text);
+    defer allocator.free(buf);
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, "tmp_export.topi") catch {};
+
+    const vm_ptr = try createTestVm(buf, @ptrCast(&TestRunner.onLine));
+    defer main.destroyVm(vm_ptr);
+    main.setExternFunc(vm_ptr, "pause", @ptrCast(&TestRunner.pause), 0, 0, @ptrCast(&TestRunner.free));
+
+    main.start(vm_ptr, "OUTER.INNER");
+    runToEnd(vm_ptr);
+    try std.testing.expect(!main.isWaiting(vm_ptr));
+    try std.testing.expect(!main.canContinue(vm_ptr));
+    try expectOutput(&.{ "pause jump=true", "inner" });
+}
+
+test "Export Start Clears A Pause Left By A Stopped Run" {
+    const text =
+        \\ === START {
+        \\     :: "one"
+        \\     :: "two"
+        \\ }
+    ;
+    output = .empty;
+    defer {
+        clearOutput();
+        output.deinit(allocator);
+    }
+
+    const buf = try compileSource(text);
+    defer allocator.free(buf);
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, "tmp_export.topi") catch {};
+
+    const vm_ptr = try createTestVm(buf, @ptrCast(&TestRunner.onLineHold));
+    defer main.destroyVm(vm_ptr);
+
+    main.start(vm_ptr, "");
+    runToEnd(vm_ptr);
+    try std.testing.expect(main.isWaiting(vm_ptr));
+    try expectOutput(&.{"one"});
+
+    main.start(vm_ptr, "");
+    try std.testing.expect(!main.isWaiting(vm_ptr));
+    runToEnd(vm_ptr);
+    try expectOutput(&.{ "one", "one" });
+}
+
+test "Export Extern Opening A Started Bough Can Suspend" {
+    const text =
+        \\ var count = 0
+        \\ extern fn pause || return void
+        \\ === FIRST {
+        \\     :: "first"
+        \\ }
+        \\ === SECOND {
+        \\     pause()
+        \\     :: "second"
+        \\ }
+    ;
+    output = .empty;
+    defer {
+        clearOutput();
+        output.deinit(allocator);
+    }
+
+    const buf = try compileSource(text);
+    defer allocator.free(buf);
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, "tmp_export.topi") catch {};
+
+    const vm_ptr = try createTestVm(buf, @ptrCast(&TestRunner.onLine));
+    defer main.destroyVm(vm_ptr);
+    main.setExternFunc(vm_ptr, "pause", @ptrCast(&TestRunner.pause), 0, 0, @ptrCast(&TestRunner.free));
+
+    main.start(vm_ptr, "SECOND");
+    runToEnd(vm_ptr);
+    try std.testing.expect(main.isWaiting(vm_ptr));
+    try expectOutput(&.{"pause jump=false"});
+
+    main.continueRun(vm_ptr);
+    runToEnd(vm_ptr);
+    try expectOutput(&.{ "pause jump=false", "second" });
 }

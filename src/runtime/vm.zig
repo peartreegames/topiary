@@ -79,6 +79,7 @@ pub const Vm = struct {
     choices_freed: bool = true,
     /// Determines if the vm is waiting on input
     is_waiting: bool = false,
+    suspend_requested: bool = false,
     can_continue: bool = false,
 
     loc_provider: ?*LocaleProvider = null,
@@ -274,9 +275,18 @@ pub const Vm = struct {
         return self.frames.peek();
     }
 
-    /// Continue execution
-    pub fn selectContinue(self: *Vm) void {
+    pub fn continueRun(self: *Vm) void {
         self.is_waiting = false;
+    }
+
+    pub const selectContinue = continueRun;
+
+    pub fn requestSuspend(self: *Vm) void {
+        self.suspend_requested = true;
+    }
+
+    pub fn isInJump(self: *Vm) bool {
+        return self.jump_requests.items.len > 0;
     }
 
     pub fn selectChoice(self: *Vm, index: usize) Error!void {
@@ -440,6 +450,8 @@ pub const Vm = struct {
 
     pub fn start(self: *Vm, start_path: ?[]const u8) !void {
         self.can_continue = true;
+        self.is_waiting = false;
+        self.suspend_requested = false;
         self.stack.resize(self.bytecode.locals_count);
         while (self.frames.count > 1) {
             _ = self.frames.pop();
@@ -1137,9 +1149,18 @@ pub const Vm = struct {
                         },
                         .@"extern" => |e| {
                             if (e.context_ptr) |ptr| {
+                                // A request only counts when it is made inside this call.
+                                self.suspend_requested = false;
                                 const result = e.backing(ptr, self.stack.items[self.stack.count - arg_count .. self.stack.count]);
                                 self.stack.count -= arg_count + 1;
                                 try self.push(result);
+                                if (self.suspend_requested) {
+                                    self.suspend_requested = false;
+                                    if (!is_in_jump) {
+                                        self.is_waiting = true;
+                                        return;
+                                    }
+                                }
                             } else return self.fail("External function '{s}' has not been set by the host", .{e.name});
                         },
                         .builtin => |b| {
