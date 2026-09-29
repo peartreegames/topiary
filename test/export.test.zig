@@ -92,6 +92,18 @@ const TestRunner = struct {
         return .{ .tag = .number, .data = .{ .number = arg1 + arg2 } };
     }
 
+    pub fn describe(_: usize, _: usize, args: [*c]ExportValue, count: u8) callconv(.c) ExportValue {
+        for (args[0..count]) |arg| {
+            const text = switch (arg.tag) {
+                .string => std.fmt.allocPrint(allocator, "string {s}", .{arg.data.string.ptr[0..arg.data.string.len]}),
+                .number => std.fmt.allocPrint(allocator, "number {d}", .{arg.data.number}),
+                else => std.fmt.allocPrint(allocator, "{s}", .{@tagName(arg.tag)}),
+            } catch unreachable;
+            output.append(allocator, text) catch unreachable;
+        }
+        return ExportValue.Nil;
+    }
+
     pub fn pause(vm_ptr: usize, _: usize, _: [*c]ExportValue, _: u8) callconv(.c) ExportValue {
         const vm: *anyopaque = @ptrFromInt(vm_ptr);
         output.append(allocator, std.fmt.allocPrint(allocator, "pause jump={}", .{main.isInJump(vm)}) catch unreachable) catch unreachable;
@@ -570,4 +582,40 @@ test "Export Extern Opening A Started Bough Can Suspend" {
     main.continueRun(vm_ptr);
     runToEnd(vm_ptr);
     try expectOutput(&.{ "pause jump=false", "second" });
+}
+
+test "Export Extern Receives Every Kind Of String" {
+    const text =
+        \\ const held = "held"
+        \\ var built = "built {1 + 1}"
+        \\ extern fn describe |name, seconds| return void
+        \\ === START {
+        \\     describe("literal", 1.5)
+        \\     describe(held, 2)
+        \\     describe(built, 3)
+        \\     describe("literal", 4)
+        \\ }
+    ;
+    output = .empty;
+    defer {
+        clearOutput();
+        output.deinit(allocator);
+    }
+
+    const buf = try compileSource(text);
+    defer allocator.free(buf);
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, "tmp_export.topi") catch {};
+
+    const vm_ptr = try createTestVm(buf, @ptrCast(&TestRunner.onLine));
+    defer main.destroyVm(vm_ptr);
+    main.setExternFunc(vm_ptr, "describe", @ptrCast(&TestRunner.describe), 2, 0, @ptrCast(&TestRunner.free));
+
+    main.start(vm_ptr, "");
+    runToEnd(vm_ptr);
+    try expectOutput(&.{
+        "string literal", "number 1.5",
+        "string held",    "number 2",
+        "string built 2", "number 3",
+        "string literal", "number 4",
+    });
 }

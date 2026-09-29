@@ -47,6 +47,7 @@ pub const ExportValue = extern struct {
         return switch (value) {
             .bool => |b| if (b) True else False,
             .number => |n| .{ .tag = Tag.number, .data = .{ .number = n } },
+            .const_string => |s| .{ .tag = Tag.string, .data = .{ .string = .{ .ptr = s.ptr, .len = s.len } } },
             .enum_value => |e| .{ .tag = Tag.@"enum", .data = .{ .@"enum" = .{
                 .name = .{ .ptr = e.base.data.@"enum".name.ptr, .len = e.base.data.@"enum".name.len },
                 .value = .{ .ptr = e.base.data.@"enum".values[e.index].ptr, .len = e.base.data.@"enum".values[e.index].len },
