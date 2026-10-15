@@ -20,6 +20,7 @@ const Module = topi.module.Module;
 const runner = @import("runner.zig");
 const CliRunner = runner.CliRunner;
 const AutoTestRunner = runner.AutoTestRunner;
+const emitJson = runner.emitJson;
 
 pub const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -39,14 +40,19 @@ fn usage(comptime msg: []const u8) !void {
     try print("   topi run <file>               Run dialogue in terminal\n", .{});
     try print("       -a, --auto                    Automatically continue to the next line\n", .{});
     try print("       -b, --bough <name>            Starting bough\n", .{});
+    try print("       -c, --choices <i,j,...>       Take these choice indices in order, then prompt\n", .{});
+    try print("       -j, --json                    JSON Lines transcript; stops at the first unscripted choice\n", .{});
     try print("       -k, --locale-key-file <file>  Localization key file\n", .{});
     try print("       -l, --load <file>             Read save from file on start\n", .{});
     try print("       -r, --rewind                  Enable rewind/redo at choice prompts (debug)\n", .{});
     try print("       -s, --save <file>             Write save to file on end\n", .{});
+    try print("           --seed <n>                Seed the random builtins\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi test <file> <count>      Run dialogue <count> times, selecting random choices\n", .{});
     try print("       -b, --bough <name>            Starting bough\n", .{});
+    try print("       -j, --json                    JSON visit counts and never-visited names\n", .{});
     try print("       -q, --quiet                   Do not output visit tree on end\n", .{});
+    try print("           --seed <n>                Seed choice selection and the random builtins\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi fmt <file>               Format source file\n", .{});
     try print("       -d, --dry                     Print to stdout instead of writing\n", .{});
@@ -56,8 +62,9 @@ fn usage(comptime msg: []const u8) !void {
     try print("       -v, --verbose\n", .{});
     try print("   topi compile <file>           Compile dialogue to bytecode\n", .{});
     try print("       -d, --dry                     Do not write to file on end\n", .{});
+    try print("       -j, --json                    JSON Lines diagnostics\n", .{});
     try print("       -o, --output <file>           Write to file on end\n", .{});
-    try print("       -t, --time                    Print compile phase timings\n", .{});
+    try print("       -t, --time                   Print compile phase timings\n", .{});
     try print("       -v, --verbose\n", .{});
     try print("   topi loc validate <file>      Check for missing localization ids\n", .{});
     try print("       -d, --dry                     Do not write to file on end\n", .{});
@@ -90,11 +97,20 @@ const RunArgs = struct {
     load: ?[]const u8 = null,
     verbose: bool = false,
     rewind: bool = false,
+    choices: ?[]const u8 = null,
+    json: bool = false,
+    seed: ?u64 = null,
 
     fn init(self: *RunArgs, iter: *std.process.Args.Iterator) !void {
         while (iter.next()) |arg| {
             if (std.mem.eql(u8, arg, "-a") or std.mem.eql(u8, arg, "--auto")) {
                 self.auto = true;
+            } else if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--choices")) {
+                self.choices = iter.next();
+            } else if (std.mem.eql(u8, arg, "-j") or std.mem.eql(u8, arg, "--json")) {
+                self.json = true;
+            } else if (std.mem.eql(u8, arg, "--seed")) {
+                self.seed = try parseSeed(iter.next());
             } else if (std.mem.eql(u8, arg, "-b") or std.mem.eql(u8, arg, "--bough")) {
                 self.bough = iter.next();
             } else if (std.mem.eql(u8, arg, "-s") or std.mem.eql(u8, arg, "--save")) {
@@ -118,12 +134,15 @@ const CompileArgs = struct {
     output: ?[]const u8 = null,
     dry: bool = false,
     time: bool = false,
+    json: bool = false,
     verbose: bool = false,
 
     fn init(self: *CompileArgs, iter: *std.process.Args.Iterator) !void {
         while (iter.next()) |arg| {
             if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
                 self.output = iter.next();
+            } else if (std.mem.eql(u8, arg, "-j") or std.mem.eql(u8, arg, "--json")) {
+                self.json = true;
             } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--dry")) {
                 self.dry = true;
             } else if (std.mem.eql(u8, arg, "-t") or std.mem.eql(u8, arg, "--time")) {
@@ -181,11 +200,17 @@ const TestArgs = struct {
     count: usize = 0,
     bough: ?[]const u8 = null,
     quiet: bool = false,
+    json: bool = false,
+    seed: ?u64 = null,
     verbose: bool = false,
     fn init(self: *TestArgs, iter: *std.process.Args.Iterator) !void {
         while (iter.next()) |arg| {
             if (std.mem.eql(u8, arg, "-q") or std.mem.eql(u8, arg, "--quiet")) {
                 self.quiet = true;
+            } else if (std.mem.eql(u8, arg, "-j") or std.mem.eql(u8, arg, "--json")) {
+                self.json = true;
+            } else if (std.mem.eql(u8, arg, "--seed")) {
+                self.seed = try parseSeed(iter.next());
             } else if (std.mem.eql(u8, arg, "-b") or std.mem.eql(u8, arg, "--bough")) {
                 self.bough = iter.next();
             } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
@@ -225,9 +250,102 @@ const FmtArgs = struct {
     }
 };
 
+fn parseSeed(arg: ?[]const u8) !u64 {
+    const text = arg orelse {
+        try usage("Missing --seed value");
+        return error.InvalidArgs;
+    };
+    return std.fmt.parseInt(u64, text, 10) catch {
+        try usage("--seed must be a non-negative integer");
+        return error.InvalidArgs;
+    };
+}
+
+fn parseChoices(alloc: std.mem.Allocator, list: ?[]const u8) ![]const usize {
+    const text = list orelse return &.{};
+    var indices: std.ArrayList(usize) = .empty;
+    var it = std.mem.tokenizeAny(u8, text, ", ");
+    while (it.next()) |part| try indices.append(alloc, try std.fmt.parseInt(usize, part, 10));
+    return indices.items;
+}
+
+fn seedBuiltins(seed: ?u64) void {
+    if (seed) |s| topi.runtime.builtins.restoreRng(std.Random.DefaultPrng.init(s));
+}
+
+fn emitDiagnostics(mod: *Module) void {
+    for (mod.errors.list.items) |e| emitJson(.{
+        .type = "diagnostic",
+        .severity = e.severity,
+        .file = e.file_path,
+        .line = e.token.line,
+        .column = e.token.column,
+        .message = e.fmt,
+        .note = e.note,
+        .suggestion = e.suggestion,
+    });
+}
+
+fn emitRunEnd(vm: *Vm, alloc: std.mem.Allocator, status: []const u8, run_err: ?anyerror) !void {
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.File.stdout().writerStreaming(io, &buffer);
+    var s: std.json.Stringify = .{ .writer = &writer.interface };
+    try s.beginObject();
+    try s.objectField("type");
+    try s.write("end");
+    try s.objectField("status");
+    try s.write(status);
+    if (run_err) |e| {
+        try s.objectField("error");
+        try s.write(.{
+            .name = @errorName(e),
+            .message = vm.err.msg,
+            .trace = vm.err.trace.items,
+            .suggestion = vm.err.suggestion,
+            .note = vm.err.note,
+        });
+    }
+    try s.objectField("visits");
+    try s.beginObject();
+    for (vm.bytecode.global_symbols) |sym| {
+        const value = vm.globals[sym.index];
+        if (value != .visit or value.visit == 0) continue;
+        try s.objectField(sym.name);
+        try s.write(value.visit);
+    }
+    try s.endObject();
+    try s.objectField("globals");
+    try s.beginObject();
+    for (vm.bytecode.global_symbols) |sym| {
+        const value = vm.globals[sym.index];
+        if (!sym.is_mutable or value == .visit or value == .void) continue;
+        try s.objectField(sym.name);
+        try writeValueJson(&s, value, alloc);
+    }
+    try s.endObject();
+    try s.endObject();
+    try writer.interface.writeByte('\n');
+    try writer.interface.flush();
+}
+
+fn writeValueJson(s: *std.json.Stringify, value: Value, alloc: std.mem.Allocator) !void {
+    switch (value) {
+        .bool => |b| return s.write(b),
+        .nil => return s.write(null),
+        .number => |n| if (std.math.isFinite(n)) return s.print("{d}", .{n}),
+        else => if (value.asString()) |str| return s.write(str),
+    }
+    var text: std.Io.Writer.Allocating = .init(alloc);
+    defer text.deinit();
+    var seen: std.array_hash_map.Auto(topi.utils.UUID.ID, void) = .empty;
+    defer seen.deinit(alloc);
+    value.print(&text.writer, alloc, &seen) catch return s.write("?");
+    try s.write(text.written());
+}
+
 pub fn print(comptime msg: []const u8, args: anytype) !void {
     var buffer: [128]u8 = undefined;
-    var writer = std.Io.File.stdout().writer(io, &buffer);
+    var writer = std.Io.File.stdout().writerStreaming(io, &buffer);
     const stdout = &writer.interface;
     stdout.print(msg, args) catch {
         std.debug.print("Could not print message", .{});
@@ -237,7 +355,7 @@ pub fn print(comptime msg: []const u8, args: anytype) !void {
 
 pub fn writeErrors(mod: *Module) !void {
     var buffer: [128]u8 = undefined;
-    var writer = std.Io.File.stdout().writer(io, &buffer);
+    var writer = std.Io.File.stdout().writerStreaming(io, &buffer);
     const stdout = &writer.interface;
     try mod.writeErrors(stdout, true);
 }
@@ -245,7 +363,7 @@ pub fn writeErrors(mod: *Module) !void {
 fn writeOutput(full_path: []const u8, content: []const u8, dry: bool) !void {
     if (dry) {
         var buffer: [128]u8 = undefined;
-        var writer = std.Io.File.stdout().writer(io, &buffer);
+        var writer = std.Io.File.stdout().writerStreaming(io, &buffer);
         const stdout = &writer.interface;
         try stdout.writeAll(content);
         try stdout.flush();
@@ -320,6 +438,7 @@ fn createModule(alloc: std.mem.Allocator, args: anytype) !*Module {
 }
 
 fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
+    const scripted = parseChoices(alloc, args.choices) catch return usage("--choices expects indices like 1,0,2");
     var mod = createModule(alloc, args) catch |err| {
         try print("Could not create module: {s}\n", .{@errorName(err)});
         return if (args.verbose) err else {};
@@ -327,14 +446,20 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
     defer mod.deinit();
 
     var bytecode = mod.generateBytecode(alloc) catch |err| {
+        if (args.json) {
+            emitDiagnostics(mod);
+            emitJson(.{ .type = "end", .status = "compile_error" });
+            return if (args.verbose) err else {};
+        }
         try print("Could not create bytecode: {s}\n", .{@errorName(err)});
         try writeErrors(mod);
         return if (args.verbose) err else {};
     };
-    try writeErrors(mod);
+    if (args.json) emitDiagnostics(mod) else try writeErrors(mod);
     defer bytecode.free(alloc);
+    seedBuiltins(args.seed);
 
-    var cli_runner = CliRunner.init(args.auto);
+    var cli_runner = CliRunner.init(args.auto, args.json, scripted);
     var vm = Vm.init(alloc, io, &bytecode, &cli_runner.runner) catch |err| {
         try print("Could not start the dialogue runtime\n", .{});
         return if (args.verbose) err else {};
@@ -354,8 +479,12 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
     }
 
     vm.start(args.bough) catch |err| {
+        if (args.json) {
+            try emitRunEnd(&vm, alloc, "error", err);
+            return if (args.verbose) err else {};
+        }
         var buffer: [128]u8 = undefined;
-        var writer = std.Io.File.stdout().writer(io, &buffer);
+        var writer = std.Io.File.stdout().writerStreaming(io, &buffer);
         const stdout = &writer.interface;
         vm.err.print(stdout);
         return if (args.verbose) err else {};
@@ -363,14 +492,23 @@ fn runCommand(args: RunArgs, alloc: std.mem.Allocator) !void {
     if (args.locale_key_file) |file| {
         try vm.setLocale(file);
     }
+    var run_err: ?anyerror = null;
     while (vm.can_continue) {
-        vm.run() catch {
+        vm.run() catch |err| {
+            run_err = err;
+            if (args.json) break;
             var buffer: [128]u8 = undefined;
-            var writer = std.Io.File.stdout().writer(io, &buffer);
+            var writer = std.Io.File.stdout().writerStreaming(io, &buffer);
             const stdout = &writer.interface;
             vm.err.print(stdout);
             break;
         };
+    }
+    if (args.json) {
+        const status = if (run_err != null) "error" else if (cli_runner.stop_reason) |r| @tagName(r) else "finished";
+        try emitRunEnd(&vm, alloc, status, run_err);
+    } else if (cli_runner.stop_reason == .invalid_choice) {
+        try print("Invalid scripted choice {d}\n", .{scripted[cli_runner.next_scripted - 1]});
     }
 
     if (args.save) |file_path| {
@@ -397,16 +535,22 @@ fn compileCommand(args: CompileArgs, alloc: std.mem.Allocator) !void {
     };
     defer mod.deinit();
     var bytecode = mod.generateBytecode(alloc) catch |err| {
+        if (args.json) {
+            emitDiagnostics(mod);
+            emitJson(.{ .type = "result", .ok = false });
+            return if (args.verbose) err else {};
+        }
         try print("Could not generate bytecode", .{});
         try writeErrors(mod);
         return if (args.verbose) err else {};
     };
-    try writeErrors(mod);
-    if (args.time) try printCompileTimings(args.file.?, mod.timings);
+    if (args.json) emitDiagnostics(mod) else try writeErrors(mod);
+    if (args.time and !args.json) try printCompileTimings(args.file.?, mod.timings);
     defer bytecode.free(alloc);
 
+    if (args.json) emitJson(.{ .type = "result", .ok = true });
     if (args.dry) {
-        try print("Success\n", .{});
+        if (!args.json) try print("Success\n", .{});
         return;
     }
     // --time alone (without -o) is a benchmark mode: timings already printed, nothing to write.
@@ -496,25 +640,40 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
     defer mod.deinit();
 
     var bytecode = mod.generateBytecode(alloc) catch |err| {
+        if (args.json) {
+            emitDiagnostics(mod);
+            emitJson(.{ .type = "end", .status = "compile_error" });
+            return if (args.verbose) err else {};
+        }
         try print("Could not create bytecode: {s}\n", .{@errorName(err)});
         try writeErrors(mod);
         return if (args.verbose) err else {};
     };
-    try writeErrors(mod);
+    if (args.json) emitDiagnostics(mod) else try writeErrors(mod);
     defer bytecode.free(alloc);
+    seedBuiltins(args.seed);
+    const base_seed = args.seed orelse blk: {
+        var seed_bytes: [8]u8 = undefined;
+        io.random(&seed_bytes);
+        break :blk std.mem.readInt(u64, &seed_bytes, .little);
+    };
 
     var visit_counts: std.array_hash_map.String(u64) = .empty;
     defer visit_counts.deinit(alloc);
     var i: usize = 0;
     while (i < args.count) : (i += 1) {
-        var auto_runner = AutoTestRunner.init();
+        var auto_runner = AutoTestRunner.init(base_seed +% i);
         var vm = try Vm.init(alloc, io, &bytecode, &auto_runner.runner);
         defer vm.deinit();
         try vm.start(args.bough);
         while (vm.can_continue) {
             vm.run() catch |e| {
+                if (args.json) {
+                    try emitRunEnd(&vm, alloc, "error", e);
+                    return;
+                }
                 var buffer: [128]u8 = undefined;
-                var writer = std.Io.File.stdout().writer(io, &buffer);
+                var writer = std.Io.File.stdout().writerStreaming(io, &buffer);
                 const stdout = &writer.interface;
                 if (vm.err.msg == null) {
                     stdout.print("Error: {s}\n", .{@errorName(e)}) catch {};
@@ -525,7 +684,7 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
                 return;
             };
         }
-        if (args.quiet) continue;
+        if (args.quiet and !args.json) continue;
         for (vm.globals, 0..) |g, idx| {
             if (g == .visit) {
                 const name = bytecode.global_symbols[idx].name;
@@ -535,6 +694,7 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
             // all visits are first so we can break
         }
     }
+    if (args.json) return emitTestResult(args.count, base_seed, &visit_counts);
     if (args.quiet) {
         try print("Success\n", .{});
     }
@@ -542,6 +702,35 @@ fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
     while (it.next()) |entry| {
         try print("{s} = {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
     }
+}
+
+fn emitTestResult(runs: usize, seed: u64, visit_counts: *const std.array_hash_map.String(u64)) !void {
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.File.stdout().writerStreaming(io, &buffer);
+    var s: std.json.Stringify = .{ .writer = &writer.interface };
+    try s.beginObject();
+    try s.objectField("type");
+    try s.write("result");
+    try s.objectField("runs");
+    try s.write(runs);
+    try s.objectField("seed");
+    try s.write(seed);
+    try s.objectField("visits");
+    try s.beginObject();
+    var it = visit_counts.iterator();
+    while (it.next()) |entry| {
+        try s.objectField(entry.key_ptr.*);
+        try s.write(entry.value_ptr.*);
+    }
+    try s.endObject();
+    try s.objectField("unvisited");
+    try s.beginArray();
+    it = visit_counts.iterator();
+    while (it.next()) |entry| if (entry.value_ptr.* == 0) try s.write(entry.key_ptr.*);
+    try s.endArray();
+    try s.endObject();
+    try writer.interface.writeByte('\n');
+    try writer.interface.flush();
 }
 
 fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
@@ -556,7 +745,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                 try std.Io.Dir.cwd().createDirPath(io, folder);
             }
             var buffer: [128]u8 = undefined;
-            var w = std.Io.File.stdout().writer(io, &buffer);
+            var w = std.Io.File.stdout().writerStreaming(io, &buffer);
             const stdout = &w.interface;
             var gen_result = Locale.generateFromModule(
                 alloc,
@@ -607,7 +796,7 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
 
             if (args.dry) {
                 var buffer: [128]u8 = undefined;
-                var writer = std.Io.File.stdout().writer(io, &buffer);
+                var writer = std.Io.File.stdout().writerStreaming(io, &buffer);
                 const stdout = &writer.interface;
                 Locale.exportFile(mod.entry, stdout, args.lang, alloc) catch |err| {
                     if (err == error.MissingStamp) {

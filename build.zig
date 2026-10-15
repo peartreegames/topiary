@@ -81,6 +81,12 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
 
+    const scripted_run = b.addRunArtifact(exe);
+    scripted_run.addArgs(&.{ "run", "examples/hello.topi", "-b", "START", "--json", "-c", "1" });
+    scripted_run.addCheck(.{ .expect_stdout_match = "\"selected\":1}\n{\"type\":\"line\",\"speaker\":null,\"content\":\"The person acts as though" });
+    scripted_run.addCheck(.{ .expect_stdout_match = "{\"type\":\"end\",\"status\":\"finished\"" });
+    test_step.dependOn(&scripted_run.step);
+
     // Run with: `zig build fuzz --fuzz`
     // The top-level `--fuzz` flag tells the build system to enable continuous
     // fuzzing for tests that call `std.testing.fuzz`.

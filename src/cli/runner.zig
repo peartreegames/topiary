@@ -13,10 +13,18 @@ const Value = topi.types.Value;
 pub const CliRunner = struct {
     runner: Runner,
     is_auto: bool,
+    json: bool,
+    scripted_choices: []const usize,
+    next_scripted: usize = 0,
+    stop_reason: ?StopReason = null,
 
-    pub fn init(is_auto: bool) CliRunner {
+    pub const StopReason = enum { awaiting_choice, invalid_choice };
+
+    pub fn init(is_auto: bool, json: bool, scripted_choices: []const usize) CliRunner {
         return .{
-            .is_auto = is_auto,
+            .is_auto = is_auto or json,
+            .json = json,
+            .scripted_choices = scripted_choices,
             .runner = .{
                 .on_line = onLine,
                 .on_choices = onChoices,
@@ -27,6 +35,11 @@ pub const CliRunner = struct {
 
     pub fn onLine(runner: *Runner, vm: *Vm, dialogue: *const Line) void {
         const self: *CliRunner = @fieldParentPtr("runner", runner);
+        if (self.json) {
+            emitJson(.{ .type = "line", .speaker = dialogue.speaker, .content = dialogue.content, .tags = dialogue.tags });
+            vm.selectContinue();
+            return;
+        }
         print(":", .{}) catch {};
         if (dialogue.speaker) |speaker| {
             print("{s}", .{speaker}) catch {};
@@ -49,7 +62,24 @@ pub const CliRunner = struct {
         }
     }
 
-    pub fn onChoices(_: *Runner, vm: *Vm, choices: []Choice) void {
+    pub fn onChoices(runner: *Runner, vm: *Vm, choices: []Choice) void {
+        const self: *CliRunner = @fieldParentPtr("runner", runner);
+        if (self.next_scripted < self.scripted_choices.len) {
+            const scripted = self.scripted_choices[self.next_scripted];
+            self.next_scripted += 1;
+            if (self.json) {
+                emitJson(.{ .type = "choices", .choices = choices, .selected = scripted });
+            } else {
+                for (choices, 0..) |choice, i| print("[{d}] {s}\n", .{ i, choice.content }) catch {};
+                print("> {d}\n", .{scripted}) catch {};
+            }
+            vm.selectChoice(scripted) catch return self.stop(vm, .invalid_choice);
+            return;
+        }
+        if (self.json) {
+            emitJson(.{ .type = "choices", .choices = choices, .selected = null });
+            return self.stop(vm, .awaiting_choice);
+        }
         var index: ?usize = null;
         while (index == null) {
             var stdin_buffer: [8]u8 = undefined;
@@ -98,19 +128,29 @@ pub const CliRunner = struct {
     }
 
     pub fn onValueChanged(_: *Runner, _: *Vm, _: []const u8, _: Value) void {}
+
+    fn stop(self: *CliRunner, vm: *Vm, reason: StopReason) void {
+        self.stop_reason = reason;
+        vm.can_continue = false;
+    }
 };
+
+pub fn emitJson(value: anytype) void {
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.File.stdout().writerStreaming(io, &buffer);
+    const out = &writer.interface;
+    std.json.Stringify.value(value, .{}, out) catch {};
+    out.writeByte('\n') catch {};
+    out.flush() catch {};
+}
 
 pub const AutoTestRunner = struct {
     runner: Runner,
     rnd: std.Random.Xoshiro256,
 
-    pub fn init() AutoTestRunner {
+    pub fn init(seed: u64) AutoTestRunner {
         return .{
-            .rnd = blk: {
-                var seed_bytes: [8]u8 = undefined;
-                io.random(&seed_bytes);
-                break :blk std.Random.DefaultPrng.init(std.mem.readInt(u64, &seed_bytes, .little));
-            },
+            .rnd = std.Random.DefaultPrng.init(seed),
             .runner = .{
                 .on_line = onLine,
                 .on_choices = onChoices,

@@ -13,14 +13,19 @@ Usage:
    topi run <file>               Run dialogue in terminal
        -a, --auto                    Automatically continue to the next line
        -b, --bough <name>            Starting bough
+       -c, --choices <i,j,...>       Take these choice indices in order, then prompt
+       -j, --json                    JSON Lines transcript; stops at the first unscripted choice
        -k, --locale-key-file <file>  Localization key file
        -l, --load <file>             Read save from file on start
        -r, --rewind                  Enable rewind/redo at choice prompts (debug)
        -s, --save <file>             Write save to file on end
+           --seed <n>                Seed the random builtins
        -v, --verbose
    topi test <file> <count>      Run dialogue <count> times, selecting random choices
        -b, --bough <name>            Starting bough
+       -j, --json                    JSON visit counts and never-visited names
        -q, --quiet                   Do not output visit tree on end
+           --seed <n>                Seed choice selection and the random builtins
        -v, --verbose
    topi fmt <file>               Format source file
        -d, --dry                     Print to stdout instead of writing
@@ -30,6 +35,7 @@ Usage:
        -v, --verbose
    topi compile <file>           Compile dialogue to bytecode
        -d, --dry                     Do not write to file on end
+       -j, --json                    JSON Lines diagnostics
        -o, --output <file>           Write to file on end
        -t, --time                    Print compile phase timings
        -v, --verbose
@@ -49,4 +55,6 @@ Usage:
        -v, --verbose
 ```
 
-While running a topi file you can press `enter` for the next line, and select a choice with `0-9` then `enter`
+While running a topi file you can press `enter` for the next line, and select a choice with `0-9` then `enter`.
+
+For scripts and agents, `topi run <file> -b <bough> --json -c 1,0,2` plays a fixed path and prints one JSON object per line: `line`, `choices` (with the `selected` index, or `null` where it stopped), then a final `end` with `status` (`finished`, `awaiting_choice`, `invalid_choice`, `error`, `compile_error`), visit counts and mutable globals. Add `--seed <n>` to make `rnd`/`random` repeatable.
