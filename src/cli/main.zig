@@ -785,8 +785,8 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                 return if (args.verbose) err else {};
             };
             defer mod.deinit();
-            mod.entry.loadSource() catch |err| {
-                try print("Could not load source: {s}\n", .{@errorName(err)});
+            mod.resolveIncludes() catch |err| {
+                try writeErrors(mod);
                 return if (args.verbose) err else {};
             };
             mod.entry.buildTree() catch |err| {
@@ -854,8 +854,8 @@ fn localizeCommand(args: LocalizeArgs, alloc: std.mem.Allocator) !void {
                 return if (args.verbose) err else {};
             };
             defer mod.deinit();
-            mod.entry.loadSource() catch |err| {
-                try print("Could not load source: {s}\n", .{@errorName(err)});
+            mod.resolveIncludes() catch |err| {
+                try writeErrors(mod);
                 return if (args.verbose) err else {};
             };
             mod.entry.buildTree() catch |err| {

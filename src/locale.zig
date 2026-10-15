@@ -146,7 +146,7 @@ pub const Locale = struct {
     pub fn checkFileAtPath(full_path: []const u8, allocator: std.mem.Allocator) !usize {
         var mod = try Module.init(allocator, default_io, full_path);
         defer mod.deinit();
-        try mod.entry.loadSource();
+        try mod.resolveIncludes();
         try mod.entry.buildTree();
         return checkFile(mod.entry);
     }
@@ -161,7 +161,7 @@ pub const Locale = struct {
     pub fn validateFileAtPath(full_path: []const u8, allocator: std.mem.Allocator) ![]const u8 {
         var mod = try Module.init(allocator, default_io, full_path);
         defer mod.deinit();
-        try mod.entry.loadSource();
+        try mod.resolveIncludes();
         try mod.entry.buildTree();
         return validateFile(mod.entry, allocator);
     }
@@ -464,7 +464,7 @@ pub const Locale = struct {
     pub fn exportFileAtPath(full_path: []const u8, writer: *std.Io.Writer, allocator: std.mem.Allocator, base_lang: []const u8) !void {
         var mod = try Module.init(allocator, default_io, full_path);
         defer mod.deinit();
-        try mod.entry.loadSource();
+        try mod.resolveIncludes();
         try mod.entry.buildTree();
         try exportFile(mod.entry, writer, base_lang, allocator);
     }
@@ -472,7 +472,7 @@ pub const Locale = struct {
     pub fn exportFileAtPathWithMerge(full_path: []const u8, writer: *std.Io.Writer, allocator: std.mem.Allocator, base_lang: []const u8, existing_csv: ?[]const u8) !void {
         var mod = try Module.init(allocator, default_io, full_path);
         defer mod.deinit();
-        try mod.entry.loadSource();
+        try mod.resolveIncludes();
         try mod.entry.buildTree();
         if (existing_csv) |csv| {
             try exportFileWithMerge(mod.entry, writer, base_lang, csv, allocator);

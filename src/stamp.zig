@@ -14,7 +14,7 @@ pub const Stamp = struct {
     pub fn stampFileAtPath(full_path: []const u8, allocator: std.mem.Allocator) ![]const u8 {
         var mod = try Module.init(allocator, std.Io.Threaded.global_single_threaded.io(), full_path);
         defer mod.deinit();
-        try mod.entry.loadSource();
+        try mod.resolveIncludes();
         try mod.entry.buildTree();
         return stampFile(mod.entry, allocator);
     }
