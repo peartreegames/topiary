@@ -87,7 +87,7 @@ pub const Lexer = struct {
             ':' => .colon,
             '@' => {
                 const start = self.position;
-                while (!isWhitespace(self.peekChar()) and !isEndOfLine(self.peekChar())) {
+                while (isIdChar(self.peekChar())) {
                     self.readChar();
                 }
                 self.readChar();
@@ -287,6 +287,13 @@ pub const Lexer = struct {
     fn isLetter(char: u8) bool {
         return switch (char) {
             'a'...'z', 'A'...'Z', '_' => true,
+            else => false,
+        };
+    }
+
+    fn isIdChar(char: u8) bool {
+        return switch (char) {
+            '0'...'9', 'A'...'Z', '-' => true,
             else => false,
         };
     }

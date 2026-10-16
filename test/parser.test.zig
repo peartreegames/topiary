@@ -705,6 +705,37 @@ test "Parse Forks" {
     try testing.expect(choice.body[0].type == .divert);
 }
 
+test "Parse Ids Before Comma And Brace" {
+    const input =
+        \\ var n = 1
+        \\ === START {
+        \\     switch n {
+        \\         1: :Ell: "One." @AAAAAAAA-AAAAAAAA,
+        \\         2: { :Ell: "Two." @BBBBBBBB-BBBBBBBB},
+        \\         else: :Ell: "Other." @CCCCCCCC-CCCCCCCC
+        \\     }
+        \\     fork @DDDDDDDD-DDDDDDDD{
+        \\         ~ "Pick" @EEEEEEEE-EEEEEEEE{ :Ell: "Picked." @FFFFFFFF-FFFFFFFF}
+        \\     }
+        \\ }
+    ;
+    const mod = try parseSourceClean(input);
+    defer mod.deinit();
+    const body = mod.entry.tree.?.root[1].type.bough.body;
+
+    const prongs = body[0].type.@"switch".prongs;
+    try testing.expectEqual(@as(usize, 3), prongs.len);
+    try testing.expectEqualStrings("AAAAAAAA-AAAAAAAA", &prongs[0].type.switch_prong.body[0].type.dialogue.id);
+    try testing.expectEqualStrings("BBBBBBBB-BBBBBBBB", &prongs[1].type.switch_prong.body[0].type.dialogue.id);
+    try testing.expectEqualStrings("CCCCCCCC-CCCCCCCC", &prongs[2].type.switch_prong.body[0].type.dialogue.id);
+
+    const fork = body[1].type.fork;
+    try testing.expectEqualStrings("DDDDDDDD-DDDDDDDD", &fork.id);
+    const choice = fork.body[0].type.choice;
+    try testing.expectEqualStrings("EEEEEEEE-EEEEEEEE", &choice.id);
+    try testing.expectEqualStrings("FFFFFFFF-FFFFFFFF", &choice.body[0].type.dialogue.id);
+}
+
 test "Parse Divert" {
     const input =
         \\  === BOUGH {
