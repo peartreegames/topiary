@@ -452,6 +452,10 @@ pub const Vm = struct {
         self.can_continue = true;
         self.is_waiting = false;
         self.suspend_requested = false;
+        // A run stopped mid-bough (at a fork or a line) leaves its return points and jumps behind.
+        self.jump_backups.clearRetainingCapacity();
+        self.jump_requests.clearRetainingCapacity();
+        self.anchor_stack.clearRetainingCapacity();
         self.stack.resize(self.bytecode.locals_count);
         while (self.frames.count > 1) {
             _ = self.frames.pop();

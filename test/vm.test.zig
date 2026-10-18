@@ -1252,6 +1252,48 @@ test "Runtime Top-level Vars Initialize Before Targeted Bough" {
     try test_runner.expectOutput(expected);
 }
 
+test "Runtime Start Drops An Abandoned fork^" {
+    const input =
+        \\ === A {
+        \\     :Speaker: "first"
+        \\ }
+        \\ === C {
+        \\     :Speaker: "before"
+        \\     fork^ {
+        \\         ~ "x" :Speaker: "inside"
+        \\     }
+        \\     :Speaker: "after"
+        \\ }
+    ;
+    const expected = &[_][]const u8{ "before", "first" };
+
+    var mod = try Module.initEmpty(allocator, std.testing.io);
+    defer mod.deinit();
+    var vm = try initTestVm(input, mod, false);
+    defer vm.deinit();
+    const test_runner: *TestRunner = @fieldParentPtr("runner", vm.runner);
+    defer test_runner.deinit();
+    defer vm.bytecode.free(testing.allocator);
+
+    // A host that stops a run at a fork leaves it unanswered, then starts another bough.
+    test_runner.runner.on_choices = struct {
+        fn ignore(_: *Runner, _: *Vm, _: []topi.runtime.Choice) void {}
+    }.ignore;
+    try vm.start("C");
+    while (vm.can_continue and !vm.is_waiting) try vm.run();
+    try testing.expect(vm.is_waiting);
+
+    test_runner.runner.on_choices = TestRunner.onChoices;
+    try vm.start("A");
+    while (vm.can_continue) {
+        vm.run() catch |err| {
+            printErr(&vm);
+            return err;
+        };
+    }
+    try test_runner.expectOutput(expected);
+}
+
 test "Runtime Bough Loops" {
     const test_cases = .{
         .{
