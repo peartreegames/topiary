@@ -423,10 +423,12 @@ fn cloneObj(vm: *Vm, obj: *Value.Obj, dedup: *DedupMap) std.mem.Allocator.Error!
             const new_fields = try vm.alloc.alloc(Value, inst.fields.len);
             // Init to void so a mid-clone GC sweep sees a coherent obj.
             @memset(new_fields, .{ .void = {} });
-            const new_value = try vm.gc.create(vm, .{ .instance = .{
-                .base = inst.base, // class is immutable, share
-                .fields = new_fields,
-            } });
+            const new_value = try vm.gc.create(vm, .{
+                .instance = .{
+                    .base = inst.base, // class is immutable, share
+                    .fields = new_fields,
+                },
+            });
             try dedup.put(obj, new_value.obj);
             for (inst.fields, 0..) |f, i| {
                 new_value.obj.data.instance.fields[i] = try cloneValue(vm, f, dedup);

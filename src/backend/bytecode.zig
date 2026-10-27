@@ -199,7 +199,7 @@ pub const Bytecode = struct {
         var i: usize = 0;
         while (i < instructions.len) {
             try writer.print("{d:0>4} ", .{i});
-            const op: OpCode = @enumFromInt(instructions[i]);
+            const op: OpCode = @fromBackingInt(instructions[i]);
             try writer.print("{s: <16} ", .{op.toString()});
             i += 1;
             switch (op) {

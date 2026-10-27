@@ -305,10 +305,10 @@ pub const Module = struct {
         const raw_dir = std.fs.path.dirname(raw_path);
         if (raw_dir) |rd| {
             if (rd.len > 0) {
-                return try std.fmt.allocPrint(self.allocator, "did you mean '{s}/{s}'?", .{ rd, match });
+                return try self.allocator.print("did you mean '{s}/{s}'?", .{ rd, match });
             }
         }
-        return try std.fmt.allocPrint(self.allocator, "did you mean '{s}'?", .{match});
+        return try self.allocator.print("did you mean '{s}'?", .{match});
     }
 
     /// Lightweight lexer scan that finds all include "path" patterns

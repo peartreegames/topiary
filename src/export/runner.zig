@@ -46,8 +46,8 @@ pub const ExportLogger = struct {
     };
 
     pub fn log(self: ExportLogger, comptime msg: []const u8, args: anytype, severity: Severity) void {
-        if (@intFromEnum(severity) < @intFromEnum(self.severity)) return;
-        const buf = std.fmt.allocPrint(self.allocator, msg, args) catch |err| {
+        if (@backingInt(severity) < @backingInt(self.severity)) return;
+        const buf = self.allocator.print(msg, args) catch |err| {
             std.log.err("Error fmt: {s}", .{@errorName(err)});
             self.on_log(.{ .ptr = msg.ptr, .len = msg.len }, severity);
             return;
@@ -130,7 +130,7 @@ pub const ExportRunner = struct {
             .on_choices = on_choices,
             .on_value_changed = on_value_changed,
             .logger = logger,
-            .tags = [_]ExportString{.{ .ptr = 0, .len = 0 }} ** 512,
+            .tags = @splat(.{ .ptr = 0, .len = 0 }),
             .runner = .{
                 .on_line = onLine,
                 .on_choices = onChoices,
@@ -162,7 +162,7 @@ pub const ExportRunner = struct {
             .tags = &self.tags,
             .tags_length = @intCast(tag_count),
         };
-        self.logger.log("Line:{s}: {s} {f}", .{ dialogue.speaker orelse "", dialogue.content, fmt.array("#{s}",dialogue.tags) }, .debug);
+        self.logger.log("Line:{s}: {s} {f}", .{ dialogue.speaker orelse "", dialogue.content, fmt.array("#{s}", dialogue.tags) }, .debug);
         self.on_line(@intFromPtr(vm), &self.dialogue);
     }
 
@@ -191,7 +191,7 @@ pub const ExportRunner = struct {
             }
             t_count += t;
 
-            self.logger.log("Choice: {s} {f}", .{choices[i].content, fmt.array("#{s}", choices[i].tags)}, .debug);
+            self.logger.log("Choice: {s} {f}", .{ choices[i].content, fmt.array("#{s}", choices[i].tags) }, .debug);
             const content = choices[i].content;
             result[i] = .{
                 .content = .{ .ptr = content.ptr, .len = content.len },

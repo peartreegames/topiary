@@ -46,7 +46,7 @@ pub export fn setPanicHandler(handler_ptr: ?*const anyopaque) void {
 pub export fn calculateCompileSize(path_ptr: [*:0]const u8, log_ptr: *const anyopaque, log_severity: u8) usize {
     const logger = ExportLogger{
         .on_log = @ptrCast(@alignCast(log_ptr)),
-        .severity = @enumFromInt(log_severity),
+        .severity = @fromBackingInt(log_severity),
         .allocator = alloc,
     };
 
@@ -62,7 +62,7 @@ pub export fn calculateCompileSize(path_ptr: [*:0]const u8, log_ptr: *const anyo
 pub export fn compile(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, log_ptr: *const anyopaque, log_severity: u8) usize {
     const logger = ExportLogger{
         .on_log = @ptrCast(@alignCast(log_ptr)),
-        .severity = @enumFromInt(log_severity),
+        .severity = @fromBackingInt(log_severity),
         .allocator = alloc,
     };
     var fixed = std.Io.Writer.fixed(out_ptr[0..max]);
@@ -246,11 +246,11 @@ pub export fn createVm(
     on_value_changed_ptr: *const anyopaque,
     log_ptr: *const anyopaque,
     log_severity: u8,
-)?*anyopaque {
+) ?*anyopaque {
     const on_dialogue: ExportRunner.OnLine = @ptrCast(@alignCast(on_dialogue_ptr));
     const on_choices: ExportRunner.OnChoices = @ptrCast(@alignCast(on_choice_ptr));
     const on_value_changed: ExportRunner.OnValueChanged = @ptrCast(@alignCast(on_value_changed_ptr));
-    const logger = ExportLogger{ .on_log = @ptrCast(@alignCast(log_ptr)), .severity = @enumFromInt(log_severity), .allocator = alloc };
+    const logger = ExportLogger{ .on_log = @ptrCast(@alignCast(log_ptr)), .severity = @fromBackingInt(log_severity), .allocator = alloc };
 
     var fixed = std.Io.Reader.fixed(source_ptr[0..source_len]);
     logger.log("Deserializing bytecode", .{}, .info);
@@ -395,7 +395,7 @@ pub export fn removeLocale(vm_ptr: *anyopaque) void {
 pub export fn calculateFormatSize(path_ptr: [*:0]const u8, indent_width: u8, log_ptr: *const anyopaque, log_severity: u8) usize {
     const logger = ExportLogger{
         .on_log = @ptrCast(@alignCast(log_ptr)),
-        .severity = @enumFromInt(log_severity),
+        .severity = @fromBackingInt(log_severity),
         .allocator = alloc,
     };
     const result = formatInternal(std.mem.sliceTo(path_ptr, 0), if (indent_width == 0) 4 else indent_width, logger);
@@ -408,7 +408,7 @@ pub export fn calculateFormatSize(path_ptr: [*:0]const u8, indent_width: u8, log
 pub export fn format(path_ptr: [*:0]const u8, out_ptr: [*]u8, max: usize, indent_width: u8, log_ptr: *const anyopaque, log_severity: u8) usize {
     const logger = ExportLogger{
         .on_log = @ptrCast(@alignCast(log_ptr)),
-        .severity = @enumFromInt(log_severity),
+        .severity = @fromBackingInt(log_severity),
         .allocator = alloc,
     };
     const result = formatInternal(std.mem.sliceTo(path_ptr, 0), if (indent_width == 0) 4 else indent_width, logger);

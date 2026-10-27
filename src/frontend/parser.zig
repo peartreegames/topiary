@@ -26,7 +26,7 @@ const Precedence = enum(u4) {
     index,
 
     fn val(self: Precedence) u4 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 };
 

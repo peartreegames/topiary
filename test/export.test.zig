@@ -42,11 +42,11 @@ fn compileSource(text: []const u8) ![]u8 {
     const path = try std.fs.path.resolve(allocator, &.{ dir_path, "tmp_export.topi" ++ "\x00" });
     defer allocator.free(path);
     const path_ptr: [*:0]const u8 = path[0 .. path.len - 1 :0];
-    const calc_size = main.calculateCompileSize(path_ptr, @ptrCast(&TestRunner.log), @intFromEnum(ExportLogger.Severity.debug));
+    const calc_size = main.calculateCompileSize(path_ptr, @ptrCast(&TestRunner.log), @backingInt(ExportLogger.Severity.debug));
     if (calc_size == 0) return error.CompileFailed;
     const buf = try allocator.alloc(u8, calc_size);
     errdefer allocator.free(buf);
-    const compile_size = main.compile(path_ptr, buf.ptr, buf.len, @ptrCast(&TestRunner.log), @intFromEnum(ExportLogger.Severity.debug));
+    const compile_size = main.compile(path_ptr, buf.ptr, buf.len, @ptrCast(&TestRunner.log), @backingInt(ExportLogger.Severity.debug));
     try std.testing.expectEqual(compile_size, calc_size);
     return buf;
 }
@@ -68,7 +68,7 @@ const TestRunner = struct {
     }
 
     pub fn onValueChanged(_: usize, name_ptr: [*c]const u8, name_len: usize, _: ExportValue) callconv(.c) void {
-        output.append(allocator, std.fmt.allocPrint(allocator, "onValueChanged: {s}", .{name_ptr[0..name_len]}) catch unreachable) catch unreachable;
+        output.append(allocator, allocator.print("onValueChanged: {s}", .{name_ptr[0..name_len]}) catch unreachable) catch unreachable;
     }
 
     pub fn log(msg: ExportString, severity: ExportLogger.Severity) callconv(.c) void {
@@ -88,16 +88,16 @@ const TestRunner = struct {
     pub fn sum(_: usize, _: usize, args: [*c]ExportValue, _: u8) callconv(.c) ExportValue {
         const arg1 = args[0].data.number;
         const arg2 = args[1].data.number;
-        output.append(allocator, std.fmt.allocPrint(allocator, "extern sum {d} + {d} = {d}", .{ arg1, arg2, arg1 + arg2 }) catch unreachable) catch unreachable;
+        output.append(allocator, allocator.print("extern sum {d} + {d} = {d}", .{ arg1, arg2, arg1 + arg2 }) catch unreachable) catch unreachable;
         return .{ .tag = .number, .data = .{ .number = arg1 + arg2 } };
     }
 
     pub fn describe(_: usize, _: usize, args: [*c]ExportValue, count: u8) callconv(.c) ExportValue {
         for (args[0..count]) |arg| {
             const text = switch (arg.tag) {
-                .string => std.fmt.allocPrint(allocator, "string {s}", .{arg.data.string.ptr[0..arg.data.string.len]}),
-                .number => std.fmt.allocPrint(allocator, "number {d}", .{arg.data.number}),
-                else => std.fmt.allocPrint(allocator, "{s}", .{@tagName(arg.tag)}),
+                .string => allocator.print("string {s}", .{arg.data.string.ptr[0..arg.data.string.len]}),
+                .number => allocator.print("number {d}", .{arg.data.number}),
+                else => allocator.print("{s}", .{@tagName(arg.tag)}),
             } catch unreachable;
             output.append(allocator, text) catch unreachable;
         }
@@ -106,7 +106,7 @@ const TestRunner = struct {
 
     pub fn pause(vm_ptr: usize, _: usize, _: [*c]ExportValue, _: u8) callconv(.c) ExportValue {
         const vm: *anyopaque = @ptrFromInt(vm_ptr);
-        output.append(allocator, std.fmt.allocPrint(allocator, "pause jump={}", .{main.isInJump(vm)}) catch unreachable) catch unreachable;
+        output.append(allocator, allocator.print("pause jump={}", .{main.isInJump(vm)}) catch unreachable) catch unreachable;
         main.suspendVm(vm);
         return ExportValue.Nil;
     }
@@ -167,7 +167,7 @@ test "Export Create and Destroy Vm" {
         @ptrCast(&TestRunner.onChoices),
         @ptrCast(&TestRunner.onValueChanged),
         @ptrCast(&TestRunner.log),
-        @intFromEnum(ExportLogger.Severity.debug),
+        @backingInt(ExportLogger.Severity.debug),
     ) orelse return error.InternalError;
     const vm: *Vm = @ptrCast(@alignCast(vm_ptr));
 
@@ -231,7 +231,7 @@ test "Export State Save and Load" {
         @ptrCast(&TestRunner.onChoices),
         @ptrCast(&TestRunner.onValueChanged),
         @ptrCast(&TestRunner.log),
-        @intFromEnum(ExportLogger.Severity.debug),
+        @backingInt(ExportLogger.Severity.debug),
     ) orelse return error.InternalError;
     defer main.destroyVm(vm1_ptr);
 
@@ -261,7 +261,7 @@ test "Export State Save and Load" {
         @ptrCast(&TestRunner.onChoices),
         @ptrCast(&TestRunner.onValueChanged),
         @ptrCast(&TestRunner.log),
-        @intFromEnum(ExportLogger.Severity.debug),
+        @backingInt(ExportLogger.Severity.debug),
     ) orelse return error.InternalError;
     defer main.destroyVm(vm2_ptr);
 
@@ -283,7 +283,7 @@ test "Export State Save and Load" {
 
 test "Export Invalid Bytecode Returns Null" {
     // Garbage bytes should cause createVm to return null, not crash.
-    const garbage = [_]u8{ 0xDE, 0xAD, 0xBE, 0xEF } ** 16;
+    const garbage: [64]u8 = @splat(0xDE);
     const result = main.createVm(
         &garbage,
         garbage.len,
@@ -291,7 +291,7 @@ test "Export Invalid Bytecode Returns Null" {
         @ptrCast(&TestRunner.onChoices),
         @ptrCast(&TestRunner.onValueChanged),
         @ptrCast(&TestRunner.log),
-        @intFromEnum(ExportLogger.Severity.debug),
+        @backingInt(ExportLogger.Severity.debug),
     );
     try std.testing.expect(result == null);
 
@@ -304,7 +304,7 @@ test "Export Invalid Bytecode Returns Null" {
         @ptrCast(&TestRunner.onChoices),
         @ptrCast(&TestRunner.onValueChanged),
         @ptrCast(&TestRunner.log),
-        @intFromEnum(ExportLogger.Severity.debug),
+        @backingInt(ExportLogger.Severity.debug),
     );
     try std.testing.expect(result2 == null);
 }
@@ -338,7 +338,7 @@ test "Export Subscribe and Unsubscribe Lifecycle" {
         @ptrCast(&TestRunner.onChoices),
         @ptrCast(&TestRunner.onValueChanged),
         @ptrCast(&TestRunner.log),
-        @intFromEnum(ExportLogger.Severity.debug),
+        @backingInt(ExportLogger.Severity.debug),
     ) orelse return error.InternalError;
     defer main.destroyVm(vm_ptr);
 
@@ -400,7 +400,7 @@ test "Export Extern Function Returning String" {
         @ptrCast(&TestRunner.onChoices),
         @ptrCast(&TestRunner.onValueChanged),
         @ptrCast(&TestRunner.log),
-        @intFromEnum(ExportLogger.Severity.debug),
+        @backingInt(ExportLogger.Severity.debug),
     ) orelse return error.InternalError;
     defer main.destroyVm(vm_ptr);
 
@@ -429,7 +429,7 @@ fn createTestVm(buf: []u8, on_line: *const anyopaque) !*anyopaque {
         @ptrCast(&TestRunner.onChoices),
         @ptrCast(&TestRunner.onValueChanged),
         @ptrCast(&TestRunner.log),
-        @intFromEnum(ExportLogger.Severity.debug),
+        @backingInt(ExportLogger.Severity.debug),
     ) orelse error.InternalError;
 }
 

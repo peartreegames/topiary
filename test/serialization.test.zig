@@ -88,8 +88,8 @@ test "Round-trip every constant produced by a representative compile" {
     var bytecode = try compileSource(script, mod);
     defer bytecode.free(allocator);
 
-    var seen_types = std.EnumSet(ValueType).initEmpty();
-    var seen_data = std.EnumSet(Value.Obj.DataType).initEmpty();
+    var seen_types: std.EnumSet(ValueType) = .empty;
+    var seen_data: std.EnumSet(Value.Obj.DataType) = .empty;
 
     for (bytecode.constants) |c| {
         // Fresh arena per constant so the deserialized copy + any owned

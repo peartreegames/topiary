@@ -121,7 +121,7 @@ pub const CliRunner = struct {
                 },
                 error.ReadFailed => {
                     print("Read failed\n", .{}) catch {};
-                }
+                },
             }
         }
         vm.selectChoice(index.?) catch |err| print("Error: {}", .{err}) catch {};

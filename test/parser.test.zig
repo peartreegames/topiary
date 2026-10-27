@@ -227,7 +227,7 @@ test "Parse Include" {
     const input =
         \\ include "./globals.topi"
         \\ one
-        ;
+    ;
     const mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();
     const global = try mod.arena.allocator().create(File);

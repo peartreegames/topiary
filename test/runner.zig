@@ -33,8 +33,8 @@ pub const TestRunner = struct {
         self.clear();
         self.output.deinit(self.allocator);
         self.choices_to_make.deinit(self.allocator);
-        self.allocator.destroy(self);
         self.values_changed.deinit(self.allocator);
+        self.allocator.destroy(self);
     }
 
     pub fn clear(self: *TestRunner) void {
@@ -59,7 +59,7 @@ pub const TestRunner = struct {
     }
 
     pub fn onChoices(_: *Runner, vm: *Vm, choices: []Choice) void {
-        const self: *TestRunner = @fieldParentPtr( "runner", vm.runner);
+        const self: *TestRunner = @fieldParentPtr("runner", vm.runner);
 
         var selection = if (self.choice_index < self.choices_to_make.items.len) blk: {
             const idx = self.choices_to_make.items[self.choice_index];

@@ -90,32 +90,23 @@ pub const collection_methods = std.StaticStringMap(Builtin).initComptime(.{ .{
     "clear", Builtin{ .arity = 1, .backing = clear_method, .is_method = true, .name = "clear" },
 } });
 
-pub const string_methods = std.StaticStringMap(Builtin).initComptime(.{
-    .{
-        "has", Builtin{ .arity = 2, .backing = has_method, .is_method = true, .name = "has" },
-    },
-    .{
-        "length", Builtin{ .arity = 1, .backing = length_method, .is_method = true, .name = "length" },
-    },
-    .{
-        "upper", Builtin{ .arity = 1, .backing = upper_method, .is_method = true, .name = "upper" },
-    },
-    .{
-        "lower", Builtin{ .arity = 1, .backing = lower_method, .is_method = true, .name = "lower" },
-    },
-    .{
-        "replace", Builtin{ .arity = 3, .backing = replace_method, .is_method = true, .name = "replace" },
-    },
-    .{
-        "split", Builtin{ .arity = 2, .backing = split_method, .is_method = true, .name = "split" },
-    },
-    .{
-        "substr", Builtin{ .arity = 3, .backing = substr_method, .is_method = true, .name = "substr" },
-    },
-    .{
-        "trim", Builtin{ .arity = 1, .backing = trim_method, .is_method = true, .name = "trim" },
-    }
-});
+pub const string_methods = std.StaticStringMap(Builtin).initComptime(.{ .{
+    "has", Builtin{ .arity = 2, .backing = has_method, .is_method = true, .name = "has" },
+}, .{
+    "length", Builtin{ .arity = 1, .backing = length_method, .is_method = true, .name = "length" },
+}, .{
+    "upper", Builtin{ .arity = 1, .backing = upper_method, .is_method = true, .name = "upper" },
+}, .{
+    "lower", Builtin{ .arity = 1, .backing = lower_method, .is_method = true, .name = "lower" },
+}, .{
+    "replace", Builtin{ .arity = 3, .backing = replace_method, .is_method = true, .name = "replace" },
+}, .{
+    "split", Builtin{ .arity = 2, .backing = split_method, .is_method = true, .name = "split" },
+}, .{
+    "substr", Builtin{ .arity = 3, .backing = substr_method, .is_method = true, .name = "substr" },
+}, .{
+    "trim", Builtin{ .arity = 1, .backing = trim_method, .is_method = true, .name = "trim" },
+} });
 
 pub const BuiltinFn = Builtin.Fn;
 
@@ -458,7 +449,7 @@ fn contentHashList(items: []const Value) u32 {
                 std.hash.autoHash(&hasher, rng.start);
                 std.hash.autoHash(&hasher, rng.end);
             },
-            else => std.hash.autoHash(&hasher, @intFromEnum(item)),
+            else => std.hash.autoHash(&hasher, @backingInt(item)),
         }
     }
     return @as(u32, @truncate(hasher.final()));

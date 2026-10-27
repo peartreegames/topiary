@@ -1,7 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
 
-
 const topi = @import("topi");
 const Vm = topi.runtime.Vm;
 const Runner = topi.runtime.Runner;
@@ -187,7 +186,10 @@ test "Runtime String Methods" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        vm.interpret() catch |err| { printErr(&vm); return err; };
+        vm.interpret() catch |err| {
+            printErr(&vm);
+            return err;
+        };
         try testing.expectEqualStrings("HELLO", vm.stack.previous().asString().?);
     }
     {
@@ -197,7 +199,10 @@ test "Runtime String Methods" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        vm.interpret() catch |err| { printErr(&vm); return err; };
+        vm.interpret() catch |err| {
+            printErr(&vm);
+            return err;
+        };
         try testing.expectEqualStrings("HELLO WORLD", vm.stack.previous().asString().?);
     }
 
@@ -209,7 +214,10 @@ test "Runtime String Methods" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        vm.interpret() catch |err| { printErr(&vm); return err; };
+        vm.interpret() catch |err| {
+            printErr(&vm);
+            return err;
+        };
         try testing.expectEqualStrings("hello", vm.stack.previous().asString().?);
     }
 
@@ -221,7 +229,10 @@ test "Runtime String Methods" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        vm.interpret() catch |err| { printErr(&vm); return err; };
+        vm.interpret() catch |err| {
+            printErr(&vm);
+            return err;
+        };
         try testing.expectEqualStrings("herro", vm.stack.previous().asString().?);
     }
     {
@@ -231,7 +242,10 @@ test "Runtime String Methods" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        vm.interpret() catch |err| { printErr(&vm); return err; };
+        vm.interpret() catch |err| {
+            printErr(&vm);
+            return err;
+        };
         try testing.expectEqualStrings("hello", vm.stack.previous().asString().?);
     }
     {
@@ -241,7 +255,10 @@ test "Runtime String Methods" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        vm.interpret() catch |err| { printErr(&vm); return err; };
+        vm.interpret() catch |err| {
+            printErr(&vm);
+            return err;
+        };
         try testing.expectEqualStrings("bbbbbb", vm.stack.previous().asString().?);
     }
 
@@ -253,7 +270,10 @@ test "Runtime String Methods" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        vm.interpret() catch |err| { printErr(&vm); return err; };
+        vm.interpret() catch |err| {
+            printErr(&vm);
+            return err;
+        };
         try testing.expectEqualStrings("ell", vm.stack.previous().asString().?);
     }
     {
@@ -263,7 +283,10 @@ test "Runtime String Methods" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        vm.interpret() catch |err| { printErr(&vm); return err; };
+        vm.interpret() catch |err| {
+            printErr(&vm);
+            return err;
+        };
         try testing.expectEqualStrings("hello", vm.stack.previous().asString().?);
     }
     {
@@ -273,7 +296,10 @@ test "Runtime String Methods" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        vm.interpret() catch |err| { printErr(&vm); return err; };
+        vm.interpret() catch |err| {
+            printErr(&vm);
+            return err;
+        };
         try testing.expectEqualStrings("h", vm.stack.previous().asString().?);
     }
 
@@ -285,7 +311,10 @@ test "Runtime String Methods" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        vm.interpret() catch |err| { printErr(&vm); return err; };
+        vm.interpret() catch |err| {
+            printErr(&vm);
+            return err;
+        };
         try testing.expectEqualStrings("hello", vm.stack.previous().asString().?);
     }
 
@@ -297,7 +326,10 @@ test "Runtime String Methods" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        vm.interpret() catch |err| { printErr(&vm); return err; };
+        vm.interpret() catch |err| {
+            printErr(&vm);
+            return err;
+        };
         try testing.expect(vm.stack.previous().bool == true);
     }
     {
@@ -307,7 +339,10 @@ test "Runtime String Methods" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        vm.interpret() catch |err| { printErr(&vm); return err; };
+        vm.interpret() catch |err| {
+            printErr(&vm);
+            return err;
+        };
         try testing.expect(vm.stack.previous().bool == false);
     }
 
@@ -319,7 +354,10 @@ test "Runtime String Methods" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        vm.interpret() catch |err| { printErr(&vm); return err; };
+        vm.interpret() catch |err| {
+            printErr(&vm);
+            return err;
+        };
         const list = vm.stack.previous().obj.data.list;
         try testing.expectEqual(@as(usize, 3), list.items.len);
         try testing.expectEqualStrings("a", list.items[0].asString().?);
@@ -335,7 +373,10 @@ test "Runtime String Methods" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        vm.interpret() catch |err| { printErr(&vm); return err; };
+        vm.interpret() catch |err| {
+            printErr(&vm);
+            return err;
+        };
         try testing.expect(vm.stack.previous().number == 5.0);
     }
 
@@ -350,7 +391,10 @@ test "Runtime String Methods" {
         defer vm.deinit();
         defer (@as(*TestRunner, @fieldParentPtr("runner", vm.runner))).deinit();
         defer vm.bytecode.free(testing.allocator);
-        vm.interpret() catch |err| { printErr(&vm); return err; };
+        vm.interpret() catch |err| {
+            printErr(&vm);
+            return err;
+        };
         try testing.expectEqualStrings("hello world", vm.stack.previous().asString().?);
     }
 }
@@ -1433,7 +1477,7 @@ test "Runtime Forks" {
             \\    }
             \\ }
             ,
-            .expected = &[_][]const u8{"Question","You chose one"},
+            .expected = &[_][]const u8{ "Question", "You chose one" },
         },
         .{
             .input =
@@ -1455,7 +1499,7 @@ test "Runtime Forks" {
             \\    :speaker: "Done"
             \\ }
             ,
-            .expected = &[_][]const u8{"Question","You chose one", "You chose one", "You chose one", "Done"},
+            .expected = &[_][]const u8{ "Question", "You chose one", "You chose one", "You chose one", "Done" },
         },
         .{
             .input =
@@ -1485,8 +1529,8 @@ test "Runtime Forks" {
             \\    :: "Done"
             \\ }
             ,
-            .expected = &[_][]const u8{"_0_0","Done"},
-        }
+            .expected = &[_][]const u8{ "_0_0", "Done" },
+        },
     };
 
     inline for (test_cases) |case| {
@@ -1534,7 +1578,7 @@ test "Runtime Visits" {
             \\ assert(START.NAMED % 2 == 0, "START.NAMED % 2 == 0")
             \\ }
             ,
-            .expected = &[_][]const u8{"Question", "You chose one", "You chose two" }
+            .expected = &[_][]const u8{ "Question", "You chose one", "You chose two" },
         },
         .{
             .input =
@@ -1553,7 +1597,7 @@ test "Runtime Visits" {
             \\ assert(START.ANON.TWO == 0, "START.ANON.TWO == 0")
             \\ }
             ,
-            .expected = &[_][]const u8{"Question", "You chose one" }
+            .expected = &[_][]const u8{ "Question", "You chose one" },
         },
         .{
             .input =
@@ -1577,7 +1621,7 @@ test "Runtime Visits" {
             \\ assert(START.INNER.ANON.TWO == 0, "START.INNER.ANON.TWO == 0")
             \\ }
             ,
-            .expected = &[_][]const u8{"Starting", "Inside question", "You chose one" }
+            .expected = &[_][]const u8{ "Starting", "Inside question", "You chose one" },
         },
         .{
             .input =
@@ -1598,7 +1642,7 @@ test "Runtime Visits" {
             \\     }
             \\ }
             ,
-            .expected = &[_][]const u8{"Starting", "You chose one", "You chose two" }
+            .expected = &[_][]const u8{ "Starting", "You chose one", "You chose two" },
         },
     };
 
@@ -1611,7 +1655,7 @@ test "Runtime Visits" {
         defer test_runner.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
-            std.debug.print("{s}", .{ case.input });
+            std.debug.print("{s}", .{case.input});
             try printBytecode(&vm.bytecode);
             printErr(&vm);
             return err;
@@ -1636,7 +1680,7 @@ test "Runtime Jump Backups" {
             \\     :speaker: "Done"
             \\ }
             ,
-            .expected = &[_][]const u8{"Question", "Done", "Continue here after divert"}
+            .expected = &[_][]const u8{ "Question", "Done", "Continue here after divert" },
         },
         .{
             .input =
@@ -1653,7 +1697,7 @@ test "Runtime Jump Backups" {
             \\    :speaker: "Continue here after fork"
             \\ }
             ,
-            .expected = &[_][]const u8{"Question", "You chose one", "Continue here after fork"}
+            .expected = &[_][]const u8{ "Question", "You chose one", "Continue here after fork" },
         },
         .{
             .input =
@@ -1681,7 +1725,7 @@ test "Runtime Jump Backups" {
             \\     } else :speaker: "Done"
             \\ }
             ,
-            .expected = &[_][]const u8{"Question", "You chose one", "You chose one", "Else branch", "Not done yet", "Done"}
+            .expected = &[_][]const u8{ "Question", "You chose one", "You chose one", "Else branch", "Not done yet", "Done" },
         },
     };
 
@@ -1694,7 +1738,7 @@ test "Runtime Jump Backups" {
         defer test_runner.deinit();
         defer vm.bytecode.free(testing.allocator);
         vm.interpret() catch |err| {
-            std.debug.print("{s}", .{ case.input });
+            std.debug.print("{s}", .{case.input});
             try printBytecode(&vm.bytecode);
             printErr(&vm);
             return err;
@@ -1844,7 +1888,7 @@ test "Runtime Jump Code" {
             \\    }
             \\ }
             ,
-            .expected = &[_][]const u8{"First: 0", "First: 1, Second: 0", "First: 0", "First: 1, Second: 0", "Done"}
+            .expected = &[_][]const u8{ "First: 0", "First: 1, Second: 0", "First: 0", "First: 1, Second: 0", "Done" },
         },
         .{
             .input =
@@ -1862,7 +1906,7 @@ test "Runtime Jump Code" {
             \\    => INNER
             \\ }
             ,
-            .expected = &[_][]const u8{"First: 0", "First: 1, Second: 0", "First: 0", "First: 1, Second: 0", "First: 2, Second: 0", "Done"}
+            .expected = &[_][]const u8{ "First: 0", "First: 1, Second: 0", "First: 0", "First: 1, Second: 0", "First: 2, Second: 0", "Done" },
         },
         .{
             .input =
@@ -1874,7 +1918,7 @@ test "Runtime Jump Code" {
             \\    :: "Fin did not work!"
             \\ }
             ,
-            .expected = &[_][]const u8{"Testing fin"}
+            .expected = &[_][]const u8{"Testing fin"},
         },
         .{
             .input =
@@ -1888,7 +1932,7 @@ test "Runtime Jump Code" {
             \\    :: "Fin did not work!"
             \\ }
             ,
-            .expected = &[_][]const u8{"Fin executed correctly"}
+            .expected = &[_][]const u8{"Fin executed correctly"},
         },
     };
 
@@ -1931,7 +1975,7 @@ test "Runtime Circular References" {
         printErr(&vm);
         return err;
     };
-    try test_runner.expectOutput(&[_][]const u8 {"two"});
+    try test_runner.expectOutput(&[_][]const u8{"two"});
 }
 
 test "Runtime Switch" {
@@ -2707,5 +2751,3 @@ test "typeOf builtin: function" {
     const r_idx = try vm.getGlobalsIndex("r");
     try testing.expectEqualStrings("function", vm.globals[r_idx].const_string);
 }
-
-

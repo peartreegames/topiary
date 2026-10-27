@@ -28,7 +28,7 @@ test "fuzz bytecode deserializer" {
 test "bytecode: rejects missing magic" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const garbage = [_]u8{0} ** 64;
+    const garbage: [64]u8 = @splat(0);
     var reader = std.Io.Reader.fixed(&garbage);
     try std.testing.expectError(error.InvalidBytecodeFormat, Bytecode.deserialize(arena.allocator(), &reader));
 }

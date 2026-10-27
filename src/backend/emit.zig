@@ -199,7 +199,7 @@ pub const Emitter = struct {
             try chunk.debug_markers.append(self.alloc, .{ .ip = ip, .file_index = file_index, .line = line });
         }
         chunk.last_op_pos = ip;
-        try chunk.instructions.append(self.alloc, @intFromEnum(op));
+        try chunk.instructions.append(self.alloc, @backingInt(op));
     }
 
     pub fn writeValue(self: *Emitter, buf: []const u8, _: Token) !void {
@@ -242,7 +242,7 @@ pub const Emitter = struct {
 
     pub fn lastIs(self: *Emitter, op: OpCode) !bool {
         const pos = self.chunk.last_op_pos orelse return false;
-        return self.chunk.instructions.items[pos] == @intFromEnum(op);
+        return self.chunk.instructions.items[pos] == @backingInt(op);
     }
 
     pub fn removeLast(self: *Emitter, op: OpCode) !void {
@@ -346,7 +346,7 @@ pub const Emitter = struct {
 /// at end of loop and switch bodies.
 pub fn replaceJumps(instructions: []u8, old_pos: C.JUMP, new_pos: C.JUMP) !void {
     var i: usize = 0;
-    const jump = @intFromEnum(OpCode.jump);
+    const jump = @backingInt(OpCode.jump);
     while (i + 1 + @sizeOf(C.JUMP) <= instructions.len) : (i += 1) {
         if (instructions[i] == jump and std.mem.readVarInt(C.JUMP, instructions[(i + 1)..(i + 1 + @sizeOf(C.JUMP))], .little) == old_pos) {
             var buf: [@sizeOf(C.JUMP)]u8 = undefined;

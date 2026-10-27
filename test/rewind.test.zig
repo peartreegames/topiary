@@ -564,12 +564,14 @@ test "Rewind: choice tags survive borrow across restore" {
     ;
     // Mirror the basic two-fork rewind pattern: rewind from inside B
     // (during B's onChoices) so we land back at fork A, then re-pick.
+    // zig fmt: off
     const actions = [_]RewindAction{
         .{ .select = 0 }, // A: pick A1 -> enter B
         .rewind,           // B (first time): rewind back to A
         .{ .select = 1 }, // A: pick A2 -> enter B again
         .{ .select = 1 }, // B (revisit): pick B2
     };
+    // zig fmt: on
 
     var mod = try Module.initEmpty(allocator, std.testing.io);
     defer mod.deinit();

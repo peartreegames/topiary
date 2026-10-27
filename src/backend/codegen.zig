@@ -143,7 +143,7 @@ pub const Codegen = struct {
         // the trailing marker run — no new marker needed.
         const chunk = self.emitter.chunk;
         if (chunk.debug_markers.items.len > 0) {
-            try chunk.instructions.append(self.alloc, @intFromEnum(OpCode.end));
+            try chunk.instructions.append(self.alloc, @backingInt(OpCode.end));
         }
     }
 

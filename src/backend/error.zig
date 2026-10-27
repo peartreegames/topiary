@@ -87,7 +87,7 @@ pub const CompilerErrors = struct {
 
     pub fn add(self: *CompilerErrors, file_path: []const u8, comptime fmt: []const u8, token: Token, severity: CompilerErr.Severity, args: anytype) !void {
         try self.list.ensureUnusedCapacity(self.allocator, 1);
-        const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
+        const msg = try self.allocator.print(fmt, args);
         self.list.appendAssumeCapacity(.{
             .file_path = file_path,
             .fmt = msg,
@@ -106,7 +106,7 @@ pub const CompilerErrors = struct {
         args: anytype,
     ) !void {
         try self.list.ensureUnusedCapacity(self.allocator, 1);
-        const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
+        const msg = try self.allocator.print(fmt, args);
         self.list.appendAssumeCapacity(.{
             .file_path = file_path,
             .fmt = msg,
@@ -134,7 +134,7 @@ pub const CompilerErrors = struct {
             if (note) |n| self.allocator.free(n);
         }
         try self.list.ensureUnusedCapacity(self.allocator, 1);
-        const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
+        const msg = try self.allocator.print(fmt, args);
         self.list.appendAssumeCapacity(.{
             .file_path = file_path,
             .fmt = msg,
@@ -161,7 +161,7 @@ pub const CompilerErrors = struct {
             if (note) |n| self.allocator.free(n);
         }
         try self.list.ensureUnusedCapacity(self.allocator, 1);
-        const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
+        const msg = try self.allocator.print(fmt, args);
         self.list.appendAssumeCapacity(.{
             .file_path = file_path,
             .fmt = msg,

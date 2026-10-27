@@ -469,7 +469,7 @@ pub const Vm = struct {
                     return;
                 }
             } else {
-                self.err.msg = try std.fmt.allocPrint(self.alloc, "Could not find starting path {s}", .{path});
+                self.err.msg = try self.alloc.print("Could not find starting path {s}", .{path});
                 return Error.BoughNotFound;
             }
         }
@@ -482,7 +482,7 @@ pub const Vm = struct {
         for (c.methods) |m| try names.append(self.alloc, m.name);
         const match = (try backend.suggest.closest(self.alloc, name, names.items)) orelse return null;
         defer self.alloc.free(match);
-        return try std.fmt.allocPrint(self.alloc, "did you mean '{s}'?", .{match});
+        return try self.alloc.print("did you mean '{s}'?", .{match});
     }
 
     fn failUnknownMethod(self: *Vm, comptime kind: []const u8, name: []const u8, valid: []const []const u8) !void {
@@ -495,7 +495,7 @@ pub const Vm = struct {
             const match = backend.suggest.closest(self.alloc, name, public.items) catch null;
             if (match) |m| {
                 defer self.alloc.free(m);
-                break :blk std.fmt.allocPrint(self.alloc, "did you mean '{s}'?", .{m}) catch null;
+                break :blk self.alloc.print("did you mean '{s}'?", .{m}) catch null;
             }
             break :blk null;
         };
@@ -512,7 +512,7 @@ pub const Vm = struct {
     }
 
     fn fail(self: *Vm, comptime msg: []const u8, args: anytype) !void {
-        self.err.msg = try std.fmt.allocPrint(self.alloc, msg, args);
+        self.err.msg = try self.alloc.print(msg, args);
 
         var i: usize = self.frames.count;
         while (i > 0) {
@@ -583,7 +583,7 @@ pub const Vm = struct {
                 self.end();
                 return;
             }
-            const op: OpCode = @enumFromInt(instruction);
+            const op: OpCode = @fromBackingInt(instruction);
             const is_in_jump = self.jump_requests.items.len > 0;
 
             switch (op) {
@@ -630,7 +630,7 @@ pub const Vm = struct {
                         }
                     }
 
-                    if (@intFromEnum(right) != @intFromEnum(left)) {
+                    if (@backingInt(right) != @backingInt(left)) {
                         return self.fail("Cannot add types {s} and {s}: {f} {f}", .{ left.typeName(), right.typeName(), left, right });
                     }
                     switch (right) {
@@ -1048,7 +1048,7 @@ pub const Vm = struct {
                                         const match = backend.suggest.closest(self.alloc, name, e.values) catch null;
                                         if (match) |m| {
                                             defer self.alloc.free(m);
-                                            break :blk std.fmt.allocPrint(self.alloc, "did you mean '{s}'?", .{m}) catch null;
+                                            break :blk self.alloc.print("did you mean '{s}'?", .{m}) catch null;
                                         }
                                         break :blk null;
                                     };
@@ -1072,9 +1072,9 @@ pub const Vm = struct {
                                             break;
                                         }
                                     } else {
-                                    const hint = try self.suggestClassMember(c, name);
-                                    return self.failWithHelp("Unknown value '{s}' on Class '{s}'", .{ name, c.name }, hint);
-                                }
+                                        const hint = try self.suggestClassMember(c, name);
+                                        return self.failWithHelp("Unknown value '{s}' on Class '{s}'", .{ name, c.name }, hint);
+                                    }
                                 }
                             },
                             else => return self.fail("Unknown target type '{s}' to index. Only lists, maps, sets, or instances can be indexed.", .{index.typeName()}),
@@ -1206,7 +1206,7 @@ pub const Vm = struct {
                     self.choices_freed = false;
                     self.choices_list.clearRetainingCapacity();
                     if (is_in_jump) {
-                        const next_target = self.jump_requests.getLast();
+                        const next_target = self.jump_requests.last().?;
                         // If the current IP is the target, pop it.
                         if (self.currentFrame().ip >= next_target) {
                             _ = self.jump_requests.pop();
@@ -1287,7 +1287,7 @@ pub const Vm = struct {
                     self.choices_freed = false;
                     self.choices_list.clearRetainingCapacity();
                     if (is_in_jump) {
-                        const next_target = self.jump_requests.getLast();
+                        const next_target = self.jump_requests.last().?;
                         if (self.currentFrame().ip >= next_target) {
                             _ = self.jump_requests.pop();
                         } else continue;
@@ -1346,7 +1346,7 @@ pub const Vm = struct {
                 .fin => {
                     self.end();
                     break;
-                }
+                },
             }
         }
         self.end();
@@ -1405,7 +1405,7 @@ pub const Vm = struct {
     /// Divert backups (=>^) are kept — they are explicit return points.
     fn trimForkBackups(self: *Vm, depth: usize) void {
         while (self.jump_backups.items.len > 0) {
-            const last = self.jump_backups.getLast();
+            const last = self.jump_backups.last().?;
             if (last.is_fork and last.anchor_depth > depth) {
                 _ = self.jump_backups.pop();
             } else break;
@@ -1448,7 +1448,7 @@ pub const Vm = struct {
             left = .{ .number = value };
         }
 
-        if (@intFromEnum(right) != @intFromEnum(left)) {
+        if (@backingInt(right) != @backingInt(left)) {
             return self.fail("Cannot compare mismatched types '{s}' and '{s}': {f} {f}", .{ left.typeName(), right.typeName(), left, right });
         }
         if (right == .enum_value) {

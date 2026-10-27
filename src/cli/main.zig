@@ -7,7 +7,6 @@ const State = topi.runtime.State;
 
 const Value = topi.types.Value;
 
-
 const Locale = topi.locale.Locale;
 const Stamp = topi.stamp.Stamp;
 const Formatter = topi.frontend.Formatter;
@@ -630,7 +629,6 @@ fn fmtCommand(args: FmtArgs, alloc: std.mem.Allocator) !void {
     defer alloc.free(formatted);
     try writeOutput(full_path, formatted, args.dry);
 }
-
 
 fn testCommand(args: TestArgs, alloc: std.mem.Allocator) !void {
     var mod = createModule(alloc, args) catch |err| {

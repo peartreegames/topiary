@@ -113,7 +113,7 @@ pub const LocaleProvider = struct {
 /// Keeping this self-contained here avoids leaking value.zig's internal
 /// helper. Validates literal bounds against the entry's string length.
 fn readSegment(reader: *std.Io.Reader, str_length: u32) !Segment {
-    const tag: std.meta.Tag(Segment) = @enumFromInt(try reader.takeByte());
+    const tag: std.meta.Tag(Segment) = @fromBackingInt(try reader.takeByte());
     switch (tag) {
         .literal => {
             const start = try reader.takeInt(u16, .little);
@@ -128,7 +128,7 @@ fn readSegment(reader: *std.Io.Reader, str_length: u32) !Segment {
 /// Wire-format bytes for a single segment, appended to the .topil
 /// generator's segment blob. Mirrors the readSegment decoder above.
 fn appendSegmentBytes(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), seg: Segment) !void {
-    try buf.append(allocator, @intFromEnum(@as(std.meta.Tag(Segment), seg)));
+    try buf.append(allocator, @backingInt(@as(std.meta.Tag(Segment), seg)));
     switch (seg) {
         .literal => |r| {
             var le: [4]u8 = undefined;
@@ -327,8 +327,7 @@ pub const Locale = struct {
                 while (j < raw.len and raw[j] != '}') : (j += 1) {}
                 if (j >= raw.len) {
                     for (raw[i..]) |b| {
-                        if (b == '"') writer.writeAll("\"\"") catch return error.WriteFailure
-                        else writer.writeByte(b) catch return error.WriteFailure;
+                        (if (b == '"') writer.writeAll("\"\"") else writer.writeByte(b)) catch return error.WriteFailure;
                     }
                     writer.writeByte('"') catch return error.WriteFailure;
                     return;
@@ -341,16 +340,14 @@ pub const Locale = struct {
                 }
                 writer.writeByte('{') catch return error.WriteFailure;
                 for (body) |b| {
-                    if (b == '"') writer.writeAll("\"\"") catch return error.WriteFailure
-                    else writer.writeByte(b) catch return error.WriteFailure;
+                    (if (b == '"') writer.writeAll("\"\"") else writer.writeByte(b)) catch return error.WriteFailure;
                 }
                 writer.print(" | {d}", .{gop.value_ptr.*}) catch return error.WriteFailure;
                 writer.writeByte('}') catch return error.WriteFailure;
                 i = j;
                 continue;
             }
-            if (c == '"') writer.writeAll("\"\"") catch return error.WriteFailure
-            else writer.writeByte(c) catch return error.WriteFailure;
+            (if (c == '"') writer.writeAll("\"\"") else writer.writeByte(c)) catch return error.WriteFailure;
         }
         writer.writeByte('"') catch return error.WriteFailure;
     }
@@ -724,7 +721,7 @@ pub const Locale = struct {
             if (filter_lang) |f| if (!std.mem.eql(u8, key, f)) continue;
 
             if (!dry) {
-                const out_name = try std.fmt.allocPrint(allocator, "{s}/{s}.{s}.topil", .{ output_folder, file_name, key });
+                const out_name = try allocator.print("{s}/{s}.{s}.topil", .{ output_folder, file_name, key });
                 defer allocator.free(out_name);
                 const out_file = try std.Io.Dir.cwd().createFile(default_io, out_name, .{});
                 defer out_file.close(default_io);
@@ -844,7 +841,7 @@ pub const Locale = struct {
         var csv_it = mod.includes.iterator();
         while (csv_it.next()) |kvp| {
             const file = kvp.value_ptr.*;
-            const csv_name = try std.fmt.allocPrint(allocator, "{s}.csv", .{file.path});
+            const csv_name = try allocator.print("{s}.csv", .{file.path});
             defer allocator.free(csv_name);
 
             const csv_file = std.Io.Dir.openFileAbsolute(mod.io, csv_name, .{}) catch {
@@ -927,7 +924,7 @@ pub const Locale = struct {
             if (filter_lang) |f| if (!std.mem.eql(u8, key, f)) continue;
 
             if (!dry) {
-                const out_name = try std.fmt.allocPrint(allocator, "{s}/{s}.{s}.topil", .{ output_folder, entry_name, key });
+                const out_name = try allocator.print("{s}/{s}.{s}.topil", .{ output_folder, entry_name, key });
                 defer allocator.free(out_name);
                 const out_file = try std.Io.Dir.cwd().createFile(io, out_name, .{});
                 defer out_file.close(io);

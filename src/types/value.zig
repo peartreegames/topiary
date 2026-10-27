@@ -307,7 +307,7 @@ pub const Value = union(Type) {
     }
 
     fn writeSegment(writer: *std.Io.Writer, seg: Segment) !void {
-        try writer.writeByte(@intFromEnum(@as(std.meta.Tag(Segment), seg)));
+        try writer.writeByte(@backingInt(@as(std.meta.Tag(Segment), seg)));
         switch (seg) {
             .literal => |r| {
                 try writer.writeInt(u16, r.start, .little);
@@ -318,7 +318,7 @@ pub const Value = union(Type) {
     }
 
     fn readSegment(reader: *std.Io.Reader) !Segment {
-        const seg_tag: std.meta.Tag(Segment) = @enumFromInt(try reader.takeByte());
+        const seg_tag: std.meta.Tag(Segment) = @fromBackingInt(try reader.takeByte());
         return switch (seg_tag) {
             .literal => .{ .literal = .{
                 .start = try reader.takeInt(u16, .little),
@@ -330,7 +330,7 @@ pub const Value = union(Type) {
 
     // used for constant values only
     pub fn serialize(self: Value, writer: *std.Io.Writer) !void {
-        try writer.writeByte(@intFromEnum(@as(Type, self)));
+        try writer.writeByte(@backingInt(@as(Type, self)));
         switch (self) {
             .bool => |b| try writer.writeByte(if (b) '1' else '0'),
             .number => |n| {
@@ -351,7 +351,7 @@ pub const Value = union(Type) {
                 try writer.writeInt(u32, v, .little);
             },
             .obj => |o| {
-                try writer.writeByte(@intFromEnum(@as(Obj.DataType, o.data)));
+                try writer.writeByte(@backingInt(@as(Obj.DataType, o.data)));
                 try writer.writeAll(&o.id);
                 switch (o.data) {
                     .anchor => |a| {
@@ -462,7 +462,7 @@ pub const Value = union(Type) {
 
     fn deserializeDepth(reader: *std.Io.Reader, allocator: std.mem.Allocator, depth: u32) !Value {
         if (depth > max_deserialize_depth) return error.BytecodeTooDeep;
-        const value_type: Type = @enumFromInt(try reader.takeByte());
+        const value_type: Type = @fromBackingInt(try reader.takeByte());
         return switch (value_type) {
             .nil => Nil,
             .bool => if (try reader.takeByte() == '1') True else False,
@@ -484,7 +484,7 @@ pub const Value = union(Type) {
                 return .{ .visit = try reader.takeInt(u32, .little) };
             },
             .obj => {
-                const data_type: Obj.DataType = @enumFromInt(try reader.takeByte());
+                const data_type: Obj.DataType = @fromBackingInt(try reader.takeByte());
                 var id: UUID.ID = undefined;
                 try reader.readSliceAll(id[0..]);
                 switch (data_type) {
@@ -816,7 +816,7 @@ pub const Value = union(Type) {
 
         pub fn eql(self: @This(), a: Value, b: Value, _: usize) bool {
             _ = self;
-            if (@intFromEnum(a) != @intFromEnum(b)) return false;
+            if (@backingInt(a) != @backingInt(b)) return false;
             return switch (a) {
                 // Fuzzy compare: f32 dialogue scripting tolerates one-ULP
                 // drift; literals within epsilon dedup to a single pool entry.
@@ -829,7 +829,7 @@ pub const Value = union(Type) {
                 .enum_value => |e| e.base == b.enum_value.base and e.index == b.enum_value.index,
                 .obj => |o| {
                     const b_data = b.obj.data;
-                    if (@intFromEnum(o.data) != @intFromEnum(b_data))
+                    if (@backingInt(o.data) != @backingInt(b_data))
                         return false;
                     return switch (o.data) {
                         .string => |s| std.mem.eql(u8, s.bytes, b_data.string.bytes),

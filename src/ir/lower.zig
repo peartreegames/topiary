@@ -1147,7 +1147,7 @@ const Lowerer = struct {
             std.fs.path.basename(self.program.files[tok.file_index])
         else
             "?";
-        return try std.fmt.allocPrint(alloc, "previous declaration at {s}:{d}", .{ file_name, tok.line });
+        return try alloc.print("previous declaration at {s}:{d}", .{ file_name, tok.line });
     }
 
     /// Record an anchor's first-declaration token so duplicate-decl
@@ -1159,7 +1159,7 @@ const Lowerer = struct {
     fn qualifyName(self: *Lowerer, name: []const u8) Error![]const u8 {
         if (self.path_stack.items.len == 0) return try self.arena().dupe(u8, name);
         const prefix = try std.mem.join(self.scratchAlloc(), ".", self.path_stack.items);
-        return try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ prefix, name });
+        return try self.arena().print("{s}.{s}", .{ prefix, name });
     }
 
     fn pushPath(self: *Lowerer, name: []const u8) Error!void {
@@ -1432,7 +1432,7 @@ const Lowerer = struct {
         for (self.program.anchors.keys()) |k| try names.append(self.scratchAlloc(), k);
         const match = (suggest.closest(alloc, name, names.items) catch return null) orelse return null;
         defer alloc.free(match);
-        return try std.fmt.allocPrint(alloc, "did you mean '{s}'?", .{match});
+        return try alloc.print("did you mean '{s}'?", .{match});
     }
 
     // =======================================================================

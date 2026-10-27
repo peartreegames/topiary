@@ -103,7 +103,7 @@ const Validator = struct {
         const alloc = self.errors().allocator;
         const match = (suggest.closest(alloc, name, haystack) catch return null) orelse return null;
         defer alloc.free(match);
-        return try std.fmt.allocPrint(alloc, "did you mean '{s}'?", .{match});
+        return try alloc.print("did you mean '{s}'?", .{match});
     }
 
     fn suggestClassMember(self: *Validator, class: *const ir.ClassDecl, name: []const u8) Error!?[]const u8 {
@@ -396,8 +396,15 @@ const Validator = struct {
                 try self.checkNotFunctionRef(v.initializer, v.initializer.loc.start);
                 try self.semExpr(v.initializer, stack);
             },
-            .divert, .backup_divert, .visit, .enum_decl,
-            .return_void, .@"break", .@"continue", .fin, .include,
+            .divert,
+            .backup_divert,
+            .visit,
+            .enum_decl,
+            .return_void,
+            .@"break",
+            .@"continue",
+            .fin,
+            .include,
             => {},
         }
     }
